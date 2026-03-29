@@ -69,7 +69,10 @@ public:
         _spr_top.setTextDatum(middle_left); _spr_top.setTextColor(COLOR_TEXT, COLOR_BG); _spr_top.setFont(&fonts::Font2);
         _spr_top.drawString("SIG", 5, 12); _spr_top.drawRect(40, 5, 120, 14, COLOR_GRID);
         int lw = (int)((signal_db+80)*(120/70.0f)); if(lw<0) lw=0; if(lw>120) lw=120;
-        _spr_top.fillRect(40, 5, lw, 14, (signal_db > -30.0f) ? 0x0000FFU : 0x00FF00U);
+        uint32_t sig_color = 0x00FF00U; // Green
+        if (clipping) sig_color = 0x0000FFU; // Red
+        else if (signal_db > -30.0f) sig_color = 0xFF0000U; // Blue
+        _spr_top.fillRect(40, 5, lw, 14, sig_color);
         char buf[32]; snprintf(buf, sizeof(buf), "%3.0f dB", signal_db); _spr_top.drawString(buf, 165, 12);
         
         if (clipping) { 
