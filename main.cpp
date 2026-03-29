@@ -225,14 +225,15 @@ void core1_main() {
             fft.apply_window(real); fft.compute(real, imag); fft.calc_magnitude(real, imag, mag);
             
             float pk=-100.0f, sm=0.0f; for(int i=0; i<FFT_SIZE/2; i++) { if(mag[i]>pk) pk=mag[i]; sm+=mag[i]; }
-            shared_snr_db = pk - (sm/(FFT_SIZE/2)); 
+            float avg_noise = sm/(FFT_SIZE/2);
+            shared_snr_db = pk - avg_noise; 
             
             float shift = shifts[shared_shift_idx];
             int m_bin = (int)((shared_target_freq - shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
             int s_bin = (int)((shared_target_freq + shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
             int search_r = 12; 
             
-            float best_m_mag = 0, best_s_mag = 0;
+            float best_m_mag = -100.0f, best_s_mag = -100.0f;
             int best_m_bin = m_bin, best_s_bin = s_bin;
             
             for(int i = m_bin - search_r; i <= m_bin + search_r; i++) {
@@ -242,15 +243,15 @@ void core1_main() {
                 if (i>0 && i<FFT_SIZE/2 && mag[i] > best_s_mag) { best_s_mag = mag[i]; best_s_bin = i; }
             }
             
-            float avg_noise = sm / (FFT_SIZE/2);
-            bool sq_strong = (best_m_mag > avg_noise * 2.0f || best_s_mag > avg_noise * 2.0f) && (shared_snr_db > tuning_sq_snr);
-            bool sq_weak = (best_m_mag < avg_noise * 1.2f && best_s_mag < avg_noise * 1.2f) || (shared_snr_db < 1.0f);
+            // Relaxed squelch with hysteresis for 75 Baud (using dB differences)
+            bool sq_strong = ((best_m_mag - avg_noise) > 4.0f || (best_s_mag - avg_noise) > 4.0f) && (shared_snr_db > tuning_sq_snr);
+            bool sq_weak = ((best_m_mag - avg_noise) < 1.5f && (best_s_mag - avg_noise) < 1.5f) || (shared_snr_db < tuning_sq_snr - 2.0f);
             
             if (shared_signal_db < -65.0f) shared_squelch_open = false; // Hard noise floor
             else if (sq_strong) shared_squelch_open = true;
             else if (sq_weak) shared_squelch_open = false;
             
-            if (shared_squelch_open && (best_m_mag > best_s_mag * 1.5f || best_s_mag > best_m_mag * 1.5f)) {
+            if (shared_squelch_open && ((best_m_mag - best_s_mag) > 2.0f || (best_s_mag - best_m_mag) > 2.0f)) {
                 float found_m_f = best_m_bin * SAMPLE_RATE / (float)FFT_SIZE;
                 float found_s_f = best_s_bin * SAMPLE_RATE / (float)FFT_SIZE;
                 float implied_center = (best_m_mag > best_s_mag) ? (found_m_f + shift/2.0f) : (found_s_f - shift/2.0f);
@@ -507,7 +508,8 @@ void core0_dsp_loop() {
                     phase_error = fmaxf(-0.1f, fminf(0.1f, phase_error));
                     symbol_phase -= tuning_dpll_alpha * phase_error; 
                     freq_error -= dpll_beta * phase_error;
-                    freq_error = fmaxf(-0.05f, fminf(0.05f, freq_error));
+                    float max_fe = 0.05f * phase_inc;
+                    freq_error = fmaxf(-max_fe, fminf(max_fe, freq_error));
                 } else if (!d_sign) { 
                     // Transition to space = start bit
                     baudot_state = 1;
