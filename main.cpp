@@ -11,6 +11,7 @@
 #include "hardware/vreg.h"
 #include "hardware/timer.h"
 #include "hardware/uart.h"
+#include "hardware/pwm.h"
 #include "LGFX_Config.hpp"
 #include "src/display/ili9341_test.h"
 #include "src/dsp/fft.hpp"
@@ -25,6 +26,7 @@ volatile float shared_fft_mag[FFT_SIZE / 2];
 volatile float shared_adc_waveform[480]; // Oscilloscope data
 volatile bool new_data_ready = false;
 volatile float shared_adc_v = 0.0f; // Live ADC voltage
+volatile float shared_signal_db = -80.0f; // RMS Signal Power
 
 void core1_main() {
     printf("Core 1: Starting UI...\n");
@@ -47,6 +49,11 @@ void core1_main() {
     UIManager ui(&tft);
     ui.init();
     
+    bool auto_scale = true;
+    bool exp_scale = false;
+    
+    ui.drawBottomBar(auto_scale, exp_scale);
+
     LGFX_Sprite spectrum(&tft);
     spectrum.setColorDepth(16);
     spectrum.createSprite(480, UI_DSP_ZONE_H); // 112px tall
@@ -64,9 +71,10 @@ void core1_main() {
     int16_t tune_x = 240;
     const int shift = 17; // Roughly 170Hz
 
-    // AGC State
-    float agc_max = 50.0f;
-    float agc_min = 10.0f;
+    // Interactive SDR Controls
+    float ui_noise_floor = -50.0f;
+    float ui_gain = 40.0f;
+    static float smooth_mag[FFT_SIZE / 2] = {0};
 
     while (true) {
         uint32_t now = time_us_32();
@@ -76,8 +84,9 @@ void core1_main() {
             frame_count = 0;
             last_ui_update = now;
 
+            float marker_freq = (bin_start + (tune_x / 480.0f) * (bin_end - bin_start)) * (SAMPLE_RATE / (float)FFT_SIZE);
             // Update Top Bar via UI Manager
-            ui.updateTopBar(shared_adc_v, fps);
+            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, marker_freq);
         }
 
         if (new_data_ready) {
@@ -103,25 +112,25 @@ void core1_main() {
             int fft_y_offset = 50;
             int fft_h = 62;
             
-            // AGC (Auto Gain Control) for Spectrum
-            float current_max_db = -100.0f;
-            float current_min_db = 100.0f;
-            for (int x = 0; x < 480; x++) {
-                float exact_bin = bin_start + x * bin_per_pixel;
-                int b0 = (int)exact_bin;
-                if (b0 >= 0 && b0 < (FFT_SIZE / 2)) {
-                    if (local_mag[b0] > current_max_db) current_max_db = local_mag[b0];
-                    if (local_mag[b0] < current_min_db) current_min_db = local_mag[b0];
-                }
+            // Temporal Smoothing (removes grass clipping)
+            for (int i = 0; i < FFT_SIZE / 2; i++) {
+                smooth_mag[i] = smooth_mag[i] * 0.7f + local_mag[i] * 0.3f;
             }
             
-            if (current_max_db > agc_max) agc_max = current_max_db;
-            else agc_max = agc_max * 0.90f + current_max_db * 0.10f;
-            
-            // Squelch threshold: If there's no signal (e.g. grounded), clamp max so the display floor is above thermal noise
-            if (agc_max < -10.0f) agc_max = -10.0f;
-            
-            float display_min_db = agc_max - 50.0f;
+            if (auto_scale) {
+                float current_max_db = -100.0f;
+                for (int x = 0; x < 480; x++) {
+                    float exact_bin = bin_start + x * bin_per_pixel;
+                    int b0 = (int)exact_bin;
+                    if (b0 >= 0 && b0 < (FFT_SIZE / 2)) {
+                        if (smooth_mag[b0] > current_max_db) current_max_db = smooth_mag[b0];
+                    }
+                }
+                float target_max = current_max_db;
+                if (target_max < -40.0f) target_max = -40.0f;
+                ui_noise_floor = ui_noise_floor * 0.90f + (target_max - 50.0f) * 0.10f;
+                ui_gain = ui_gain * 0.90f + 50.0f * 0.10f;
+            }
             
             for (int x = 0; x < 480; x++) {
                 float exact_bin = bin_start + x * bin_per_pixel;
@@ -130,11 +139,17 @@ void core1_main() {
                 if (b0 < 0) b0 = 0;
                 if (b1 >= FFT_SIZE / 2) b1 = FFT_SIZE / 2 - 1;
                 float frac = exact_bin - b0;
-                float db = local_mag[b0] * (1.0f - frac) + local_mag[b1] * frac;
                 
-                float normalized = (db - display_min_db) / 50.0f;
+                // Use smoothed magnitude
+                float db = smooth_mag[b0] * (1.0f - frac) + smooth_mag[b1] * frac;
+                
+                float normalized = (db - ui_noise_floor) / ui_gain;
                 if (normalized < 0.0f) normalized = 0.0f;
                 if (normalized > 1.0f) normalized = 1.0f;
+                
+                if (exp_scale) {
+                    normalized = normalized * normalized; // Exponentiate to emphasize peaks
+                }
 
                 int h = (int)(normalized * fft_h);
                 if (h > fft_h) h = fft_h;
@@ -143,15 +158,19 @@ void core1_main() {
                 }
             }
 
-            // Draw Frequency Scale & AGC Info
+            // Draw Frequency Scale & UI Settings Info
             spectrum.setTextColor(TFT_WHITE);
             spectrum.setTextSize(1);
             spectrum.setCursor(5, fft_y_offset + 5);
             spectrum.print("50 Hz");
             spectrum.setCursor(410, fft_y_offset + 5);
             spectrum.print("3.5 kHz");
-            spectrum.setCursor(200, fft_y_offset + 5);
-            spectrum.printf("AGC Max: %.0f dB", agc_max);
+            spectrum.setCursor(180, fft_y_offset + 5);
+            if (auto_scale) {
+                spectrum.printf("AUTO | Floor: %.0fdB | Gain: %.0fdB", ui_noise_floor, ui_gain);
+            } else {
+                spectrum.printf("MANUAL | Floor: %.0fdB | Gain: %.0fdB", ui_noise_floor, ui_gain);
+            }
 
             // Draw Markers on Spectrum Sprite
             spectrum.drawFastVLine(tune_x, 0, UI_DSP_ZONE_H, TFT_WHITE); // Center
@@ -161,6 +180,35 @@ void core1_main() {
             ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
         }
         
+        // A. Poll Touch
+        if (now - last_touch > 50000) {
+            uint16_t tx, ty;
+            if (tft.getTouch(&tx, &ty)) {
+                if (ty >= UI_Y_DSP && ty <= (UI_Y_DSP + UI_DSP_ZONE_H)) {
+                    tune_x = tx;
+                } else if (ty > UI_Y_BOTTOM) {
+                    // Button row clicked
+                    int btn_idx = tx / (480 / 6);
+                    if (btn_idx == 0) { ui_noise_floor -= 5.0f; auto_scale = false; }      // FL- (Lowers floor)
+                    else if (btn_idx == 1) { ui_noise_floor += 5.0f; auto_scale = false; } // FL+ (Raises floor)
+                    else if (btn_idx == 2) { ui_gain += 5.0f; auto_scale = false; }        // GN- (More gain)
+                    else if (btn_idx == 3) { ui_gain -= 5.0f; auto_scale = false; }        // GN+ (Less gain)
+                    else if (btn_idx == 4) { auto_scale = true; }
+                    else if (btn_idx == 5) { 
+                        exp_scale = !exp_scale; 
+                        ui_gain = exp_scale ? 25.0f : 50.0f; // Scale button toggles dynamic range between 25dB (steep) and 50dB (normal)
+                        auto_scale = false;
+                    }
+                    
+                    if (ui_gain < 5.0f) ui_gain = 5.0f;
+                    
+                    // Redraw the bottom bar to update the ON/OFF and SCL texts
+                    ui.drawBottomBar(auto_scale, exp_scale);
+                }
+            }
+            last_touch = now;
+        }
+
         if (multicore_fifo_rvalid()) (void)multicore_fifo_pop_blocking();
         tight_loop_contents();
     }
@@ -241,6 +289,11 @@ void core0_dsp_loop() {
         samples_collected++;
 
         if (samples_collected == FFT_SIZE) {
+            // Calculate RMS Signal Power (dBFS)
+            float sum_sq = 0.0f;
+            for(int i=0; i<FFT_SIZE; i++) sum_sq += time_samples[i]*time_samples[i];
+            shared_signal_db = 10.0f * log10f((sum_sq / FFT_SIZE) + 1e-10f);
+
             memcpy(real, time_samples, sizeof(time_samples));
             memset(imag, 0, sizeof(imag));
             
@@ -264,12 +317,32 @@ void core0_dsp_loop() {
     }
 }
 
+void setup_test_tones() {
+    // Tone 1: 1000 Hz on GPIO 27 (Physical Pin 32)
+    gpio_set_function(27, GPIO_FUNC_PWM);
+    uint slice1 = pwm_gpio_to_slice_num(27);
+    pwm_set_clkdiv(slice1, 125.0f); // 300MHz / 125 = 2.4MHz
+    pwm_set_wrap(slice1, 2400); // 2.4MHz / 2400 = 1000 Hz
+    pwm_set_gpio_level(27, 240); // 10% duty to prevent massive ADC clipping
+    pwm_set_enabled(slice1, true);
+
+    // Tone 2: 1450 Hz on GPIO 28 (Physical Pin 34)
+    gpio_set_function(28, GPIO_FUNC_PWM);
+    uint slice2 = pwm_gpio_to_slice_num(28);
+    pwm_set_clkdiv(slice2, 125.0f); // 2.4MHz
+    pwm_set_wrap(slice2, 1655); // 2.4MHz / 1655 = ~1450 Hz
+    pwm_set_gpio_level(28, 165); // 10% duty to prevent massive ADC clipping
+    pwm_set_enabled(slice2, true);
+}
+
 int main() {
     vreg_set_voltage(VREG_VOLTAGE_1_30); sleep_ms(10);
     set_sys_clock_khz(300000, true);
     
     stdio_init_all();
     sleep_ms(2000);
+    
+    setup_test_tones();
 
     multicore_launch_core1(core1_main);
     core0_dsp_loop();

@@ -31,9 +31,11 @@ To prevent hardware confusion, the system is strictly tailored for the following
 - **MCU:** RP2350 (Overclocked to 300 MHz via `set_sys_clock_khz`, VREG 1.30V).
 
 ### 2.3 Analog Input (ADC) - CRITICAL FOR STABILITY
-- **Signal Path:** Audio (Line Level) -> 10k Potentiometer (Level Shift to 1.65V) -> RC Low-Pass Filter (1kΩ + 43nF, Fc ≈ 3.7kHz) -> **GPIO 26 (ADC0)**.
-- **Hardware Requirement:** To prevent noise, a **0.1µF + 10µF capacitor** MUST be placed between `ADC_VREF` (Pin 35) and `AGND` (Pin 33).
-- **ADC Configuration:** 10,000 Hz sample rate (maintained for calculation simplicity vs 9600Hz), hardware DMA ring buffer.
+- **Signal Path:** Audio Input (Line/Headphones) -> 4.7µF DC-blocking capacitor -> 10k Potentiometer (acting as a voltage divider to shift the signal to a 1.65V center bias from the 3.3V rail) -> RC Low-Pass Filter (1kΩ + 43nF to Ground, Fc ≈ 3.7kHz) -> **GPIO 26 (Physical Pin 31, ADC0)**.
+- **Audio Ground (CRITICAL):** The ground sleeve of the audio cable coming from the receiver MUST be connected strictly to the **Analog Ground (AGND - Physical Pin 33)** on the Pico 2. Do not connect the audio ground to the digital/power ground plane to prevent digital switching noise (especially from the 60MHz display SPI) from bleeding into the sensitive ADC.
+- **Hardware Decoupling (Pico 2 Board Mods):** To achieve professional SDR noise floors, you MUST add external filtering capacitors directly to the Pico 2 pins:
+  - Place a **0.1µF (ceramic) AND a 10µF (electrolytic)** capacitor in parallel directly between `ADC_VREF` (Pin 35) and `AGND` (Pin 33). This stabilizes the internal ADC reference voltage against VBUS fluctuations.
+- **ADC Configuration:** 10,000 Hz sample rate (maintained for calculation simplicity vs 9600Hz), hardware direct polling loop in Core 0 (bypassing DMA to guarantee synchronous execution with DSP).
 ### 2.3 Display & Rendering Architecture ("Frankenstein" Model)
 **Hardware Profile:** 3.5-inch IPS TFT, 480x320 Resolution, **ILI9488** Controller.
 
@@ -88,6 +90,16 @@ To combat this, the UI loop implements a multi-stage noise rejection algorithm:
 - **Jump Filtering:** Even if a cluster is found, any sudden jump exceeding a reasonable distance (e.g., 50 pixels since the last frame) breaks the continuous drawing line to prevent long "mirroring" artifacts.
 
 *Note for Future Development:* While this drastically improves usability and mimics legacy mobile touch stability, the filtering parameters (sample count, cluster distance, jump threshold) may require further empirical refinement during Phase 2 (UI Development) to find the perfect balance between responsiveness (drawing speed) and stability.
+
+### 2.5 Audio Output (External DAC - Future Phase 6)
+While the RP2350 lacks a built-in hardware DAC, Phase 6 (Audio DSP & Noise Reduction) will require high-fidelity analog audio output for monitoring filtered CW/RTTY tones. The system is designed to seamlessly integrate an external I2C DAC:
+- **Module:** MCP4725 (12-bit I2C DAC Breakout Board).
+- **Wiring (Proposed):**
+  - **VCC:** 3.3V (Physical Pin 36)
+  - **GND:** GND
+  - **SDA:** GPIO 4 (Physical Pin 6) - Maps to hardware `I2C0 SDA`
+  - **SCL:** GPIO 5 (Physical Pin 7) - Maps to hardware `I2C0 SCL`
+- **Audio Routing:** The analog `OUT` pin of the MCP4725 should be connected to a high-impedance headphone input or a dedicated external audio amplifier module (e.g., LM386) to drive a speaker.
 
 ---
 
