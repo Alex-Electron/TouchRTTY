@@ -94,11 +94,10 @@ To combat this, the UI loop implements a multi-stage noise rejection algorithm:
 ## 3. UI ARCHITECTURE: "FLDIGI-STYLE" WATERFALL & TOUCH
 
 ### 3.1 Screen Layout (480x320 Landscape)
-- **Top (16px):** Status Bar (Baud, Shift, SNR).
-- **Middle (128px):** Waterfall (FFT Scope, 300Hz - 3300Hz). Width expanded to 480px.
-- **Middle (16px):** Signal Info Panel (Live Frequencies, Mark/Space Levels).
-- **Bottom (128px):** Decoded Text Area. Features fast, hardware-accelerated touch-scrolling (swipe up/down) to review history effortlessly.
-- **Bottom (32px):** Toolbar (TUNE, AFC, Speed, Menu).
+- **Top (48px):** Status Bar (Baud, Shift, SNR, Live ADC Voltage, FPS, Frequency).
+- **Upper Middle (112px):** DSP Zone (Oscilloscope & FFT Spectrum, 50Hz - 3500Hz).
+- **Lower Middle (112px):** Decoded Text Area. Features fast, hardware-accelerated touch-scrolling (swipe up/down) to review history effortlessly.
+- **Bottom (48px):** Flat Design Toolbar (TUNE, AFC, SPEED, CLEAR, MENU).
 
 ### 3.2 Interactions & Gestures
 - **The "Smart Tap":**
@@ -125,8 +124,12 @@ To achieve sub-Hz precision from a coarse FFT (e.g., 20Hz/bin):
 ## 4. DSP PIPELINE (CORE 0)
 
 1. **DMA Ring Buffer:** Receives 12-bit ADC samples continuously at 10kHz.
-2. **Hanning Window & FFT:** Processes chunks for the Core 1 Waterfall.
-3. **I/Q Demodulation (Envelope Detection):**
+2. **Pre-Processing (Filters & Squelch):**
+   - **DC Blocker:** An IIR High-Pass filter mathematically zeroes out any static DC offset (from the 1.65V bias or ground loops).
+   - **FIR Bandpass Filter (63-Tap):** A custom 63-tap FIR filter (generated with a Hamming window) provides a "brick-wall" roll-off outside the 200Hz - 3200Hz human speech/digital mode passband. This completely eliminates 50Hz/60Hz mains hum and out-of-band ultrasonic noise before it hits the FFT.
+3. **Hanning Window & FFT:** Processes chunks for the Core 1 Spectrum/Waterfall.
+   - **Absolute Squelch AGC:** The UI rendering engine enforces a strict `[-10dB]` maximum gain clamp. If the input signal (or thermal noise) is entirely below the -60dB display floor, the screen renders perfectly flat, mimicking the absolute squelch of professional SDRs.
+4. **I/Q Demodulation (Envelope Detection):**
    - Incoming signal multiplied by `sin()` and `cos()` of Mark/Space frequencies (using precalculated LUTs or fast approx).
    - Low-Pass Filter applied to I and Q components.
    - Power calculated: `P = I^2 + Q^2`.

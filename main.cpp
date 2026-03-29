@@ -118,10 +118,10 @@ void core1_main() {
             if (current_max_db > agc_max) agc_max = current_max_db;
             else agc_max = agc_max * 0.90f + current_max_db * 0.10f;
             
-            if (current_min_db < agc_min) agc_min = current_min_db;
-            else agc_min = agc_min * 0.90f + current_min_db * 0.10f;
-
-            if (agc_max - agc_min < 50.0f) agc_max = agc_min + 50.0f;
+            // Squelch threshold: If there's no signal (e.g. grounded), clamp max so the display floor is above thermal noise
+            if (agc_max < -10.0f) agc_max = -10.0f;
+            
+            float display_min_db = agc_max - 50.0f;
             
             for (int x = 0; x < 480; x++) {
                 float exact_bin = bin_start + x * bin_per_pixel;
@@ -132,7 +132,7 @@ void core1_main() {
                 float frac = exact_bin - b0;
                 float db = local_mag[b0] * (1.0f - frac) + local_mag[b1] * frac;
                 
-                float normalized = (db - agc_min) / (agc_max - agc_min);
+                float normalized = (db - display_min_db) / 50.0f;
                 if (normalized < 0.0f) normalized = 0.0f;
                 if (normalized > 1.0f) normalized = 1.0f;
 
@@ -147,11 +147,11 @@ void core1_main() {
             spectrum.setTextColor(TFT_WHITE);
             spectrum.setTextSize(1);
             spectrum.setCursor(5, fft_y_offset + 5);
-            spectrum.print("0 Hz");
+            spectrum.print("50 Hz");
             spectrum.setCursor(410, fft_y_offset + 5);
             spectrum.print("3.5 kHz");
             spectrum.setCursor(200, fft_y_offset + 5);
-            spectrum.printf("AGC: %.0f/%.0f dB", agc_min, agc_max);
+            spectrum.printf("AGC Max: %.0f dB", agc_max);
 
             // Draw Markers on Spectrum Sprite
             spectrum.drawFastVLine(tune_x, 0, UI_DSP_ZONE_H, TFT_WHITE); // Center
@@ -166,6 +166,27 @@ void core1_main() {
     }
 }
 
+// 63-Tap FIR Bandpass Filter (200Hz - 3200Hz, Fs=10000Hz)
+#define FIR_TAPS 63
+const float fir_coeffs[FIR_TAPS] = {
+    0.000167f, 0.000000f, 0.001438f, 0.000137f,
+    -0.000722f, 0.001740f, -0.000000f, -0.002612f,
+    0.001612f, -0.000447f, -0.006590f, 0.000000f,
+    -0.001293f, -0.013294f, -0.004198f, -0.002266f,
+    -0.022758f, -0.011889f, -0.002468f, -0.034228f,
+    -0.023822f, -0.000000f, -0.046225f, -0.041377f,
+    0.009206f, -0.056824f, -0.070578f, 0.038381f,
+    -0.064124f, -0.160830f, 0.247760f, 0.600546f,
+    0.247760f, -0.160830f, -0.064124f, 0.038381f,
+    -0.070578f, -0.056824f, 0.009206f, -0.041377f,
+    -0.046225f, -0.000000f, -0.023822f, -0.034228f,
+    -0.002468f, -0.011889f, -0.022758f, -0.002266f,
+    -0.004198f, -0.013294f, -0.001293f, 0.000000f,
+    -0.006590f, -0.000447f, 0.001612f, -0.002612f,
+    -0.000000f, 0.001740f, -0.000722f, 0.000137f,
+    0.001438f, 0.000000f, 0.000167f,
+};
+
 void core0_dsp_loop() {
     static SimpleFFT fft;
     static float time_samples[FFT_SIZE];
@@ -173,9 +194,11 @@ void core0_dsp_loop() {
     static float imag[FFT_SIZE];
     static float mag[FFT_SIZE / 2];
     static float temp_wave[480]; 
+    static float fir_buf[FIR_TAPS] = {0};
 
     int samples_collected = 0;
     int wave_idx = 0;
+    int fir_idx = 0;
     const int SLIDE = 480; // Matches oscilloscope width perfectly!
     
     adc_init();
@@ -199,10 +222,22 @@ void core0_dsp_loop() {
 
         float sample = ((float)raw_val - 2048.0f) / 2048.0f;
         
+        // DC Blocker (IIR High-Pass Filter)
         dc_offset = dc_offset * 0.99f + sample * 0.01f;
         sample -= dc_offset;
         
-        time_samples[samples_collected] = sample * 2.0f;
+        // Digital FIR Bandpass Filter (200Hz - 3200Hz)
+        fir_buf[fir_idx] = sample;
+        float filtered = 0.0f;
+        int buf_idx = fir_idx;
+        for (int i = 0; i < FIR_TAPS; i++) {
+            filtered += fir_coeffs[i] * fir_buf[buf_idx];
+            buf_idx--;
+            if (buf_idx < 0) buf_idx = FIR_TAPS - 1;
+        }
+        fir_idx = (fir_idx + 1) % FIR_TAPS;
+
+        time_samples[samples_collected] = filtered * 2.0f;
         samples_collected++;
 
         if (samples_collected == FFT_SIZE) {
