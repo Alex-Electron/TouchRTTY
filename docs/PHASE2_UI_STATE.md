@@ -7,11 +7,11 @@
 4. **Zero Bias Hardware Meter:** Added a live-updating meter (top right) to physically aid the user in dialing the hardware trimpot to an exact 1.65V DC offset to maximize the ADC's dynamic range. The needle goes green when dialed perfectly within 50mV.
 5. **Live SNR (Signal-To-Noise) Meter:** The core calculates true SNR by extracting the peak magnitude of the spectrum and comparing it to the average noise floor across the entire passband, displaying a live dB rating.
 6. **Mathematical Marker Widths:** The RTTY Mark and Space cursors (`SH: 170`) are no longer hardcoded pixel widths, but are mathematically derived from the FFT bin width (7.18Hz per bin), ensuring they perfectly bracket the RTTY tones regardless of spectrum width.
-7. **Unified Theme Engine (Build 111):** The UI now uses a persistent `THEME` button to toggle through three specific visual themes, decoupling the hardware ILI9488 pixel formatting from the logical color palettes.
-   * `0: Blue Pastel` uses Driver Mode 4 (Native BRG) which accidentally, yet beautifully, blends color channels to create a soft, pastel visual. A white mix blend defaults to 1.0.
-   * `1: Blue Bright` uses Driver Mode 6 (Swapped RGB) for true, mathematically accurate colors.
-   * `2: Hacker Green` uses Driver Mode 6 (Swapped RGB) for a true matrix-style green.
-8. **Color Blending:** The user can fine-tune the pastel softening level of any theme by connecting via USB UART and pressing `q` (decrease blend) or `w` (increase blend), dynamically shifting the pixel rendering.
+7. **Hardware Color Driver Finalization (Build 120):** After extensive testing, the driver's hardware color mapping has been locked to `Mode 11` logic (16-bit Swapped endianness). Due to an inherent quirk in the display or SPI mapping, Red and Blue channels are physically swapped when rendered. 
+   * To display a specific color, the software must provide the inverse R/B hex code.
+   * Example: To render Blue on screen, we pass a Red hex (`0xFF0000U`). To render Yellow, we pass a Cyan hex (`0x00FFFFU`).
+   * The UI palette is currently locked to a classic Yellow Spectrum on a Dark Blue background, implemented through these inverted hex mappings.
+8. **Diagnostic Rendering:** A color swatch diagnostic has been added to the UI text zone to verify that `RED`, `GRN`, `BLU`, `YEL`, `CYN`, and `MAG` render correctly according to their physical labels.
 
 ## Action Items for Next Phase (Phase 3)
 * Implement the Goertzel algorithm or a fast I/Q demodulator locked onto the `tune_x` coordinates from the UI marker.

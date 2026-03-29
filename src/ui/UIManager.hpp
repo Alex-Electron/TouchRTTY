@@ -122,6 +122,34 @@ public:
         _spr_text.setTextColor(0x00FFFFU, COLOR_BG); 
         _spr_text.drawString("Audio Input Active. AGC Running.", 5, 45);
 
+        // Diagnostic Color Swatches (Using R/B Swap Logic)
+        int sq_w = 40, sq_h = 30, start_x = 220, start_y = 65;
+        _spr_text.setTextDatum(middle_center);
+        
+        // RED -> Send Blue
+        _spr_text.fillRect(start_x, start_y, sq_w, sq_h, 0x0000FFU);
+        _spr_text.setTextColor(0xFFFFFFU, 0x0000FFU); _spr_text.drawString("RED", start_x+20, start_y+15);
+        
+        // GRN -> Send Green
+        _spr_text.fillRect(start_x+42, start_y, sq_w, sq_h, 0x00FF00U);
+        _spr_text.setTextColor(0x000000U, 0x00FF00U); _spr_text.drawString("GRN", start_x+42+20, start_y+15);
+        
+        // BLU -> Send Red
+        _spr_text.fillRect(start_x+84, start_y, sq_w, sq_h, 0xFF0000U);
+        _spr_text.setTextColor(0xFFFFFFU, 0xFF0000U); _spr_text.drawString("BLU", start_x+84+20, start_y+15);
+        
+        // YEL -> Send Cyan
+        _spr_text.fillRect(start_x+126, start_y, sq_w, sq_h, 0x00FFFFU);
+        _spr_text.setTextColor(0x000000U, 0x00FFFFU); _spr_text.drawString("YEL", start_x+126+20, start_y+15);
+        
+        // CYN -> Send Yellow
+        _spr_text.fillRect(start_x+168, start_y, sq_w, sq_h, 0xFFFF00U);
+        _spr_text.setTextColor(0x000000U, 0xFFFF00U); _spr_text.drawString("CYN", start_x+168+20, start_y+15);
+        
+        // MAG -> Send Magenta
+        _spr_text.fillRect(start_x+210, start_y, sq_w, sq_h, 0xFF00FFU);
+        _spr_text.setTextColor(0xFFFFFFU, 0xFF00FFU); _spr_text.drawString("MAG", start_x+210+20, start_y+15);
+
         ili9488_push_colors(0, UI_Y_TEXT, 480, 112, (uint16_t*)_spr_text.getBuffer());
     }
 };
