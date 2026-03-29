@@ -5,6 +5,30 @@
 #include "../display/ili9341_test.h"
 #include "../version.h"
 
+// Unified Theme Engine
+struct Theme {
+    const char* name;
+    int driver_mode; // 4 (Native BRG) or 6 (Swapped RGB)
+    float default_blend; // 0.0 to 1.0 (Pastel mix)
+    uint32_t bg;
+    uint32_t grid;
+    uint32_t wave;
+    uint32_t peak;
+    uint32_t text;
+};
+
+// Build 111 Themes
+static const Theme THEMES[3] = {
+    // 0: The "Accidental Beauty" Pastel Theme (Native BRG = Mode 4)
+    {"0: Blue Pastel",   4, 1.0f, 0x000033U, 0x003366U, 0xFFFFFFU, 0xFFFF00U, 0x00FFFFU},
+    
+    // 1: The "True Color" Bright Theme (Swapped RGB = Mode 6)
+    {"1: Blue Bright",   6, 0.0f, 0x000096U, 0x00C8FFU, 0xFFFFFFU, 0xFFFF00U, 0x00FFFFU},
+    
+    // 2: Hacker Green Matrix (Must use True Color Mode 6)
+    {"2: Hacker Green",  6, 0.0f, 0x002200U, 0x004400U, 0x00FF00U, 0x00FF00U, 0x00FF00U}
+};
+
 #define UI_TOP_BAR_H   48
 #define UI_DSP_ZONE_H  112
 #define UI_TEXT_ZONE_H 112
@@ -26,16 +50,17 @@ private:
 
 public:
     UIManager(lgfx::LGFX_Device* tft) : _tft(tft), _spr_top(tft), _spr_text(tft), _spr_bottom(tft) {}
+    
     void init() {
         _spr_top.setColorDepth(16); _spr_top.createSprite(480, UI_TOP_BAR_H);
         _spr_text.setColorDepth(16); _spr_text.createSprite(480, UI_TEXT_ZONE_H);
         _spr_bottom.setColorDepth(16); _spr_bottom.createSprite(480, UI_BOTTOM_BAR_H);
         _tft->fillScreen(COLOR_BG);
-        drawColorModeInfo(0);
     }
+    
     void drawBottomBar(bool auto_scale, bool exp_scale) {
         _spr_bottom.fillSprite(COLOR_BG);
-        const char* labels[6] = {"FL-", "FL+", "GN-", "GN+", "AUTO", "C-MODE"};
+        const char* labels[6] = {"FL-", "FL+", "GN-", "GN+", "AUTO", "THEME"};
         int btn_w = 480 / 6; _spr_bottom.setFont(&fonts::Font2); _spr_bottom.setTextDatum(middle_center);
         for (int i = 0; i < 6; i++) {
             int x = i * btn_w; 
@@ -50,6 +75,7 @@ public:
         }
         ili9488_push_colors(0, UI_Y_BOTTOM, 480, 48, (uint16_t*)_spr_bottom.getBuffer());
     }
+    
     void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float marker_freq, bool clipping) {
         _spr_top.fillSprite(COLOR_BG); _spr_top.drawFastHLine(0, 47, 480, COLOR_GRID); 
         _spr_top.setTextDatum(middle_left); _spr_top.setTextColor(COLOR_TEXT, COLOR_BG); _spr_top.setFont(&fonts::Font2);
@@ -81,7 +107,12 @@ public:
         _spr_top.drawFastHLine(meter_x, meter_y+4, meter_w, COLOR_GRID); 
         _spr_top.drawFastVLine(meter_x+30, meter_y, 9, COLOR_TEXT); // Center
         
-        float err = adc_v - 1.65f; int nx = meter_x + 30 + (int)((err/0.5f)*30);
+        float err = adc_v - 1.65f; 
+        float norm_err = err / 0.5f;
+        if (norm_err < -1.0f) norm_err = -1.0f;
+        if (norm_err > 1.0f) norm_err = 1.0f;
+        int nx = meter_x + 30 + (int)(norm_err * 30);
+
         uint32_t nc = (abs(err) < 0.05f) ? 0x00FF00U : 0xFF0000U; // Green if good, Red if bad
         _spr_top.fillTriangle(nx, meter_y+4, nx-3, meter_y-2, nx+3, meter_y-2, nc); 
         _spr_top.fillTriangle(nx, meter_y+4, nx-3, meter_y+10, nx+3, meter_y+10, nc);
@@ -89,61 +120,24 @@ public:
         ili9488_push_colors(0, UI_Y_TOP, 480, UI_TOP_BAR_H, (uint16_t*)_spr_top.getBuffer());
     }
 
-    void drawColorModeInfo(int mode) {
+    void drawThemeInfo(int theme_idx, float current_blend) {
         _spr_text.fillSprite(COLOR_BG); 
         _spr_text.drawFastHLine(0, 111, 480, COLOR_GRID); 
         _spr_text.setTextDatum(top_left); _spr_text.setFont(&fonts::Font2); 
         
-        char buf[128];
-        bool swapped = mode >= 6;
-        int m = mode % 6;
-        const char* orders[] = {"RGB", "RBG", "GRB", "GBR", "BRG", "BGR"};
+        const Theme& t = THEMES[theme_idx];
         
-        _spr_text.setTextColor(0xFFFFFFU, COLOR_BG); // White
-        snprintf(buf, sizeof(buf), "COLOR DIAGNOSTIC MODE: %d", mode);
+        _spr_text.setTextColor(0x00FF00U, COLOR_BG); 
+        char buf[128];
+        snprintf(buf, sizeof(buf), "ACTIVE THEME: [%s]", t.name);
         _spr_text.drawString(buf, 5, 5);
         
-        _spr_text.setTextColor(0x00FFFFU, COLOR_BG); // Cyan
-        snprintf(buf, sizeof(buf), "Endian Swap: %s | Color Order: %s", swapped ? "YES (16-bit swapped)" : "NO (Native)", orders[m]);
+        _spr_text.setTextColor(0xFFFFFFU, COLOR_BG); 
+        snprintf(buf, sizeof(buf), "Hardware Mode: %d | Pastel Blend: %.2f (UART 'q', 'w')", t.driver_mode, current_blend);
         _spr_text.drawString(buf, 5, 25);
         
-        // Draw test swatches
-        int y = 50;
-        int size = 40;
-        
-        // Ideal Red
-        _spr_text.fillRect(10, y, size, size, 0xFF0000U);
-        _spr_text.setTextColor(0xFFFFU); 
-        _spr_text.setTextDatum(middle_center);
-        _spr_text.drawString("RED", 10 + size/2, y + size/2);
-        
-        // Ideal Green
-        _spr_text.fillRect(60, y, size, size, 0x00FF00U);
-        _spr_text.drawString("GRN", 60 + size/2, y + size/2);
-        
-        // Ideal Blue
-        _spr_text.fillRect(110, y, size, size, 0x0000FFU);
-        _spr_text.drawString("BLU", 110 + size/2, y + size/2);
-        
-        // Ideal Yellow
-        _spr_text.fillRect(160, y, size, size, 0xFFFF00U);
-        _spr_text.setTextColor(0x0000U); // Black text on yellow
-        _spr_text.drawString("YEL", 160 + size/2, y + size/2);
-        
-        _spr_text.setTextColor(0xFFFFU); // White text again
-        // Ideal Cyan
-        _spr_text.fillRect(210, y, size, size, 0x00FFFFU);
-        _spr_text.setTextColor(0x0000U);
-        _spr_text.drawString("CYN", 210 + size/2, y + size/2);
-        
-        _spr_text.setTextColor(0xFFFFU);
-        // Ideal Magenta
-        _spr_text.fillRect(260, y, size, size, 0xFF00FFU);
-        _spr_text.drawString("MAG", 260 + size/2, y + size/2);
-
-        _spr_text.setTextDatum(top_left);
-        _spr_text.setTextColor(0xFFFFFFU, COLOR_BG);
-        _spr_text.drawString("Find the mode where RED is Red and GRN is Green.", 5, y + size + 5);
+        _spr_text.setTextColor(0x00FFFFU, COLOR_BG); 
+        _spr_text.drawString("Audio Input Active. AGC Running.", 5, 45);
 
         ili9488_push_colors(0, UI_Y_TEXT, 480, 112, (uint16_t*)_spr_text.getBuffer());
     }

@@ -65,8 +65,12 @@ void core1_main() {
     UIManager ui(&tft); ui.init();
     
     bool auto_scale = true, exp_scale = false;
+    int active_theme = 0;
+    shared_color_mode = THEMES[active_theme].driver_mode;
+    shared_color_blend = THEMES[active_theme].default_blend;
     
     ui.drawBottomBar(auto_scale, exp_scale);
+    ui.drawThemeInfo(active_theme, shared_color_blend);
 
     LGFX_Sprite spectrum(&tft); spectrum.setColorDepth(16); spectrum.createSprite(480, UI_DSP_ZONE_H);
     const int bin_start = 5, bin_end = 358;
@@ -81,12 +85,19 @@ void core1_main() {
     while (true) {
         uint32_t now = time_us_32();
         
-        // UART Tuner for Color Mode (0 to 11)
+        // UART Tuner for Pastel Blend
         int c = getchar_timeout_us(0);
-        if (c >= 'a' && c <= 'l') {
-            shared_color_mode = c - 'a';
-            ui.drawColorModeInfo(shared_color_mode);
-            printf("Color Mode switched via UART to %d\n", shared_color_mode);
+        if (c == 'q') { 
+            shared_color_blend -= 0.05f; 
+            if(shared_color_blend < 0.0f) shared_color_blend = 0.0f; 
+            ui.drawThemeInfo(active_theme, shared_color_blend);
+            printf("Blend adjusted to %.2f\n", shared_color_blend);
+        }
+        if (c == 'w') { 
+            shared_color_blend += 0.05f; 
+            if(shared_color_blend > 1.0f) shared_color_blend = 1.0f; 
+            ui.drawThemeInfo(active_theme, shared_color_blend);
+            printf("Blend adjusted to %.2f\n", shared_color_blend);
         }
 
         if (now - last_ui_update > 500000) {
@@ -99,14 +110,15 @@ void core1_main() {
         if (new_data_ready) {
             frame_count++; memcpy(local_mag, (void*)shared_fft_mag, sizeof(local_mag)); memcpy(local_wave, (void*)shared_adc_waveform, sizeof(local_wave)); new_data_ready = false;
             
-            // Fixed to bright blue palette
-            spectrum.fillSprite(0x000096U); 
+            const Theme* theme = &THEMES[active_theme];
             
-            int osc_h = 50; spectrum.drawFastHLine(0, osc_h/2, 480, 0x00C8FFU); 
+            spectrum.fillSprite(theme->bg);
+            
+            int osc_h = 50; spectrum.drawFastHLine(0, osc_h/2, 480, theme->grid); 
             for (int x = 0; x < 479; x++) {
                 int y0 = osc_h - (int)((local_wave[x] / 3.3f) * osc_h);
                 int y1 = osc_h - (int)((local_wave[x+1] / 3.3f) * osc_h);
-                spectrum.drawLine(x, std::clamp(y0,0,osc_h-1), x+1, std::clamp(y1,0,osc_h-1), 0xFFFFFFU);
+                spectrum.drawLine(x, std::clamp(y0,0,osc_h-1), x+1, std::clamp(y1,0,osc_h-1), theme->wave);
             }
             
             int fft_y_offset = 50, fft_h = 62;
@@ -126,10 +138,10 @@ void core1_main() {
                 float eb = bin_start + x * bin_per_pixel; int b0 = (int)eb; float db = smooth_mag[b0] * (1.0f-(eb-b0)) + smooth_mag[std::min(b0+1,FFT_SIZE/2-1)] * (eb-b0);
                 float norm = (db + ui_gain - ui_noise_floor) / 50.0f;
                 norm = std::clamp(norm, 0.0f, 1.0f); if (exp_scale) norm *= norm;
-                int h = (int)(norm * fft_h); if (h > 0) spectrum.drawFastVLine(x, fft_y_offset + fft_h - h, h, 0xFFFF00U);
+                int h = (int)(norm * fft_h); if (h > 0) spectrum.drawFastVLine(x, fft_y_offset + fft_h - h, h, theme->peak);
             }
             
-            spectrum.setTextColor(0x00FFFFU); spectrum.setTextSize(1);
+            spectrum.setTextColor(theme->text); spectrum.setTextSize(1);
             spectrum.setCursor(5, fft_y_offset+5); spectrum.print("50 Hz");
             spectrum.setCursor(410, fft_y_offset+5); spectrum.print("3.5 kHz");
             spectrum.setCursor(180, fft_y_offset+5);
@@ -158,9 +170,11 @@ void core1_main() {
                     else if (idx == 3) { ui_gain += 1.0f; auto_scale = false; }
                     else if (idx == 4) { auto_scale = true; }
                     else if (idx == 5) { 
-                        shared_color_mode = (shared_color_mode + 1) % 12; 
-                        ui.drawColorModeInfo(shared_color_mode);
-                        printf("Color Mode switched via touch to %d\n", shared_color_mode);
+                        active_theme = (active_theme + 1) % 3; 
+                        shared_color_mode = THEMES[active_theme].driver_mode;
+                        shared_color_blend = THEMES[active_theme].default_blend;
+                        ui.drawThemeInfo(active_theme, shared_color_blend);
+                        printf("Theme Mode switched via touch to %d\n", active_theme);
                     } 
                     ui.drawBottomBar(auto_scale, exp_scale);
                 }
