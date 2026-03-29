@@ -158,17 +158,8 @@ void ili9488_push_waterfall(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint
     static uint32_t buf[2][480]; 
     int current_buf = 0;
 
-    uint32_t c_center = expand_color_dynamic(0xFFFFU);
-    uint32_t c_space = expand_color_dynamic(0x07FFU);
-    uint32_t c_mark = expand_color_dynamic(0xFFE0U);
-
-    // Prepare first row
-    for(int col = 0; col < w; col++) {
-        if (col == tune_x) buf[0][col] = c_center;
-        else if (col == tune_x - shift) buf[0][col] = c_space;
-        else if (col == tune_x + shift) buf[0][col] = c_mark;
-        else buf[0][col] = expand_color_dynamic(colors[col]);
-    }
+    uint32_t c_space = expand_color_dynamic(0x00FFU); // Red hex -> Blue visual
+    uint32_t c_mark  = expand_color_dynamic(0x07E0U); // Green visual
 
     gpio_put(PIN_DC, 1);
     gpio_put(PIN_CS, 0);
@@ -183,9 +174,9 @@ void ili9488_push_waterfall(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint
         if (next_row < h) {
             int offset = next_row * w;
             for(int col = 0; col < w; col++) {
-                if (col == tune_x) buf[next_buf][col] = c_center;
-                else if (col == tune_x - shift) buf[next_buf][col] = c_space;
-                else if (col == tune_x + shift) buf[next_buf][col] = c_mark;
+                // High-visibility dashed markers
+                if ((row % 4 < 2) && (col == tune_x - shift)) buf[next_buf][col] = c_space;
+                else if ((row % 4 < 2) && (col == tune_x + shift)) buf[next_buf][col] = c_mark;
                 else buf[next_buf][col] = expand_color_dynamic(colors[offset + col]);
             }
         }
