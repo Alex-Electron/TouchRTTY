@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RTTY Advanced Test Bench</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; max-width: 500px; margin: auto; background-color: #f4f4f9;}
+        h2 { text-align: center; color: #333; }
+        label { font-weight: bold; margin-top: 10px; display: block; }
+        input[type="number"], select { font-size: 16px; padding: 10px; width: 100%; box-sizing: border-box; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 5px;}
+        .checkbox-group { display: flex; align-items: center; margin-bottom: 10px; font-size: 16px; }
+        .checkbox-group input { width: auto; margin-right: 10px; transform: scale(1.5); }
+        textarea { width: 100%; height: 100px; font-size: 18px; padding: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 5px; text-transform: uppercase;}
+        .btn-group { display: flex; gap: 10px; margin-top: 20px; }
+        button { font-size: 18px; padding: 15px; width: 100%; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;}
+        .btn-start { background-color: #28a745; }
+        .btn-start:active { background-color: #218838; }
+        .btn-stop { background-color: #dc3545; }
+        .btn-stop:active { background-color: #c82333; }
+        .status { text-align: center; margin-top: 15px; font-weight: bold; color: #555; }
+    </style>
+</head>
+<body>
+
+    <h2>RTTY Test Bench</h2>
+
+    <label>Baud Rate:</label>
+    <select id="baud">
+        <option value="45.45" selected>45.45 Baud (Amateur Radio)</option>
+        <option value="50">50 Baud (Commercial/Weather)</option>
+        <option value="75">75 Baud</option>
+    </select>
+
+    <label>Stop Bits:</label>
+    <select id="stopBits">
+        <option value="1.0" selected>1.0 (Fastest / Target)</option>
+        <option value="1.5">1.5 (Standard ITA2)</option>
+        <option value="2.0">2.0 (Slow / Stable)</option>
+    </select>
+
+    <label>Mark Frequency (Hz):</label>
+    <input type="number" id="freqMark" value="1450">
+
+    <label>Space Frequency (Hz):</label>
+    <input type="number" id="freqSpace" value="1620">
+
+    <div class="checkbox-group">
+        <input type="checkbox" id="invertTones">
+        <label for="invertTones" style="margin-top: 0;">Invert Tones (Swap Mark/Space)</label>
+    </div>
+
+    <label>Text to Transmit (Loops infinitely):</label>
+    <textarea id="textInput">RYRYRY </textarea>
+
+    <div class="btn-group">
+        <button class="btn-start" onclick="startRTTY()">START</button>
+        <button class="btn-stop" onclick="stopRTTY()">STOP</button>
+    </div>
+
+    <div class="status" id="statusText">Status: IDLE</div>
+
+    <script>
+        // Standard ITA2 Baudot lookup tables
+        const LETTERS = "\0E\nA SIU\rDRJNFCKTZLWHYPQOBG\0MXV\0";
+        const FIGURES = "\03\n- \u000787\r$4',!:(5\")2#6019?&\0./\0";
+        const SHIFT_LETTERS = 0x1F;
+        const SHIFT_FIGURES = 0x1B;
+
+        let audioCtx;
+        let osc;
+        let gain;
+        let isPlaying = false;
+        let scheduleTimer;
+
+        function startRTTY() {
+            if (isPlaying) return;
+
+            // Re-initialize AudioContext
+            if (!audioCtx || audioCtx.state === 'closed') {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+
+            const rawText = document.getElementById('textInput').value.toUpperCase();
+            const text = rawText.length > 0 ? rawText : "RYRYRY "; 
+            
+            const baud = parseFloat(document.getElementById('baud').value);
+            const stopBits = parseFloat(document.getElementById('stopBits').value);
+            const invert = document.getElementById('invertTones').checked;
+            
+            // Assign frequencies based on invert checkbox
+            const freqMark = invert ? parseFloat(document.getElementById('freqSpace').value) : parseFloat(document.getElementById('freqMark').value);
+            const freqSpace = invert ? parseFloat(document.getElementById('freqMark').value) : parseFloat(document.getElementById('freqSpace').value);
+
+            const bitTime = 1.0 / baud; 
+            
+            osc = audioCtx.createOscillator();
+            gain = audioCtx.createGain();
+            
+            osc.type = 'sine';
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            osc.start();
+            isPlaying = true;
+            document.getElementById('statusText').innerText = "Status: TRANSMITTING...";
+            document.getElementById('statusText').style.color = "#28a745";
+
+            let time = audioCtx.currentTime;
+            
+            // Start with Mark tone (idle state)
+            osc.frequency.setValueAtTime(freqMark, time);
+            gain.gain.setValueAtTime(0, time);
+            gain.gain.linearRampToValueAtTime(1, time + 0.05);
+            time += 0.5; // Idle tone before transmission
+
+            let currentShift = 'LETTERS';
+            let charIndex = 0;
+
+        // Function to schedule a single Baudot character
+        function scheduleChar(code) {
+            // 1. Start Bit (Space tone)
+            osc.frequency.setTargetAtTime(freqSpace, time, 0.0001);
+            time += bitTime;
+
+            // 2. Data Bits (5 bits, LSB first)
+            for (let i = 0; i < 5; i++) {
+                let bit = (code >> i) & 1;
+                osc.frequency.setTargetAtTime(bit ? freqMark : freqSpace, time, 0.0001);
+                time += bitTime;
+            }
+
+            // 3. Stop Bit(s) (Mark tone) - Variable length based on user input
+            osc.frequency.setTargetAtTime(freqMark, time, 0.0001);
+            time += bitTime * stopBits;
+        }
+
+            // Look-ahead scheduler function
+            function scheduleChunk() {
+                if (!isPlaying) return;
+
+                // Schedule audio slightly ahead to ensure seamless playback
+                while (time < audioCtx.currentTime + 1.0) { 
+                    let char = text[charIndex];
+                    let code = -1;
+
+                    let lIdx = LETTERS.indexOf(char);
+                    if (lIdx !== -1) {
+                        // Switch to letters if needed
+                        if (currentShift !== 'LETTERS' && char !== ' ' && char !== '\r' && char !== '\n') {
+                            scheduleChar(SHIFT_LETTERS);
+                            currentShift = 'LETTERS';
+                        }
+                        code = lIdx;
+                    } else {
+                        let fIdx = FIGURES.indexOf(char);
+                        if (fIdx !== -1) {
+                            // Switch to figures if needed
+                            if (currentShift !== 'FIGURES' && char !== ' ' && char !== '\r' && char !== '\n') {
+                                scheduleChar(SHIFT_FIGURES);
+                                currentShift = 'FIGURES';
+                            }
+                            code = fIdx;
+                        }
+                    }
+
+                    if (code !== -1) {
+                        scheduleChar(code);
+                    }
+
+                    // Loop text
+                    charIndex = (charIndex + 1) % text.length; 
+                }
+
+                // Recursive timeout for the next chunk
+                scheduleTimer = setTimeout(scheduleChunk, 250); 
+            }
+
+            scheduleChunk();
+        }
+
+        function stopRTTY() {
+            if (!isPlaying) return;
+            
+            clearTimeout(scheduleTimer);
+            isPlaying = false;
+            
+            if (gain && osc) {
+                let time = audioCtx.currentTime;
+                gain.gain.setValueAtTime(1, time);
+                // Smooth fade out to prevent clicks
+                gain.gain.linearRampToValueAtTime(0, time + 0.05);
+                osc.stop(time + 0.1);
+            }
+            
+            document.getElementById('statusText').innerText = "Status: IDLE";
+            document.getElementById('statusText').style.color = "#555";
+        }
+    </script>
+
+</body>
+</html>
