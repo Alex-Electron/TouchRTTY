@@ -27,6 +27,8 @@ volatile float shared_adc_v = 0.0f;
 volatile float shared_signal_db = -80.0f;
 volatile bool shared_adc_clipping = false;
 volatile float shared_snr_db = 0.0f;
+volatile float shared_core0_load = 0.0f;
+volatile float shared_core1_load = 0.0f;
 
 // 63-Tap FIR Bandpass Filter (200Hz - 3200Hz, Fs=10000Hz)
 #define FIR_TAPS 63
@@ -83,8 +85,12 @@ void core1_main() {
     float ui_noise_floor = -60.0f, ui_gain = 0.0f;
     static float smooth_mag[FFT_SIZE / 2] = {0};
 
+    uint32_t c1_total_work = 0, c1_total_time = 0;
+    uint32_t c1_last_measure = time_us_32();
+
     while (true) {
         uint32_t now = time_us_32();
+        uint32_t loop_start = now;
 
         if (now - last_ui_update > 500000) {
             uint32_t fps = frame_count * 2; frame_count = 0; last_ui_update = now;
@@ -94,7 +100,7 @@ void core1_main() {
             
             float marker_freq = (bin_start + (tune_x / 480.0f) * (bin_end - bin_start)) * (SAMPLE_RATE / (float)FFT_SIZE);
             bool is_clipping = shared_adc_clipping; shared_adc_clipping = false; 
-            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, marker_freq, is_clipping, tune_x, half_shift);
+            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, marker_freq, is_clipping, shared_core0_load, shared_core1_load);
         }
         
         if (new_data_ready) {
@@ -133,7 +139,15 @@ void core1_main() {
                         spectrum.drawPixel(x, 0, lgfx::color565(b, g, r)); // Swapped R/B
                     }
                 }
+                // Draw Marker Triangles at the top of the spectrum
+                spectrum.fillTriangle(tune_x - half_shift, 0, tune_x - half_shift - 4, 6, tune_x - half_shift + 4, 6, 0x00FFFFU); // Cyan hex (Yellow visual)
+                spectrum.fillTriangle(tune_x + half_shift, 0, tune_x + half_shift - 4, 6, tune_x + half_shift + 4, 6, 0xFFFF00U); // Yellow hex (Cyan visual)
+                
                 ili9488_push_waterfall(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer(), tune_x, half_shift);
+                
+                // Clear the triangles so they don't smear down the waterfall on the next scroll
+                spectrum.fillTriangle(tune_x - half_shift, 0, tune_x - half_shift - 4, 6, tune_x - half_shift + 4, 6, PAL_BG);
+                spectrum.fillTriangle(tune_x + half_shift, 0, tune_x + half_shift - 4, 6, tune_x + half_shift + 4, 6, PAL_BG);
             } else if (display_mode == 1) { // Spectrum
                 spectrum.fillSprite(PAL_BG);
                 
@@ -147,6 +161,9 @@ void core1_main() {
                 spectrum.drawFastVLine(tune_x, 0, UI_DSP_ZONE_H, 0xFFFFFFU);
                 spectrum.drawFastVLine(tune_x - half_shift, 0, UI_DSP_ZONE_H, 0x00FFFFU);
                 spectrum.drawFastVLine(tune_x + half_shift, 0, UI_DSP_ZONE_H, 0xFFFF00U);
+                
+                spectrum.fillTriangle(tune_x - half_shift, 0, tune_x - half_shift - 4, 6, tune_x - half_shift + 4, 6, 0x00FFFFU);
+                spectrum.fillTriangle(tune_x + half_shift, 0, tune_x + half_shift - 4, 6, tune_x + half_shift + 4, 6, 0xFFFF00U);
                 
                 ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
             } else if (display_mode == 2) { // Oscilloscope
@@ -163,6 +180,9 @@ void core1_main() {
                 spectrum.drawFastVLine(tune_x, 0, UI_DSP_ZONE_H, 0xFFFFFFU);
                 spectrum.drawFastVLine(tune_x - half_shift, 0, UI_DSP_ZONE_H, 0x00FFFFU);
                 spectrum.drawFastVLine(tune_x + half_shift, 0, UI_DSP_ZONE_H, 0xFFFF00U);
+                
+                spectrum.fillTriangle(tune_x - half_shift, 0, tune_x - half_shift - 4, 6, tune_x - half_shift + 4, 6, 0x00FFFFU);
+                spectrum.fillTriangle(tune_x + half_shift, 0, tune_x + half_shift - 4, 6, tune_x + half_shift + 4, 6, 0xFFFF00U);
                 
                 ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
             }
@@ -194,6 +214,14 @@ void core1_main() {
             }
             was_touched = is_touched; last_touch = now;
         }
+        uint32_t loop_end = time_us_32();
+        c1_total_work += (loop_end - loop_start);
+        
+        if (now - c1_last_measure >= 500000) {
+            shared_core1_load = (c1_total_work * 100.0f) / (now - c1_last_measure);
+            c1_total_work = 0; c1_last_measure = now;
+        }
+        
         tight_loop_contents();
     }
 }
@@ -218,6 +246,16 @@ void core0_dsp_loop() {
             shared_snr_db = pk - (sm/(FFT_SIZE/2)); memcpy((void*)shared_fft_mag, mag, sizeof(mag)); memcpy((void*)shared_adc_waveform, tw, sizeof(tw));
             new_data_ready=true; wi=0; memmove(ts, &ts[480], (FFT_SIZE-480)*sizeof(float)); sc=FFT_SIZE-480;
         }
+        
+        static uint32_t total_work = 0, total_time = 0;
+        uint32_t work_end = time_us_32();
+        total_work += (work_end - st);
+        total_time += 100;
+        if (total_time >= 500000) { 
+            shared_core0_load = (total_work * 100.0f) / total_time; 
+            total_work = 0; total_time = 0; 
+        }
+        
         while(time_us_32()-st < 100) tight_loop_contents();
     }
 }
