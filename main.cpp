@@ -15,7 +15,6 @@
 #include "src/display/ili9341_test.h"
 #include "src/dsp/fft.hpp"
 #include "src/dsp/biquad.hpp"
-#include "src/dsp/dpll_framer.hpp"
 #include "src/ui/UIManager.hpp"
 #include "src/version.h"
 
@@ -46,6 +45,36 @@ volatile int shared_stop_idx = 1;
 volatile bool shared_rtty_inv = false;
 volatile bool shared_squelch_open = false;
 volatile bool shared_clear_dsp = false;
+
+// Tuning Globals
+volatile float tuning_dpll_alpha = 0.035f;
+volatile float tuning_lpf_k = 0.75f;
+volatile float tuning_sq_snr = 4.0f;
+volatile float shared_agc_gain = 1.0f;
+
+void handle_serial_commands() {
+    static char cmd_buf[64];
+    static int cmd_ptr = 0;
+    int c = getchar_timeout_us(0);
+    if (c != PICO_ERROR_TIMEOUT) {
+        if (c == '\n' || c == '\r') {
+            cmd_buf[cmd_ptr] = 0;
+            if (cmd_ptr > 0) {
+                float val;
+                if (sscanf(cmd_buf, "ALPHA %f", &val) == 1) { tuning_dpll_alpha = val; printf(">> SET ALPHA TO %.4f\n", val); }
+                else if (sscanf(cmd_buf, "K %f", &val) == 1) { tuning_lpf_k = val; printf(">> SET LPF K TO %.2f\n", val); }
+                else if (sscanf(cmd_buf, "SQ %f", &val) == 1) { tuning_sq_snr = val; printf(">> SET SQ SNR TO %.1f\n", val); }
+                else if (strcmp(cmd_buf, "CLEAR") == 0) { shared_clear_dsp = true; printf(">> DSP RESET\n"); }
+                else if (strcmp(cmd_buf, "INV ON") == 0) { shared_rtty_inv = true; printf(">> RX INVERTED\n"); }
+                else if (strcmp(cmd_buf, "INV OFF") == 0) { shared_rtty_inv = false; printf(">> RX NORMAL\n"); }
+                else { printf(">> UNKNOWN COMMAND: %s\n", cmd_buf); }
+            }
+            cmd_ptr = 0;
+        } else if (cmd_ptr < 63) {
+            cmd_buf[cmd_ptr++] = (char)c;
+        }
+    }
+}
 
 const char ita2_ltrs[32] = {
     '\0', 'E', '\n', 'A', ' ', 'S', 'I', 'U', 
@@ -103,11 +132,10 @@ void core1_main() {
     int display_mode = 0;
     bool show_palette = false;
     
-    int rtty_stop_idx = 1;
     const float shifts[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
     const float stop_bits[] = {1.0f, 1.5f, 2.0f};
     
-    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, shared_baud_idx, shared_shift_idx, stop_bits[rtty_stop_idx], shared_rtty_inv);
+    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_rtty_inv);
 
     LGFX_Sprite spectrum(&tft); spectrum.setColorDepth(16); spectrum.createSprite(480, UI_DSP_ZONE_H);
     LGFX_Sprite marker_spr(&tft); marker_spr.setColorDepth(16); marker_spr.createSprite(480, UI_MARKER_H);
@@ -125,6 +153,7 @@ void core1_main() {
 
     while (true) {
         uint32_t loop_start = time_us_32();
+        handle_serial_commands();
 
         if (rtty_char_ready) {
             ui.addRTTYChar((char)rtty_new_char, !show_palette);
@@ -241,7 +270,7 @@ void core1_main() {
                         if (btn_idx == 0) { shared_baud_idx = (shared_baud_idx + 1) % 3; }
                         else if (btn_idx == 1) { shared_shift_idx = (shared_shift_idx + 1) % 5; }
                         else if (btn_idx == 2) { shared_rtty_inv = !shared_rtty_inv; }
-                        else if (btn_idx == 3) { rtty_stop_idx = (rtty_stop_idx + 1) % 3; }
+                        else if (btn_idx == 3) { shared_stop_idx = (shared_stop_idx + 1) % 3; }
                         else if (btn_idx == 4) { ui.clearRTTY(); shared_clear_dsp = true; }
                         else if (btn_idx == 5) { menu_mode = true; } 
                     } else {
@@ -252,7 +281,7 @@ void core1_main() {
                         else if (btn_idx == 4) { auto_scale = !auto_scale; }
                         else if (btn_idx == 5) { menu_mode = false; show_palette = false; ui.drawRTTY(); } 
                     }
-                    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, shared_baud_idx, shared_shift_idx, stop_bits[rtty_stop_idx], shared_rtty_inv);
+                    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_rtty_inv);
                 }
                 else if (ty >= UI_Y_TEXT && ty < UI_Y_BOTTOM && !was_touched) {
                     show_palette = !show_palette;
@@ -317,7 +346,12 @@ void core0_dsp_loop() {
             shared_squelch_open = false;
             last_d_sign = true;
         }
+        
         uint32_t st = time_us_32(); uint16_t rv = adc_read();
+        
+        if (rv < diag_adc_min) diag_adc_min = rv;
+        if (rv > diag_adc_max) diag_adc_max = rv;
+        
         if(rv<50 || rv>4045) shared_adc_clipping=true;
         float v = (rv/4095.0f)*3.3f; shared_adc_v=v; float s = (rv-2048.0f)/2048.0f;
         dc = dc*0.99f + s*0.01f; s -= dc; fb[fi]=s; float f_out=0.0f; int bi=fi;
@@ -325,9 +359,11 @@ void core0_dsp_loop() {
         fi=(fi+1)%63; if(wi<480) { tw[wi] = f_out*1.65f+1.65f; } ts[sc++]=f_out*2.0f;
         
         float baud = bauds[shared_baud_idx];
-        if (baud != current_baud) {
+        static float current_k = -1.0f;
+        if (baud != current_baud || tuning_lpf_k != current_k) {
             current_baud = baud;
-            float fc = baud * 0.75f; 
+            current_k = tuning_lpf_k;
+            float fc = baud * tuning_lpf_k; 
             design_lpf(&lp_mi, fc, SAMPLE_RATE); design_lpf(&lp_mq, fc, SAMPLE_RATE);
             design_lpf(&lp_si, fc, SAMPLE_RATE); design_lpf(&lp_sq, fc, SAMPLE_RATE);
         }
@@ -351,6 +387,10 @@ void core0_dsp_loop() {
         
         if (wi < 480) { tw_m[wi] = mark_power; tw_s[wi] = space_power; wi++; }
         
+        diag_m_pow += mark_power;
+        diag_s_pow += space_power;
+        diag_samples++;
+        
         float new_m = sqrtf(mark_power + 1e-10f);
         float new_s = sqrtf(space_power + 1e-10f);
         float atc_fast = expf(-1.0f / (2.0f * (SAMPLE_RATE / baud)));
@@ -368,39 +408,70 @@ void core0_dsp_loop() {
         bool d_sign = (D > 0);
         
         float phase_inc = baud / SAMPLE_RATE;
-        float dpll_alpha = 0.035f; // From TZ BnT approx 0.008 -> 0.05
         float stop_bits_expected = (shared_stop_idx == 0) ? 1.0f : ((shared_stop_idx == 1) ? 1.5f : 2.0f);
         
-        static dpll_t dpll;
-        static baudot_framer_t framer;
-        static bool dpll_initialized = false;
-        
-        if (!dpll_initialized || current_baud != baud) {
-            dpll_init(&dpll, baud, SAMPLE_RATE);
-            baudot_framer_init(&framer, stop_bits_expected);
-            dpll_initialized = true;
-        }
-        framer.stop_bits = stop_bits_expected;
-
         if (!shared_squelch_open) {
-            baudot_framer_init(&framer, stop_bits_expected);
-            dpll.phase = 0.5f;
-            dpll.prev_disc = 0.0f;
-            dpll.integrate_acc = 0.0f;
-            dpll.integrate_count = 0;
             baudot_state = 0;
             last_d_sign = true; 
         } else {
-            float bit_val;
-            if (dpll_process(&dpll, D, &bit_val)) {
-                char ch = baudot_framer_push(&framer, bit_val);
-                if (ch > 0 && ch != '\0') {
-                    if (ch == '?') {
-                        printf("[ERR]");
-                    } else {
-                        rtty_new_char = ch;
-                        rtty_char_ready = true;
-                        printf("%c", ch);
+            // Edge detection (zero crossing) for synchronization
+            if (d_sign != last_d_sign) {
+                if (baudot_state > 0) {
+                    float err = symbol_phase;
+                    if (err > 0.5f) err -= 1.0f; // Late
+                    symbol_phase -= tuning_dpll_alpha * err; // Nudge PLL 
+                } else if (!d_sign) { 
+                    // Transition to space = start bit
+                    baudot_state = 1;
+                    symbol_phase = 0.0f; // Start integrating from the exact beginning of the bit
+                    integrate_acc = 0.0f;
+                    current_char = 0;
+                }
+            }
+            last_d_sign = d_sign;
+            
+            if (baudot_state > 0) {
+                symbol_phase += phase_inc;
+                integrate_acc += D; 
+                
+                if (symbol_phase >= 1.0f) {
+                    symbol_phase -= 1.0f;
+                    bool bit = (integrate_acc > 0);
+                    integrate_acc = 0.0f;
+                    
+                    if (baudot_state == 1) { 
+                        if (bit) baudot_state = 0; // False start
+                        else baudot_state = 2;
+                    } else if (baudot_state >= 2 && baudot_state <= 6) { 
+                        if (bit) current_char |= (1 << (baudot_state - 2));
+                        baudot_state++;
+                    } else if (baudot_state == 7) { 
+                        if (bit) { // Valid stop
+                            char decoded = '\0';
+                            if (current_char == 27) { is_figs = true; printf("[FIGS]"); }
+                            else if (current_char == 31) { is_figs = false; printf("[LTRS]"); }
+                            else {
+                                decoded = is_figs ? ita2_figs[current_char] : ita2_ltrs[current_char];
+                                if (decoded == ' ') is_figs = false; // Unshift on space (fldigi)
+                                if (decoded != '\0') {
+                                    rtty_new_char = decoded;
+                                    rtty_char_ready = true;
+                                    printf("%c", decoded); 
+                                }
+                            }
+                        } else {
+                            printf("[ERR]"); // Framing error
+                        }
+                        
+                        // For tight 1.0 stop bits, if we are ALREADY in Space, a new start bit has begun!
+                        if (stop_bits_expected <= 1.0f && !d_sign) {
+                            baudot_state = 1;
+                            symbol_phase = 0.5f; // Center sampling
+                            integrate_acc = D;
+                            current_char = 0;
+                        } else {
+                            baudot_state = 0; 
+                        }
                     }
                 }
             }
@@ -435,7 +506,7 @@ void core0_dsp_loop() {
             
             float avg_noise = sm / (FFT_SIZE/2);
             // Relaxed squelch with hysteresis for 75 Baud
-            bool sq_strong = (best_m_mag > avg_noise * 2.0f || best_s_mag > avg_noise * 2.0f) && (shared_snr_db > 3.0f);
+            bool sq_strong = (best_m_mag > avg_noise * 2.0f || best_s_mag > avg_noise * 2.0f) && (shared_snr_db > tuning_sq_snr);
             bool sq_weak = (best_m_mag < avg_noise * 1.2f && best_s_mag < avg_noise * 1.2f) || (shared_snr_db < 1.0f);
             
             if (shared_signal_db < -65.0f) shared_squelch_open = false; // Hard noise floor
@@ -456,13 +527,20 @@ void core0_dsp_loop() {
             static int diag_timer = 0;
             if (++diag_timer >= 10) { // Approx 500ms
                 diag_timer = 0;
-                printf("\n--- TUNING DIAGNOSTICS (B142) ---\n");
-                printf("Step 1 (ADC): V=%.2fV (Peak/Clip: %d)\n", shared_adc_v, shared_adc_clipping);
+                float m_avg = sqrtf(diag_m_pow / diag_samples);
+                float s_avg = sqrtf(diag_s_pow / diag_samples);
+                printf("\n--- TUNING DIAGNOSTICS (B146) ---\n");
+                printf("Step 1 (ADC): V=%.2fV (Range: %.0f-%.0f)\n", shared_adc_v, diag_adc_min, diag_adc_max);
                 printf("Step 2 (ATC Level): Mark_Env=%.4f Space_Env=%.4f\n", atc_mark_env, atc_space_env);
                 printf("Step 3 (FFT Peaks): Mark_Mag=%.1f Space_Mag=%.1f Noise=%.1f\n", best_m_mag, best_s_mag, avg_noise);
-                printf("Step 4 (RTTY Status): Squelch=%s DPLL_Phase=%.2f\n", shared_squelch_open ? "OPEN" : "SHUT", dpll.phase);
+                printf("Step 4 (RTTY Status): Squelch=%s DPLL_Phase=%.2f\n", shared_squelch_open ? "OPEN" : "SHUT", symbol_phase);
                 printf("Step 5/6 (AFC & SNR): SNR=%.1f dB, Signal=%.1f dB\n", shared_snr_db, shared_signal_db);
+                printf("Params: Baud=%.2f ALPHA=%.4f K=%.2f SQ=%.1f\n", current_baud, tuning_dpll_alpha, tuning_lpf_k, tuning_sq_snr);
                 printf("---------------------------------\n");
+                
+                diag_adc_min = 4096.0f; diag_adc_max = 0.0f;
+                diag_m_pow = 0.0f; diag_s_pow = 0.0f;
+                diag_samples = 0;
             }
         }
         
