@@ -1,0 +1,40 @@
+.program ili9488_spi
+.side_set 1
+
+; Takes 32-bit words formatted as [8 bit dummy][8 B][8 G][8 R]
+; Shifts out the lower 24 bits LSB first.
+; ILI9488 expects data on MOSI to be stable during the RISING edge of SCK.
+; So we change data on the FALLING edge.
+
+    pull block              side 0
+    set x, 23               side 0  
+bitloop:
+    out pins, 1             side 0  ; SCK Low, Output data to MOSI
+    nop                     side 1  ; SCK High (Display samples data here)
+    jmp x-- bitloop         side 1  ; Keep SCK High during loop branch
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+static inline void ili9488_spi_program_init(PIO pio, uint sm, uint offset, uint pin_mosi, uint pin_sck, float freq) {
+    pio_sm_config c = ili9488_spi_program_get_default_config(offset);
+    
+    // LSB first
+    sm_config_set_out_shift(&c, true, false, 32); 
+
+    sm_config_set_out_pins(&c, pin_mosi, 1);
+    sm_config_set_sideset_pins(&c, pin_sck);
+
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_mosi, 1, true);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_sck, 1, true);
+
+    pio_gpio_init(pio, pin_mosi);
+    pio_gpio_init(pio, pin_sck);
+
+    float div = (float)clock_get_hz(clk_sys) / (freq * 2); 
+    sm_config_set_clkdiv(&c, div);
+
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}
