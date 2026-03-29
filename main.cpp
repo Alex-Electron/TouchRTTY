@@ -30,6 +30,9 @@ volatile float shared_snr_db = 0.0f;
 volatile float shared_core0_load = 0.0f;
 volatile float shared_core1_load = 0.0f;
 
+volatile float shared_mag_m[480];
+volatile float shared_mag_s[480];
+
 // RTTY Decoding Globals
 volatile char rtty_new_char = 0;
 volatile bool rtty_char_ready = false;
@@ -38,6 +41,8 @@ volatile float shared_target_freq = 1535.0f;
 volatile float shared_actual_freq = 1535.0f;
 volatile int shared_baud_idx = 0;
 volatile int shared_shift_idx = 0;
+volatile bool shared_rtty_inv = false;
+volatile bool shared_squelch_open = false;
 
 const char ita2_ltrs[32] = {
     '\0', 'E', '\n', 'A', ' ', 'S', 'I', 'U', 
@@ -93,16 +98,14 @@ void core1_main() {
     
     bool auto_scale = true, exp_scale = true;
     bool menu_mode = false;
-    int display_mode = 0; // 0=WF, 1=SPEC, 2=OSC
+    int display_mode = 0; // 0=WF, 1=SPEC, 2=LISS
     bool show_palette = false;
     
-    int rtty_baud_idx = 0; // 45
-    int rtty_shift_idx = 0; // 170
-    int rtty_stop_idx = 0; // 1.0
+    int rtty_stop_idx = 1; // 1.5 stop bits default
     const float shifts[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
     const float stop_bits[] = {1.0f, 1.5f, 2.0f};
     
-    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, shared_baud_idx, shared_shift_idx, stop_bits[rtty_stop_idx], show_palette);
+    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, shared_baud_idx, shared_shift_idx, stop_bits[rtty_stop_idx], shared_rtty_inv);
 
     LGFX_Sprite spectrum(&tft); spectrum.setColorDepth(16); spectrum.createSprite(480, UI_DSP_ZONE_H);
     LGFX_Sprite marker_spr(&tft); marker_spr.setColorDepth(16); marker_spr.createSprite(480, UI_MARKER_H);
@@ -110,7 +113,7 @@ void core1_main() {
     const int bin_start = 5, bin_end = 358;
     const float bin_per_pixel = (float)(bin_end - bin_start) / 480.0f;
     uint32_t last_touch = time_us_32(), last_ui_update = time_us_32(), frame_count = 0;
-    float local_mag[FFT_SIZE / 2], local_wave[480];
+    float local_mag[FFT_SIZE / 2], local_wave[480], local_mag_m[480], local_mag_s[480];
     int16_t tune_x = 240;
     float ui_noise_floor = -60.0f, ui_gain = 0.0f;
     static float smooth_mag[FFT_SIZE / 2] = {0};
@@ -122,28 +125,35 @@ void core1_main() {
         uint32_t loop_start = time_us_32();
 
         if (rtty_char_ready) {
-            ui.addRTTYChar((char)rtty_new_char);
+            ui.addRTTYChar((char)rtty_new_char, !show_palette);
             rtty_char_ready = false;
         }
 
+        // AFC Tracking: Visuals strictly follow the DSP locked frequency
+        float bin_idx = shared_actual_freq / (SAMPLE_RATE / (float)FFT_SIZE);
+        tune_x = (int)((bin_idx - bin_start) / bin_per_pixel);
+        tune_x = std::clamp((int)tune_x, 10, 470);
+
         if (loop_start - last_ui_update > 500000) {
             uint32_t fps = frame_count * 2; frame_count = 0; last_ui_update = loop_start;
-            float hz_px = ((bin_end-bin_start)*(SAMPLE_RATE/(float)FFT_SIZE))/480.0f;
-            int shift_px = (int)(shifts[shared_shift_idx]/hz_px);
-            int half_shift = shift_px / 2;
-            
-            float bin_idx = shared_actual_freq / (SAMPLE_RATE / (float)FFT_SIZE);
-            tune_x = (int)((bin_idx - bin_start) / bin_per_pixel);
-            tune_x = std::clamp((int)tune_x, 10, 470);
-            
             float m_freq = shared_actual_freq + shifts[shared_shift_idx]/2.0f;
             float s_freq = shared_actual_freq - shifts[shared_shift_idx]/2.0f;
             bool is_clipping = shared_adc_clipping; shared_adc_clipping = false; 
-            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load);
+            
+            if (show_palette) {
+                ui.drawInfo(shared_adc_v);
+            }
+            
+            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open);
         }
         
         if (new_data_ready) {
-            frame_count++; memcpy(local_mag, (void*)shared_fft_mag, sizeof(local_mag)); memcpy(local_wave, (void*)shared_adc_waveform, sizeof(local_wave)); new_data_ready = false;
+            frame_count++; 
+            memcpy(local_mag, (void*)shared_fft_mag, sizeof(local_mag)); 
+            memcpy(local_wave, (void*)shared_adc_waveform, sizeof(local_wave)); 
+            memcpy(local_mag_m, (void*)shared_mag_m, sizeof(local_mag_m));
+            memcpy(local_mag_s, (void*)shared_mag_s, sizeof(local_mag_s));
+            new_data_ready = false;
             
             for (int i = 0; i < FFT_SIZE / 2; i++) smooth_mag[i] = smooth_mag[i] * 0.7f + local_mag[i] * 0.3f;
             
@@ -166,8 +176,8 @@ void core1_main() {
             // Render Marker Bar
             marker_spr.fillSprite(PAL_BG);
             marker_spr.drawFastHLine(0, 13, 480, PAL_GRID); 
-            marker_spr.fillTriangle(m_x, 13, m_x - 5, 5, m_x + 5, 5, 0x00FFFFU); // Yellow visual
-            marker_spr.fillTriangle(s_x, 13, s_x - 5, 5, s_x + 5, 5, 0xFFFF00U); // Cyan visual
+            marker_spr.fillTriangle(m_x, 13, m_x - 5, 5, m_x + 5, 5, 0x00FFFFU); // Cyan hex -> Yellow Visual (Space)
+            marker_spr.fillTriangle(s_x, 13, s_x - 5, 5, s_x + 5, 5, 0xFFFF00U); // Yellow hex -> Cyan Visual (Mark)
             ili9488_push_colors(0, UI_Y_MARKER, 480, UI_MARKER_H, (uint16_t*)marker_spr.getBuffer());
 
             if (display_mode == 0) { // Waterfall
@@ -177,12 +187,15 @@ void core1_main() {
                     float eb = bin_start + x * bin_per_pixel; int b0 = (int)eb; float db = smooth_mag[b0] * (1.0f-(eb-b0)) + smooth_mag[std::min(b0+1,FFT_SIZE/2-1)] * (eb-b0);
                     float norm = (db + ui_gain - ui_noise_floor) / 50.0f;
                     norm = std::clamp(norm, 0.0f, 1.0f); if (exp_scale) norm *= norm;
+                    
                     uint8_t r=0, g=0, b=0;
-                    if (norm < 0.25f) { b = (uint8_t)(norm * 1020); }
-                    else if (norm < 0.5f) { b = 255; g = (uint8_t)((norm - 0.25f) * 1020); }
-                    else if (norm < 0.75f) { g = 255; r = (uint8_t)((norm - 0.5f) * 1020); b = 255 - r; }
-                    else { r = 255; g = 255 - (uint8_t)((norm - 0.75f) * 1020); }
-                    line_ptr[x] = lgfx::color565(b, g, r);
+                    if (norm < 0.25f) { b = (uint8_t)(norm * 4.0f * 255.0f); }
+                    else if (norm < 0.5f) { b = 255; g = (uint8_t)((norm - 0.25f) * 4.0f * 255.0f); }
+                    else if (norm < 0.75f) { g = 255; r = (uint8_t)((norm - 0.5f) * 4.0f * 255.0f); b = 255 - r; }
+                    else { r = 255; g = 255 - (uint8_t)((norm - 0.75f) * 4.0f * 255.0f); }
+                    
+                    // Crucial fix: passing clean un-swapped rgb to color565 which returns BGR mapped color
+                    line_ptr[x] = lgfx::color565(b, g, r); // Swapped R/B logic exactly as B127
                 }
                 ili9488_push_waterfall(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer(), tune_x, half_shift);
             } else if (display_mode == 1) { // Spectrum
@@ -196,13 +209,20 @@ void core1_main() {
                 spectrum.drawFastVLine(m_x, 0, UI_DSP_ZONE_H, 0x00FFFFU);
                 spectrum.drawFastVLine(s_x, 0, UI_DSP_ZONE_H, 0xFFFF00U);
                 ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
-            } else { // OSC
+            } else { // LISS
                 spectrum.fillSprite(PAL_BG);
-                spectrum.drawFastHLine(0, 32, 480, PAL_GRID); 
-                for (int x = 0; x < 479; x++) {
-                    int y0 = 32 - (int)((local_wave[x] - 1.65f) * 32.0f / 1.65f);
-                    int y1 = 32 - (int)((local_wave[x+1] - 1.65f) * 32.0f / 1.65f);
-                    spectrum.drawLine(x, std::clamp(y0,0,63), x+1, std::clamp(y1,0,63), PAL_WAVE);
+                int cx = 240, cy = 32;
+                spectrum.drawFastHLine(0, cy, 480, PAL_GRID); 
+                spectrum.drawFastVLine(cx, 0, 64, PAL_GRID); 
+                
+                for (int x = 0; x < 480; x++) {
+                    float m = local_mag_m[x] * 1000.0f; 
+                    float s = local_mag_s[x] * 1000.0f;
+                    int dx = (int)(m - s);
+                    int dy = (int)(m + s);
+                    int px = cx + dx;
+                    int py = 64 - dy; // Origin bottom
+                    spectrum.fillCircle(std::clamp(px, 0, 479), std::clamp(py, 0, 63), 1, PAL_WAVE);
                 }
                 ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
             }
@@ -220,8 +240,8 @@ void core1_main() {
                     if (!menu_mode) {
                         if (btn_idx == 0) { shared_baud_idx = (shared_baud_idx + 1) % 3; }
                         else if (btn_idx == 1) { shared_shift_idx = (shared_shift_idx + 1) % 5; }
-                        else if (btn_idx == 2) { rtty_stop_idx = (rtty_stop_idx + 1) % 3; }
-                        else if (btn_idx == 3) { auto_scale = true; }
+                        else if (btn_idx == 2) { shared_rtty_inv = !shared_rtty_inv; }
+                        else if (btn_idx == 3) { auto_scale = !auto_scale; }
                         else if (btn_idx == 4) { ui.clearRTTY(); }
                         else if (btn_idx == 5) { menu_mode = true; } 
                     } else {
@@ -229,10 +249,15 @@ void core1_main() {
                         else if (btn_idx == 1) { exp_scale = !exp_scale; }
                         else if (btn_idx == 2) { ui_noise_floor -= 5.0f; auto_scale = false; }
                         else if (btn_idx == 3) { ui_noise_floor += 5.0f; auto_scale = false; }
-                        else if (btn_idx == 4) { show_palette = !show_palette; ui.drawInfo(show_palette); }
-                        else if (btn_idx == 5) { menu_mode = false; } 
+                        else if (btn_idx == 4) { rtty_stop_idx = (rtty_stop_idx + 1) % 3; }
+                        else if (btn_idx == 5) { menu_mode = false; show_palette = false; ui.drawRTTY(); } 
                     }
-                    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, shared_baud_idx, shared_shift_idx, stop_bits[rtty_stop_idx], show_palette);
+                    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, shared_baud_idx, shared_shift_idx, stop_bits[rtty_stop_idx], shared_rtty_inv);
+                }
+                else if (ty >= UI_Y_TEXT && ty < UI_Y_BOTTOM && !was_touched) {
+                    show_palette = !show_palette;
+                    if (show_palette) ui.drawInfo(shared_adc_v);
+                    else ui.drawRTTY();
                 }
             }
             was_touched = is_touched; last_touch = loop_start;
@@ -254,7 +279,7 @@ void core0_dsp_loop() {
         cos_table[i] = cosf(2.0f * (float)M_PI * i / 1024.0f);
     }
     
-    static SimpleFFT fft; static float ts[FFT_SIZE], real[FFT_SIZE], imag[FFT_SIZE], mag[FFT_SIZE/2], tw[480], fb[63]={0};
+    static SimpleFFT fft; static float ts[FFT_SIZE], real[FFT_SIZE], imag[FFT_SIZE], mag[FFT_SIZE/2], tw[480], tw_m[480], tw_s[480], fb[63]={0};
     int sc=0, wi=0, fi=0; adc_init(); adc_gpio_init(ADC_PIN); adc_select_input(0);
     float dc=0.0f;
     
@@ -263,9 +288,10 @@ void core0_dsp_loop() {
     float i_m = 0, q_m = 0, i_s = 0, q_s = 0;
     int baudot_state = 0;
     float symbol_phase = 0.0f;
+    float integrate_acc = 0.0f;
     uint8_t current_char = 0;
     bool is_figs = false;
-    bool last_d_sign = false;
+    bool last_d_sign = true;
     const float shifts_hz[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
     const float bauds[] = {45.45f, 50.0f, 75.0f};
     
@@ -275,7 +301,7 @@ void core0_dsp_loop() {
         float v = (rv/4095.0f)*3.3f; shared_adc_v=v; float s = (rv-2048.0f)/2048.0f;
         dc = dc*0.99f + s*0.01f; s -= dc; fb[fi]=s; float f_out=0.0f; int bi=fi;
         for(int i=0; i<63; i++) { f_out += fir_coeffs[i]*fb[bi]; bi--; if(bi<0) bi=62; }
-        fi=(fi+1)%63; if(wi<480) tw[wi++]=f_out*1.65f+1.65f; ts[sc++]=f_out*2.0f;
+        fi=(fi+1)%63; if(wi<480) { tw[wi] = f_out*1.65f+1.65f; } ts[sc++]=f_out*2.0f;
         
         // --- I/Q DEMODULATOR PER SAMPLE ---
         float shift = shifts_hz[shared_shift_idx];
@@ -297,50 +323,66 @@ void core0_dsp_loop() {
         float mag_m = i_m*i_m + q_m*q_m;
         float mag_s = i_s*i_s + q_s*q_s;
         
+        if (wi < 480) { tw_m[wi] = mag_m; tw_s[wi] = mag_s; wi++; }
+        
         // Discriminator (Mark = Positive, Space = Negative)
         float D = mag_m - mag_s;
+        if (shared_rtty_inv) D = -D;
         bool d_sign = (D > 0);
         
-        // --- BAUDOT PLL & DECODER ---
+        // --- BAUDOT PLL & INTEGRATE-AND-DUMP DECODER ---
         float phase_inc = bauds[shared_baud_idx] / SAMPLE_RATE;
         
-        if (d_sign != last_d_sign) {
-            if (baudot_state > 0) {
-                // Adjust PLL phase on transitions
-                float err = 0.5f - symbol_phase;
-                symbol_phase += err * 0.15f; 
-            } else if (!d_sign) {
-                // START BIT DETECTED (Transition to Space)
-                baudot_state = 1;
-                symbol_phase = 0.5f; // Sample directly in the middle of the start bit
-                current_char = 0;
+        if (!shared_squelch_open) {
+            baudot_state = 0;
+            last_d_sign = true;
+        } else {
+            if (d_sign != last_d_sign) {
+                if (baudot_state > 0) {
+                    float err = symbol_phase;
+                    if (err > 0.5f) err -= 1.0f; 
+                    symbol_phase -= err * 0.1f; // PLL Nudge
+                } else if (!d_sign) {
+                    // Start bit detected (Mark -> Space transition)
+                    baudot_state = 1;
+                    symbol_phase = 0.0f;
+                    integrate_acc = 0.0f;
+                    current_char = 0;
+                }
             }
-        }
-        last_d_sign = d_sign;
-        
-        if (baudot_state > 0) {
-            symbol_phase += phase_inc;
-            if (symbol_phase >= 1.0f) {
-                symbol_phase -= 1.0f;
-                if (baudot_state >= 1 && baudot_state <= 5) {
-                    // Data bits (LSB first)
-                    if (d_sign) current_char |= (1 << (baudot_state - 1));
-                    baudot_state++;
-                } else if (baudot_state == 6) {
-                    // Stop bit
-                    if (d_sign) { // Valid mark stop bit
-                        char decoded = '\0';
-                        if (current_char == 27) is_figs = true;
-                        else if (current_char == 31) is_figs = false;
-                        else {
-                            decoded = is_figs ? ita2_figs[current_char] : ita2_ltrs[current_char];
-                            if (decoded != '\0') {
-                                rtty_new_char = decoded;
-                                rtty_char_ready = true;
+            last_d_sign = d_sign;
+            
+            if (baudot_state > 0) {
+                symbol_phase += phase_inc;
+                integrate_acc += D; 
+                
+                if (symbol_phase >= 1.0f) {
+                    symbol_phase -= 1.0f;
+                    bool bit = (integrate_acc > 0);
+                    integrate_acc = 0.0f;
+                    
+                    if (baudot_state == 1) { // Start bit
+                        if (bit) baudot_state = 0; // False start
+                        else baudot_state = 2; // Proceed
+                    } else if (baudot_state >= 2 && baudot_state <= 6) { // Data bits 0..4
+                        if (bit) current_char |= (1 << (baudot_state - 2));
+                        baudot_state++;
+                    } else if (baudot_state == 7) { // Stop bit
+                        if (bit) { // Valid mark stop bit
+                            char decoded = '\0';
+                            if (current_char == 27) is_figs = true;
+                            else if (current_char == 31) is_figs = false;
+                            else {
+                                decoded = is_figs ? ita2_figs[current_char] : ita2_ltrs[current_char];
+                                if (decoded != '\0') {
+                                    rtty_new_char = decoded;
+                                    rtty_char_ready = true;
+                                    printf("%c", decoded); 
+                                }
                             }
                         }
+                        baudot_state = 0; // Return to idle
                     }
-                    baudot_state = 0; // Return to idle
                 }
             }
         }
@@ -352,7 +394,10 @@ void core0_dsp_loop() {
             memcpy(real, ts, sizeof(ts)); memset(imag, 0, sizeof(imag));
             fft.apply_window(real); fft.compute(real, imag); fft.calc_magnitude(real, imag, mag);
             float pk=-100.0f, sm=0.0f; for(int i=0; i<FFT_SIZE/2; i++) { if(mag[i]>pk) pk=mag[i]; sm+=mag[i]; }
-            shared_snr_db = pk - (sm/(FFT_SIZE/2)); memcpy((void*)shared_fft_mag, mag, sizeof(mag)); memcpy((void*)shared_adc_waveform, tw, sizeof(tw));
+            shared_snr_db = pk - (sm/(FFT_SIZE/2)); memcpy((void*)shared_fft_mag, mag, sizeof(mag)); 
+            memcpy((void*)shared_adc_waveform, tw, sizeof(tw));
+            memcpy((void*)shared_mag_m, tw_m, sizeof(tw_m));
+            memcpy((void*)shared_mag_s, tw_s, sizeof(tw_s));
             
             // --- AUTOMATIC FREQUENCY CONTROL (AFC) ---
             int m_bin = (shared_target_freq + shift/2) * FFT_SIZE / SAMPLE_RATE;
@@ -369,15 +414,18 @@ void core0_dsp_loop() {
                 if (i>0 && i<FFT_SIZE/2 && mag[i] > best_s_mag) { best_s_mag = mag[i]; best_s_bin = i; }
             }
             
+            float avg_noise = sm / (FFT_SIZE/2);
+            shared_squelch_open = (best_m_mag > avg_noise * 3.0f || best_s_mag > avg_noise * 3.0f) && (shared_snr_db > 3.0f);
+            
             // If strong signal found near target, gently pull the actual freq towards it
-            if (best_m_mag > 1.0f || best_s_mag > 1.0f) {
+            if (shared_squelch_open && (best_m_mag > best_s_mag * 1.5f || best_s_mag > best_m_mag * 1.5f)) {
                 float found_m_f = best_m_bin * SAMPLE_RATE / (float)FFT_SIZE;
                 float found_s_f = best_s_bin * SAMPLE_RATE / (float)FFT_SIZE;
                 float implied_center = (best_m_mag > best_s_mag) ? (found_m_f - shift/2) : (found_s_f + shift/2);
-                shared_actual_freq = shared_actual_freq * 0.8f + implied_center * 0.2f;
+                shared_actual_freq = shared_actual_freq * 0.9f + implied_center * 0.1f;
             } else {
                 // Slowly drift back to manual target if signal is lost
-                shared_actual_freq = shared_actual_freq * 0.95f + shared_target_freq * 0.05f;
+                shared_actual_freq = shared_actual_freq * 0.98f + shared_target_freq * 0.02f;
             }
             // ------------------------------------------
             

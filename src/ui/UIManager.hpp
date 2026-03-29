@@ -8,11 +8,11 @@
 #include <vector>
 
 // Hardcoded Palette (Yellow on Blue - R and B channels swapped for Mode 11 quirk)
-static constexpr uint32_t PAL_BG = 0x330000U; 
-static constexpr uint32_t PAL_GRID = 0x663300U; 
-static constexpr uint32_t PAL_WAVE = 0x00FFFFU; 
-static constexpr uint32_t PAL_PEAK = 0x00FFFFU; 
-static constexpr uint32_t PAL_TEXT = 0xFFFFFFU; 
+static constexpr uint32_t PAL_BG = 0x330000U; // Dark Blue
+static constexpr uint32_t PAL_GRID = 0x663300U; // Blue-Grey
+static constexpr uint32_t PAL_WAVE = 0x00FFFFU; // Yellow
+static constexpr uint32_t PAL_PEAK = 0x00FFFFU; // Yellow
+static constexpr uint32_t PAL_TEXT = 0xFFFFFFU; // White 
 
 #define UI_TOP_BAR_H   34
 #define UI_MARKER_H    14
@@ -37,6 +37,7 @@ private:
     static constexpr uint32_t COLOR_TEXT = 0xFFFFFFU; 
 
     std::string rtty_buffer;
+    bool figures_mode = false;
 
 public:
     UIManager(lgfx::LGFX_Device* tft) : _tft(tft), _spr_top(tft), _spr_text(tft), _spr_bottom(tft) {}
@@ -49,38 +50,44 @@ public:
         clearRTTY();
     }
 
-    void addRTTYChar(char c) {
+    void addRTTYChar(char c, bool update_screen = true) {
         if (rtty_buffer.length() > 500) rtty_buffer.erase(0, 50);
-        rtty_buffer += c;
-        drawRTTY();
+        if (c == '\n') rtty_buffer += "\r\n";
+        else rtty_buffer += c;
+        if (update_screen) drawRTTY();
     }
 
     void clearRTTY() {
-        rtty_buffer = "RTTY TERMINAL READY... ";
+        rtty_buffer = "RP2350 DSP RTTY DECODER V1\r\nREADY...\r\n";
         drawRTTY();
     }
 
     void drawRTTY() {
         _spr_text.fillSprite(COLOR_BG);
         _spr_text.drawFastHLine(0, 0, 480, COLOR_GRID);
-        _spr_text.setTextColor(0x00FF00U, COLOR_BG); // Green
+        _spr_text.setTextColor(0x00FF00U, COLOR_BG); // Green terminal text
         _spr_text.setFont(&fonts::Font2);
         _spr_text.setTextDatum(top_left);
         
-        // Simple line wrapping
-        int x = 5, y = 10;
+        int x = 5, y = 5;
         for (char c : rtty_buffer) {
+            if (c == '\r') continue;
+            if (c == '\n') { x = 5; y += 18; continue; }
             char s[2] = {c, 0};
             _spr_text.drawString(s, x, y);
             x += _spr_text.textWidth(s);
-            if (x > 460 || c == '\n') { x = 5; y += 18; }
-            if (y > 140) { _spr_text.fillSprite(COLOR_BG); x = 5; y = 10; }
+            if (x > 460) { x = 5; y += 18; }
+            if (y > 140) { 
+                _spr_text.fillSprite(COLOR_BG); 
+                _spr_text.drawFastHLine(0, 0, 480, COLOR_GRID);
+                x = 5; y = 5; 
+            }
         }
         
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }
     
-    void drawBottomBar(bool auto_scale, bool exp_scale, bool menu_mode, int display_mode, int baud_idx, int shift_idx, float stop_bits, bool palette) {
+    void drawBottomBar(bool auto_scale, bool exp_scale, bool menu_mode, int display_mode, int baud_idx, int shift_idx, float stop_bits, bool inv) {
         _spr_bottom.fillSprite(COLOR_BG);
         const int bauds[] = {45, 50, 75};
         const int shifts[] = {170, 200, 425, 450, 850};
@@ -88,7 +95,7 @@ public:
         char labels_main[6][16];
         snprintf(labels_main[0], 16, "B %d", bauds[baud_idx]);
         snprintf(labels_main[1], 16, "S %d", shifts[shift_idx]);
-        snprintf(labels_main[2], 16, "ST %.1f", stop_bits);
+        snprintf(labels_main[2], 16, inv ? "INV" : "NORM");
         snprintf(labels_main[3], 16, "AUTO");
         snprintf(labels_main[4], 16, "CLEAR");
         snprintf(labels_main[5], 16, "MENU");
@@ -96,17 +103,18 @@ public:
         char labels_menu[6][16];
         if (display_mode == 0) snprintf(labels_menu[0], 16, "WF");
         else if (display_mode == 1) snprintf(labels_menu[0], 16, "SPEC");
-        else snprintf(labels_menu[0], 16, "OSC");
+        else snprintf(labels_menu[0], 16, "LISS");
         snprintf(labels_menu[1], 16, exp_scale ? "EXP" : "LIN");
-        snprintf(labels_menu[2], 16, "FL+/-");
-        snprintf(labels_menu[3], 16, "GN+/-");
-        snprintf(labels_menu[4], 16, palette ? "PAL ON" : "PAL OFF");
+        snprintf(labels_menu[2], 16, "FL-/+");
+        snprintf(labels_menu[3], 16, "GN-/+");
+        snprintf(labels_menu[4], 16, "ST %.1f", stop_bits);
         snprintf(labels_menu[5], 16, "BACK");
 
         int btn_w = 480 / 6; _spr_bottom.setFont(&fonts::Font2); _spr_bottom.setTextDatum(middle_center);
         for (int i = 0; i < 6; i++) {
             int x = i * btn_w; 
             uint32_t bg = 0x333333U, brd = 0x777777U;
+            if (!menu_mode && i == 2 && inv) { bg = 0x660000U; brd = 0xFF0000U; }
             if (!menu_mode && i == 3 && auto_scale) { bg = 0x006600U; brd = 0x00FF00U; }
             if (menu_mode && i == 5) { bg = 0x660000U; brd = 0xFF0000U; } 
             
@@ -121,7 +129,7 @@ public:
         ili9488_push_colors(0, UI_Y_BOTTOM, 480, 48, (uint16_t*)_spr_bottom.getBuffer());
     }
     
-    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float m_freq, float s_freq, bool clipping, float load_c0, float load_c1) {
+    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float m_freq, float s_freq, bool clipping, float load0, float load1, bool squelch_open) {
         _spr_top.fillSprite(COLOR_BG); _spr_top.drawFastHLine(0, 33, 480, COLOR_GRID); 
         _spr_top.setTextDatum(middle_left); _spr_top.setTextColor(COLOR_TEXT, COLOR_BG); _spr_top.setFont(&fonts::Font2);
         
@@ -132,15 +140,22 @@ public:
         else if (signal_db > -30.0f) sig_color = 0xFF0000U; // Blue visual
         _spr_top.fillRect(40, 1, lw, 14, sig_color);
         
+        char buf[64]; 
+        
         _spr_top.setTextColor(0x00FFFFU, COLOR_BG); // Yellow visual
-        char buf[64]; snprintf(buf, sizeof(buf), "M:%.0f S:%.0f", m_freq, s_freq); 
+        snprintf(buf, sizeof(buf), "M:%.0f S:%.0f", m_freq, s_freq); 
         _spr_top.drawString(buf, 170, 8); 
         
-        _spr_top.setTextColor(0xFFFFFFU, COLOR_BG); _spr_top.drawString("RTTY TERMINAL", 5, 24);
+        if (squelch_open) {
+            _spr_top.setTextColor(0x00FF00U, COLOR_BG); _spr_top.drawString("RTTY: SYNC", 5, 24);
+        } else {
+            _spr_top.setTextColor(0xFFFFFFU, COLOR_BG); _spr_top.drawString("RTTY: WAIT", 5, 24);
+        }
+        
         _spr_top.setTextColor(0x00FF00U, COLOR_BG); snprintf(buf, sizeof(buf), "SNR:%2.0fdB", snr_db); _spr_top.drawString(buf, 140, 24);
         
         _spr_top.setTextDatum(middle_right); _spr_top.setTextColor(0x00FFFFU, COLOR_BG); 
-        snprintf(buf, sizeof(buf), "B:%d F:%lu C0:%.0f%% C1:%.0f%%", BUILD_NUMBER, fps, load_c0, load_c1); 
+        snprintf(buf, sizeof(buf), "B:%d F:%lu C0:%.0f%% C1:%.0f%%", BUILD_NUMBER, fps, load0, load1); 
         _spr_top.drawString(buf, 475, 24);
         
         ili9488_push_colors(0, UI_Y_TOP, 480, UI_TOP_BAR_H, (uint16_t*)_spr_top.getBuffer());
@@ -148,23 +163,52 @@ public:
 
     void drawInfo(float adc_v) {
         _spr_text.fillSprite(COLOR_BG); 
-        int sq_w = 40, sq_h = 30, start_x = 10, start_y = 10;
-        _spr_text.fillRect(start_x, start_y, sq_w, sq_h, 0x0000FFU); // RED
-        _spr_text.fillRect(start_x+45, start_y, sq_w, sq_h, 0x00FF00U); // GRN
-        _spr_text.fillRect(start_x+90, start_y, sq_w, sq_h, 0xFF0000U); // BLU
+        _spr_text.drawFastHLine(0, 111, 480, COLOR_GRID); 
+
+        _spr_text.setTextDatum(top_left); _spr_text.setFont(&fonts::Font2); 
+        _spr_text.setTextColor(0x00FF00U, COLOR_BG); 
+        _spr_text.drawString("DIAGNOSTIC MODE", 5, 5);
+        _spr_text.setTextColor(0xFFFFFFU, COLOR_BG); 
+        _spr_text.drawString("Hardware: 16-bit Swapped, BGR out", 5, 25);
+    
+        int sq_w = 40, sq_h = 30, start_x = 220, start_y = 65;
+        _spr_text.setTextDatum(middle_center);
+        
+        _spr_text.fillRect(start_x, start_y, sq_w, sq_h, 0x0000FFU);
+        _spr_text.setTextColor(0xFFFFFFU, 0x0000FFU); _spr_text.drawString("RED", start_x+20, start_y+15);
+        
+        _spr_text.fillRect(start_x+42, start_y, sq_w, sq_h, 0x00FF00U);
+        _spr_text.setTextColor(0x000000U, 0x00FF00U); _spr_text.drawString("GRN", start_x+42+20, start_y+15);
+        
+        _spr_text.fillRect(start_x+84, start_y, sq_w, sq_h, 0xFF0000U);
+        _spr_text.setTextColor(0xFFFFFFU, 0xFF0000U); _spr_text.drawString("BLU", start_x+84+20, start_y+15);
+        
+        _spr_text.fillRect(start_x+126, start_y, sq_w, sq_h, 0x00FFFFU);
+        _spr_text.setTextColor(0x000000U, 0x00FFFFU); _spr_text.drawString("YEL", start_x+126+20, start_y+15);
+        
+        _spr_text.fillRect(start_x+168, start_y, sq_w, sq_h, 0xFFFF00U);
+        _spr_text.setTextColor(0x000000U, 0xFFFF00U); _spr_text.drawString("CYN", start_x+168+20, start_y+15);
+        
+        _spr_text.fillRect(start_x+210, start_y, sq_w, sq_h, 0xFF00FFU);
+        _spr_text.setTextColor(0xFFFFFFU, 0xFF00FFU); _spr_text.drawString("MAG", start_x+210+20, start_y+15);
 
         // Zero Bias Meter
-        int meter_w = 200, meter_x = 240, meter_y = 10; 
-        _spr_text.setTextDatum(middle_center); _spr_text.setTextColor(0xFFFFFFU, COLOR_BG); 
-        _spr_text.drawString("ZERO BIAS TRIMMER", meter_x, meter_y + 30); 
+        int meter_w = 100, meter_x = 110, meter_y = 70; 
+        _spr_text.setTextDatum(middle_right); _spr_text.setTextColor(0xFFFFFFU, COLOR_BG); 
+        _spr_text.drawString("ZERO BIAS", meter_x - 5, meter_y + 6); 
         
-        _spr_text.drawFastHLine(meter_x - 100, meter_y+6, meter_w, COLOR_GRID); 
-        _spr_text.drawFastVLine(meter_x, meter_y, 12, COLOR_TEXT); 
+        _spr_text.drawFastHLine(meter_x, meter_y+6, meter_w, COLOR_GRID); 
+        _spr_text.drawFastVLine(meter_x+(meter_w/2), meter_y, 12, COLOR_TEXT); 
         
         float err = adc_v - 1.65f; 
-        int nx = meter_x + (int)(std::clamp(err/0.5f, -1.0f, 1.0f) * 100.0f);
+        float norm_err = err / 0.5f;
+        if (norm_err < -1.0f) norm_err = -1.0f;
+        if (norm_err > 1.0f) norm_err = 1.0f;
+        int nx = meter_x + (meter_w/2) + (int)(norm_err * (meter_w/2));
+
         uint32_t nc = (abs(err) < 0.05f) ? 0x00FF00U : 0x0000FFU; 
-        _spr_text.fillTriangle(nx, meter_y+6, nx-5, meter_y, nx+5, meter_y, nc); 
+        _spr_text.fillTriangle(nx, meter_y+6, nx-5, meter_y-2, nx+5, meter_y-2, nc); 
+        _spr_text.fillTriangle(nx, meter_y+6, nx-5, meter_y+14, nx+5, meter_y+14, nc);
 
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }
