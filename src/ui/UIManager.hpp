@@ -121,7 +121,7 @@ public:
         ili9488_push_colors(0, UI_Y_BOTTOM, 480, 48, (uint16_t*)_spr_bottom.getBuffer());
     }
     
-    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float m_freq, float s_freq, bool clipping, float load0, float load1) {
+    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float m_freq, float s_freq, bool clipping, float load_c0, float load_c1) {
         _spr_top.fillSprite(COLOR_BG); _spr_top.drawFastHLine(0, 33, 480, COLOR_GRID); 
         _spr_top.setTextDatum(middle_left); _spr_top.setTextColor(COLOR_TEXT, COLOR_BG); _spr_top.setFont(&fonts::Font2);
         
@@ -140,28 +140,32 @@ public:
         _spr_top.setTextColor(0x00FF00U, COLOR_BG); snprintf(buf, sizeof(buf), "SNR:%2.0fdB", snr_db); _spr_top.drawString(buf, 140, 24);
         
         _spr_top.setTextDatum(middle_right); _spr_top.setTextColor(0x00FFFFU, COLOR_BG); 
-        snprintf(buf, sizeof(buf), "B:%d F:%lu C0:%.0f%% C1:%.0f%%", BUILD_NUMBER, fps, load0, load1); 
+        snprintf(buf, sizeof(buf), "B:%d F:%lu C0:%.0f%% C1:%.0f%%", BUILD_NUMBER, fps, load_c0, load_c1); 
         _spr_top.drawString(buf, 475, 24);
         
-        // Zero Bias Meter
-        int meter_w = 40, meter_x = 350, meter_y = 2; 
-        _spr_top.drawFastHLine(meter_x, meter_y+6, meter_w, COLOR_GRID); 
-        float err = adc_v - 1.65f; 
-        int nx = meter_x + 20 + (int)(std::clamp(err/0.5f, -1.0f, 1.0f) * 20);
-        uint32_t nc = (abs(err) < 0.05f) ? 0x00FF00U : 0x0000FFU; 
-        _spr_top.fillTriangle(nx, meter_y+6, nx-3, meter_y, nx+3, meter_y, nc); 
-
         ili9488_push_colors(0, UI_Y_TOP, 480, UI_TOP_BAR_H, (uint16_t*)_spr_top.getBuffer());
     }
 
-    void drawInfo(bool show_palette) {
+    void drawInfo(float adc_v) {
         _spr_text.fillSprite(COLOR_BG); 
-        if (show_palette) {
-            int sq_w = 40, sq_h = 30, start_x = 100, start_y = 50;
-            _spr_text.fillRect(start_x, start_y, sq_w, sq_h, 0x0000FFU); // RED
-            _spr_text.fillRect(start_x+45, start_y, sq_w, sq_h, 0x00FF00U); // GRN
-            _spr_text.fillRect(start_x+90, start_y, sq_w, sq_h, 0xFF0000U); // BLU
-        }
+        int sq_w = 40, sq_h = 30, start_x = 10, start_y = 10;
+        _spr_text.fillRect(start_x, start_y, sq_w, sq_h, 0x0000FFU); // RED
+        _spr_text.fillRect(start_x+45, start_y, sq_w, sq_h, 0x00FF00U); // GRN
+        _spr_text.fillRect(start_x+90, start_y, sq_w, sq_h, 0xFF0000U); // BLU
+
+        // Zero Bias Meter
+        int meter_w = 200, meter_x = 240, meter_y = 10; 
+        _spr_text.setTextDatum(middle_center); _spr_text.setTextColor(0xFFFFFFU, COLOR_BG); 
+        _spr_text.drawString("ZERO BIAS TRIMMER", meter_x, meter_y + 30); 
+        
+        _spr_text.drawFastHLine(meter_x - 100, meter_y+6, meter_w, COLOR_GRID); 
+        _spr_text.drawFastVLine(meter_x, meter_y, 12, COLOR_TEXT); 
+        
+        float err = adc_v - 1.65f; 
+        int nx = meter_x + (int)(std::clamp(err/0.5f, -1.0f, 1.0f) * 100.0f);
+        uint32_t nc = (abs(err) < 0.05f) ? 0x00FF00U : 0x0000FFU; 
+        _spr_text.fillTriangle(nx, meter_y+6, nx-5, meter_y, nx+5, meter_y, nc); 
+
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }
 };
