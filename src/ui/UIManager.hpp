@@ -133,18 +133,21 @@ public:
         _spr_top.fillSprite(COLOR_BG); _spr_top.drawFastHLine(0, 33, 480, COLOR_GRID); 
         _spr_top.setTextDatum(middle_left); _spr_top.setTextColor(COLOR_TEXT, COLOR_BG); _spr_top.setFont(&fonts::Font2);
         
-        _spr_top.drawString("SIG", 5, 8); _spr_top.drawRect(40, 1, 120, 14, COLOR_GRID);
-        int lw = (int)((signal_db+80)*(120/70.0f)); if(lw<0) lw=0; if(lw>120) lw=120;
+        _spr_top.drawString("SIG", 5, 8); _spr_top.drawRect(35, 1, 95, 14, COLOR_GRID);
+        int lw = (int)((signal_db+80)*(95/70.0f)); if(lw<0) lw=0; if(lw>95) lw=95;
         uint32_t sig_color = 0x00FF00U; 
         if (clipping) sig_color = 0x0000FFU; // Red visual
         else if (signal_db > -30.0f) sig_color = 0xFF0000U; // Blue visual
-        _spr_top.fillRect(40, 1, lw, 14, sig_color);
+        _spr_top.fillRect(35, 1, lw, 14, sig_color);
         
         char buf[64]; 
         
         _spr_top.setTextColor(0x00FFFFU, COLOR_BG); // Yellow visual
+        snprintf(buf, sizeof(buf), "%3.0fdB", signal_db);
+        _spr_top.drawString(buf, 135, 8);
+        
         snprintf(buf, sizeof(buf), "M:%.0f S:%.0f", m_freq, s_freq); 
-        _spr_top.drawString(buf, 170, 8); 
+        _spr_top.drawString(buf, 185, 8); 
         
         if (squelch_open) {
             _spr_top.setTextColor(0x00FF00U, COLOR_BG); _spr_top.drawString("RTTY: SYNC", 5, 24);
@@ -152,7 +155,7 @@ public:
             _spr_top.setTextColor(0xFFFFFFU, COLOR_BG); _spr_top.drawString("RTTY: WAIT", 5, 24);
         }
         
-        _spr_top.setTextColor(0x00FF00U, COLOR_BG); snprintf(buf, sizeof(buf), "SNR:%2.0fdB", snr_db); _spr_top.drawString(buf, 140, 24);
+        _spr_top.setTextColor(0x00FF00U, COLOR_BG); snprintf(buf, sizeof(buf), "SNR:%2.0fdB", snr_db); _spr_top.drawString(buf, 135, 24);
         
         _spr_top.setTextDatum(middle_right); _spr_top.setTextColor(0x00FFFFU, COLOR_BG); 
         snprintf(buf, sizeof(buf), "B:%d F:%lu C0:%.0f%% C1:%.0f%%", BUILD_NUMBER, fps, load0, load1); 

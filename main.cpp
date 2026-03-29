@@ -186,13 +186,14 @@ void core1_main() {
                     float norm = (db + ui_gain - ui_noise_floor) / 50.0f;
                     norm = std::clamp(norm, 0.0f, 1.0f); if (exp_scale) norm *= norm;
                     
-                    uint8_t r=0, g=0, b=0;
-                    if (norm < 0.25f) { b = (uint8_t)(norm * 4.0f * 255.0f); }
-                    else if (norm < 0.5f) { b = 255; g = (uint8_t)((norm - 0.25f) * 4.0f * 255.0f); }
-                    else if (norm < 0.75f) { g = 255; r = (uint8_t)((norm - 0.5f) * 4.0f * 255.0f); b = 255 - r; }
-                    else { r = 255; g = 255 - (uint8_t)((norm - 0.75f) * 4.0f * 255.0f); }
+                    uint8_t r=0, g=0, b=0; // r=visual_B, g=visual_G, b=visual_R
+                    if (norm < 0.25f) { r = (uint8_t)(norm * 4.0f * 255.0f); }
+                    else if (norm < 0.5f) { r = 255; g = (uint8_t)((norm - 0.25f) * 4.0f * 255.0f); }
+                    else if (norm < 0.75f) { g = 255; b = (uint8_t)((norm - 0.5f) * 4.0f * 255.0f); r = 255 - b; }
+                    else { b = 255; g = 255 - (uint8_t)((norm - 0.75f) * 4.0f * 255.0f); }
                     
-                    line_ptr[x] = lgfx::color565(b, g, r);
+                    uint16_t c = lgfx::color565(r, g, b); // b goes to blue physically, r goes to red physically
+                    line_ptr[x] = (c >> 8) | (c << 8); // Swap for SPI DMA
                 }
                 ili9488_push_waterfall(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer(), tune_x, half_shift);
             } else if (display_mode == 1) { 
@@ -443,7 +444,7 @@ void core0_dsp_loop() {
             }
             
             float avg_noise = sm / (FFT_SIZE/2);
-            shared_squelch_open = (best_m_mag > avg_noise * 3.0f || best_s_mag > avg_noise * 3.0f) && (shared_snr_db > 2.0f);
+            shared_squelch_open = (best_m_mag > avg_noise * 4.0f || best_s_mag > avg_noise * 4.0f) && (shared_snr_db > 6.0f) && (shared_signal_db > -55.0f);
             
             if (shared_squelch_open && (best_m_mag > best_s_mag * 1.5f || best_s_mag > best_m_mag * 1.5f)) {
                 float found_m_f = best_m_bin * SAMPLE_RATE / (float)FFT_SIZE;
