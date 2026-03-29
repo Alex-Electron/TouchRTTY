@@ -1,0 +1,43 @@
+.program ili9488_spi
+.side_set 1 opt
+
+; High-speed 18-bit SPI specialized for ILI9488 RGB666
+; Shifts out 24 bits out of a 32-bit DMA transfer.
+; MOSI is OUT, SCK is SIDE_SET.
+; Mode 0 SPI (idle low, sample on rising edge)
+
+.wrap_target
+    out pins, 1             side 0  ; Output bit to MOSI, SCK=0
+    nop                     side 1  ; SCK=1 (Display samples data here)
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+static inline void ili9488_spi_program_init(PIO pio, uint sm, uint offset, uint pin_mosi, uint pin_sck, float freq) {
+    pio_sm_config c = ili9488_spi_program_get_default_config(offset);
+
+    // OUT pin = MOSI
+    sm_config_set_out_pins(&c, pin_mosi, 1);
+    // SIDE-SET pin = SCK
+    sm_config_set_sideset_pins(&c, pin_sck);
+
+    // MSB first, Autopull enabled, 24-bit threshold
+    sm_config_set_out_shift(&c, false, true, 24);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+
+    pio_gpio_init(pio, pin_mosi);
+    pio_gpio_init(pio, pin_sck);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_mosi, 1, true);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_sck, 1, true);
+
+    // SPI Mode 0 requires SCK to idle LOW
+    gpio_set_outover(pin_sck, GPIO_OVERRIDE_LOW);
+
+    // 2 cycles per bit (out + nop), so div is sys_clock / (freq * 2)
+    sm_config_set_clkdiv(&c, (float)clock_get_hz(clk_sys) / (freq * 2));
+
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

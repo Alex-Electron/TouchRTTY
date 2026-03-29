@@ -1,0 +1,50 @@
+.program tft_io
+.side_set 1 opt
+
+; High-speed 18-bit SPI specialized for ILI9488 RGB666
+; This is a PIO sequence that shifts exactly 24 bits out of a 32-bit DMA transfer.
+; MOSI is OUT, SCK is SIDE_SET.
+; Mode 0 SPI (idle low, sample on rising edge)
+
+    pull block              side 0  ; Wait for DMA to provide 32-bit word
+    set x, 23               side 0  ; Send exactly 24 bits
+bitloop:
+    out pins, 1             side 0  ; [1] Output bit to MOSI, SCK=0
+    nop                     side 1  ; [1] SCK=1 (Display samples data here)
+    jmp x-- bitloop         side 0  ; [1] SCK=0 (Repeat)
+
+% c-sdk {
+#include "hardware/clocks.h"
+#include "hardware/gpio.h"
+
+static inline void tft_pio_init(PIO pio, uint sm, uint prog_offs, uint data_pin, uint clk_pin, float clk_div) {
+    pio_sm_config c = tft_io_program_get_default_config(prog_offs);
+
+    // OUT pin = MOSI
+    sm_config_set_out_pins(&c, data_pin, 1);
+    // SIDE-SET pin = SCK
+    sm_config_set_sideset_pins(&c, clk_pin);
+
+    // CRITICAL FIX FOR ILI9488 COLORS (Washed out issue):
+    // Shift left (MSB first) -> false. Autopull enabled -> true. 
+    // Autopull threshold strictly 24 bits! The remaining 8 bits in the FIFO word are discarded.
+    sm_config_set_out_shift(&c, false, true, 24);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+
+    // Set pindirs
+    pio_sm_set_consecutive_pindirs(pio, sm, data_pin, 1, true);
+    pio_sm_set_consecutive_pindirs(pio, sm, clk_pin, 1, true);
+
+    // Init GPIO functions
+    pio_gpio_init(pio, data_pin);
+    pio_gpio_init(pio, clk_pin);
+
+    // CRITICAL: SCK must idle LOW for SPI Mode 0
+    gpio_set_outover(clk_pin, GPIO_OVERRIDE_LOW);
+
+    sm_config_set_clkdiv(&c, clk_div);
+
+    pio_sm_init(pio, sm, prog_offs, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

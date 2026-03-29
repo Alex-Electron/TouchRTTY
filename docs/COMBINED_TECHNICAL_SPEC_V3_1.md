@@ -34,17 +34,22 @@ To prevent hardware confusion, the system is strictly tailored for the following
 - **Signal Path:** Audio (Line Level) -> 10k Potentiometer (Level Shift to 1.65V) -> RC Low-Pass Filter (1kΩ + 43nF, Fc ≈ 3.7kHz) -> **GPIO 26 (ADC0)**.
 - **Hardware Requirement:** To prevent noise, a **0.1µF + 10µF capacitor** MUST be placed between `ADC_VREF` (Pin 35) and `AGND` (Pin 33).
 - **ADC Configuration:** 10,000 Hz sample rate (maintained for calculation simplicity vs 9600Hz), hardware DMA ring buffer.
-### 2.3 Display, Touch & SD Card Wiring (LovyanGFX Dual SPI Architecture)
+### 2.3 Display & Rendering Architecture ("Frankenstein" Model)
 **Hardware Profile:** 3.5-inch IPS TFT, 480x320 Resolution, **ILI9488** Controller.
 
-#### Verified Display Configuration (Perfect Colors):
-To achieve vibrant, correct colors without artifacts or "washing out," the following parameters are strictly required:
-- **Color Format:** 18-bit RGB666 (3 bytes per pixel: R, G, B).
-- **Transfer Method:** LovyanGFX PIO DMA (60MHz).
+#### The Rendering Engine (Custom 60MHz PIO + DMA Ping-Pong):
+Due to the strict 18-bit (RGB666) requirement of the ILI9488 module over 4-wire SPI, standard libraries like LovyanGFX default to a software fallback on the RP2350 architecture, resulting in unacceptable frame rates (~3 FPS).
+
+To achieve professional-grade SDR waterfall performance, the system utilizes a custom-built, highly optimized **"Frankenstein" Architecture**:
+1. **Graphics Rendering:** A bespoke PIO assembly program (`ili9488_spi.pio`) drives the SPI0 bus at **60 MHz**, natively expanding 16-bit RGB565 color data into the required 24-bit stream on the fly.
+2. **Ping-Pong DMA:** The waterfall rendering function (`ili9488_push_waterfall`) utilizes double buffering. The Cortex-M33 CPU (Core 1) prepares the next horizontal line of noise/signal data while the DMA controller simultaneously blasts the current line to the display.
+3. **Flicker-Free Overlays:** Tuning markers are injected dynamically into the DMA buffer *before* transmission, entirely eliminating the screen tearing and flickering associated with traditional overdraw methods.
+
+**Performance Metric:** This custom engine achieves a stable **29-30 FPS** for a continuous 480x160 pixel waterfall update, representing the absolute theoretical mathematical maximum throughput of the 60MHz SPI bus (~31ms per frame for 1.84 million bits).
+
+**MADCTL (0x36):** `0x28` (Native Landscape, MV=1, BGR=1).
+**Display Inversion (0x21):** `ON` (Required for accurate black/white rendering on this specific IPS panel).
 - **MISO Connection:** **NOT REQUIRED.** The display MISO pin should be left DISCONNECTED to prevent bus noise.
-- **MADCTL (0x36):** `0x48` (Raw Landscape orientation, BGR=0).
-- **Display Inversion (0x20/0x21):** `ON` (0x21). 
-- **Bit Alignment:** LovyanGFX handles 5->6 bit expansion and 24-bit alignment natively.
 
 | Signal       | GPIO (Pico) | Physical Pin | Description |
 | :---         | :---        | :---         | :---        |

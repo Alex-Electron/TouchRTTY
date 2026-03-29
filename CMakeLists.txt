@@ -40,7 +40,10 @@ add_subdirectory(lib/LovyanGFX)
 
 add_executable(rtty_decoder
     main.cpp
+    src/display/ili9341_test.c
 )
+
+pico_generate_pio_header(rtty_decoder ${CMAKE_CURRENT_LIST_DIR}/src/display/ili9488_spi.pio)
 
 target_include_directories(rtty_decoder PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/lib/lgfx_lite
