@@ -77,7 +77,7 @@ public:
         ili9488_push_colors(0, UI_Y_BOTTOM, 480, 48, (uint16_t*)_spr_bottom.getBuffer());
     }
     
-    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float marker_freq, bool clipping, int tune_x, int half_shift) {
+    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float marker_freq, bool clipping, float load_c0, float load_c1) {
         _spr_top.fillSprite(COLOR_BG); _spr_top.drawFastHLine(0, 47, 480, COLOR_GRID); 
         _spr_top.setTextDatum(middle_left); _spr_top.setTextColor(COLOR_TEXT, COLOR_BG); _spr_top.setFont(&fonts::Font2);
         _spr_top.drawString("SIG", 5, 12); _spr_top.drawRect(40, 5, 120, 14, COLOR_GRID);
@@ -86,7 +86,7 @@ public:
         if (clipping) sig_color = 0x0000FFU; // Red
         else if (signal_db > -30.0f) sig_color = 0xFF0000U; // Blue
         _spr_top.fillRect(40, 5, lw, 14, sig_color);
-        char buf[32]; snprintf(buf, sizeof(buf), "%3.0f dB", signal_db); _spr_top.drawString(buf, 165, 12);
+        char buf[64]; snprintf(buf, sizeof(buf), "%3.0f dB", signal_db); _spr_top.drawString(buf, 165, 12);
         
         if (clipping) { 
             _spr_top.fillRoundRect(225, 2, 50, 20, 4, 0x0000FFU); 
@@ -101,7 +101,7 @@ public:
         _spr_top.setTextColor(0x00FF00U, COLOR_BG); snprintf(buf, sizeof(buf), "SNR:%2.0fdB", snr_db); _spr_top.drawString(buf, 170, 32);
         
         _spr_top.setTextDatum(top_right); _spr_top.setTextColor(0x00FFFFU, COLOR_BG); 
-        snprintf(buf, sizeof(buf), "B:%d FPS:%lu", BUILD_NUMBER, fps); _spr_top.drawString(buf, 470, 24);
+        snprintf(buf, sizeof(buf), "B:%d F:%lu C0:%.0f%% C1:%.0f%%", BUILD_NUMBER, fps, load_c0, load_c1); _spr_top.drawString(buf, 470, 24);
         
         // Zero Bias Meter
         int meter_w = 60, meter_x = 400, meter_y = 6; 
@@ -120,11 +120,6 @@ public:
         uint32_t nc = (abs(err) < 0.05f) ? 0x00FF00U : 0x0000FFU; // Green if good, Red if bad
         _spr_top.fillTriangle(nx, meter_y+4, nx-3, meter_y-2, nx+3, meter_y-2, nc); 
         _spr_top.fillTriangle(nx, meter_y+4, nx-3, meter_y+10, nx+3, meter_y+10, nc);
-
-        // Draw Marker Triangles at the bottom edge (pointing down into the DSP zone)
-        _spr_top.fillTriangle(tune_x, 47, tune_x - 5, 40, tune_x + 5, 40, 0xFFFFFFU);
-        _spr_top.fillTriangle(tune_x - half_shift, 47, tune_x - half_shift - 4, 41, tune_x - half_shift + 4, 41, 0x00FFFFU);
-        _spr_top.fillTriangle(tune_x + half_shift, 47, tune_x + half_shift - 4, 41, tune_x + half_shift + 4, 41, 0xFFFF00U);
 
         ili9488_push_colors(0, UI_Y_TOP, 480, UI_TOP_BAR_H, (uint16_t*)_spr_top.getBuffer());
     }

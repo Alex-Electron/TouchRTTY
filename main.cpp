@@ -66,11 +66,11 @@ void core1_main() {
     ili9341_fill_screen(0x0000);
     UIManager ui(&tft); ui.init();
     
-    bool auto_scale = true, exp_scale = false;
+    bool auto_scale = true, exp_scale = true;
     bool menu_mode = false;
     int display_mode = 0; // 0=WF, 1=SPEC, 2=OSC
     int waterfall_speed = 1;
-    bool show_palette = true;
+    bool show_palette = false;
     
     ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, waterfall_speed, show_palette);
     ui.drawInfo(show_palette);
@@ -139,15 +139,23 @@ void core1_main() {
                         spectrum.drawPixel(x, 0, lgfx::color565(b, g, r)); // Swapped R/B
                     }
                 }
-                // Draw Marker Triangles at the top of the spectrum
-                spectrum.fillTriangle(tune_x - half_shift, 0, tune_x - half_shift - 4, 6, tune_x - half_shift + 4, 6, 0x00FFFFU); // Cyan hex (Yellow visual)
-                spectrum.fillTriangle(tune_x + half_shift, 0, tune_x + half_shift - 4, 6, tune_x + half_shift + 4, 6, 0xFFFF00U); // Yellow hex (Cyan visual)
+                
+                int m_x = tune_x - half_shift;
+                int s_x = tune_x + half_shift;
+                
+                spectrum.fillTriangle(m_x, 0, m_x - 5, 8, m_x + 5, 8, 0x00FFFFU); // Cyan hex (Yellow visual)
+                spectrum.fillTriangle(s_x, 0, s_x - 5, 8, s_x + 5, 8, 0xFFFF00U); // Yellow hex (Cyan visual)
+                
+                spectrum.setTextColor(0x0000FFU); // Red text (Blue hex)
+                spectrum.setTextDatum(top_center);
+                spectrum.drawString("M", m_x, 10);
+                spectrum.drawString("S", s_x, 10);
                 
                 ili9488_push_waterfall(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer(), tune_x, half_shift);
                 
-                // Clear the triangles so they don't smear down the waterfall on the next scroll
-                spectrum.fillTriangle(tune_x - half_shift, 0, tune_x - half_shift - 4, 6, tune_x - half_shift + 4, 6, PAL_BG);
-                spectrum.fillTriangle(tune_x + half_shift, 0, tune_x + half_shift - 4, 6, tune_x + half_shift + 4, 6, PAL_BG);
+                spectrum.fillRect(m_x - 8, 0, 16, 20, PAL_BG);
+                spectrum.fillRect(s_x - 8, 0, 16, 20, PAL_BG);
+                
             } else if (display_mode == 1) { // Spectrum
                 spectrum.fillSprite(PAL_BG);
                 
@@ -158,12 +166,16 @@ void core1_main() {
                     int h = (int)(norm * UI_DSP_ZONE_H); if (h > 0) spectrum.drawFastVLine(x, UI_DSP_ZONE_H - h, h, PAL_PEAK);
                 }
                 
-                spectrum.drawFastVLine(tune_x, 0, UI_DSP_ZONE_H, 0xFFFFFFU);
                 spectrum.drawFastVLine(tune_x - half_shift, 0, UI_DSP_ZONE_H, 0x00FFFFU);
                 spectrum.drawFastVLine(tune_x + half_shift, 0, UI_DSP_ZONE_H, 0xFFFF00U);
                 
-                spectrum.fillTriangle(tune_x - half_shift, 0, tune_x - half_shift - 4, 6, tune_x - half_shift + 4, 6, 0x00FFFFU);
-                spectrum.fillTriangle(tune_x + half_shift, 0, tune_x + half_shift - 4, 6, tune_x + half_shift + 4, 6, 0xFFFF00U);
+                int m_x = tune_x - half_shift;
+                int s_x = tune_x + half_shift;
+                spectrum.fillTriangle(m_x, 0, m_x - 5, 8, m_x + 5, 8, 0x00FFFFU);
+                spectrum.fillTriangle(s_x, 0, s_x - 5, 8, s_x + 5, 8, 0xFFFF00U);
+                spectrum.setTextColor(0x0000FFU); spectrum.setTextDatum(top_center);
+                spectrum.drawString("M", m_x, 10);
+                spectrum.drawString("S", s_x, 10);
                 
                 ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
             } else if (display_mode == 2) { // Oscilloscope
@@ -177,12 +189,16 @@ void core1_main() {
                     spectrum.drawLine(x, std::clamp(y0,0,osc_h-1), x+1, std::clamp(y1,0,osc_h-1), PAL_WAVE);
                 }
                 
-                spectrum.drawFastVLine(tune_x, 0, UI_DSP_ZONE_H, 0xFFFFFFU);
                 spectrum.drawFastVLine(tune_x - half_shift, 0, UI_DSP_ZONE_H, 0x00FFFFU);
                 spectrum.drawFastVLine(tune_x + half_shift, 0, UI_DSP_ZONE_H, 0xFFFF00U);
                 
-                spectrum.fillTriangle(tune_x - half_shift, 0, tune_x - half_shift - 4, 6, tune_x - half_shift + 4, 6, 0x00FFFFU);
-                spectrum.fillTriangle(tune_x + half_shift, 0, tune_x + half_shift - 4, 6, tune_x + half_shift + 4, 6, 0xFFFF00U);
+                int m_x = tune_x - half_shift;
+                int s_x = tune_x + half_shift;
+                spectrum.fillTriangle(m_x, 0, m_x - 5, 8, m_x + 5, 8, 0x00FFFFU);
+                spectrum.fillTriangle(s_x, 0, s_x - 5, 8, s_x + 5, 8, 0xFFFF00U);
+                spectrum.setTextColor(0x0000FFU); spectrum.setTextDatum(top_center);
+                spectrum.drawString("M", m_x, 10);
+                spectrum.drawString("S", s_x, 10);
                 
                 ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
             }
@@ -214,6 +230,7 @@ void core1_main() {
             }
             was_touched = is_touched; last_touch = now;
         }
+        
         uint32_t loop_end = time_us_32();
         c1_total_work += (loop_end - loop_start);
         
