@@ -12,6 +12,10 @@
    * Example: To render Blue on screen, we pass a Red hex (`0xFF0000U`). To render Yellow, we pass a Cyan hex (`0x00FFFFU`).
    * The UI palette is currently locked to a classic Yellow Spectrum on a Dark Blue background, implemented through these inverted hex mappings.
 8. **Diagnostic Rendering:** A color swatch diagnostic has been added to the UI text zone to verify that `RED`, `GRN`, `BLU`, `YEL`, `CYN`, and `MAG` render correctly according to their physical labels.
+9. **Multi-Stage Signal Meter (Build 121):** The AGC signal bar dynamically changes colors based on absolute input thresholds, utilizing the inverse R/B hex logic:
+   * **<= -30 dB (Normal):** Displays Green.
+   * **> -30 dB (High):** Displays Blue.
+   * **ADC Clipping (< 50 or > 4045 raw):** Displays Red to alert the user of hardware overload.
 
 ## Action Items for Next Phase (Phase 3)
 * Implement the Goertzel algorithm or a fast I/Q demodulator locked onto the `tune_x` coordinates from the UI marker.

@@ -41,25 +41,34 @@ public:
         _tft->fillScreen(COLOR_BG);
     }
     
-    void drawBottomBar(bool auto_scale, bool exp_scale) {
+    void drawBottomBar(bool auto_scale, bool exp_scale, bool menu_mode, bool show_waterfall, int waterfall_speed, bool show_palette) {
         _spr_bottom.fillSprite(COLOR_BG);
-        const char* labels[6] = {"FL-", "FL+", "GN-", "GN+", "AUTO", "SCL"};
+        const char* labels_main[6] = {"FL-", "FL+", "GN-", "GN+", "AUTO", "MENU"};
+        
+        char labels_menu[6][16];
+        snprintf(labels_menu[0], 16, show_waterfall ? "WF" : "SPEC");
+        snprintf(labels_menu[1], 16, exp_scale ? "EXP" : "LIN");
+        snprintf(labels_menu[2], 16, "SPD %d", waterfall_speed);
+        snprintf(labels_menu[3], 16, show_palette ? "PAL ON" : "PAL OFF");
+        snprintf(labels_menu[4], 16, "");
+        snprintf(labels_menu[5], 16, "BACK");
+
         int btn_w = 480 / 6; _spr_bottom.setFont(&fonts::Font2); _spr_bottom.setTextDatum(middle_center);
         for (int i = 0; i < 6; i++) {
+            if (menu_mode && i == 4) continue;
+            
             int x = i * btn_w; 
             uint32_t bg = 0x333333U, brd = 0x777777U;
-            if (i == 4 && auto_scale) { bg = 0x006600U; brd = 0x00FF00U; }
+            if (!menu_mode && i == 4 && auto_scale) { bg = 0x006600U; brd = 0x00FF00U; }
+            if (menu_mode && i == 5) { bg = 0x660000U; brd = 0xFF0000U; }
+            
             _spr_bottom.fillRoundRect(x + 2, 2, btn_w - 4, UI_BOTTOM_BAR_H - 4, 6, bg);
             _spr_bottom.drawRoundRect(x + 2, 2, btn_w - 4, UI_BOTTOM_BAR_H - 4, 6, brd);
             _spr_bottom.drawRoundRect(x + 3, 3, btn_w - 6, UI_BOTTOM_BAR_H - 6, 5, brd);
             _spr_bottom.drawRoundRect(x + 4, 4, btn_w - 8, UI_BOTTOM_BAR_H - 8, 4, brd);
             _spr_bottom.setTextColor(0xFFFFFFU); 
             
-            char label[16];
-            if (i == 5) snprintf(label, sizeof(label), exp_scale ? "EXP" : "LIN");
-            else snprintf(label, sizeof(label), "%s", labels[i]);
-            
-            _spr_bottom.drawString(label, x + (btn_w / 2), (UI_BOTTOM_BAR_H / 2));
+            _spr_bottom.drawString(menu_mode ? labels_menu[i] : labels_main[i], x + (btn_w / 2), (UI_BOTTOM_BAR_H / 2));
         }
         ili9488_push_colors(0, UI_Y_BOTTOM, 480, 48, (uint16_t*)_spr_bottom.getBuffer());
     }
@@ -111,7 +120,7 @@ public:
         ili9488_push_colors(0, UI_Y_TOP, 480, UI_TOP_BAR_H, (uint16_t*)_spr_top.getBuffer());
     }
 
-    void drawInfo() {
+    void drawInfo(bool show_palette) {
         _spr_text.fillSprite(COLOR_BG); 
         _spr_text.drawFastHLine(0, 111, 480, COLOR_GRID); 
         _spr_text.setTextDatum(top_left); _spr_text.setFont(&fonts::Font2); 
@@ -125,33 +134,35 @@ public:
         _spr_text.setTextColor(0x00FFFFU, COLOR_BG); 
         _spr_text.drawString("Audio Input Active. AGC Running.", 5, 45);
 
-        // Diagnostic Color Swatches (Using R/B Swap Logic)
-        int sq_w = 40, sq_h = 30, start_x = 220, start_y = 65;
-        _spr_text.setTextDatum(middle_center);
-        
-        // RED -> Send Blue
-        _spr_text.fillRect(start_x, start_y, sq_w, sq_h, 0x0000FFU);
-        _spr_text.setTextColor(0xFFFFFFU, 0x0000FFU); _spr_text.drawString("RED", start_x+20, start_y+15);
-        
-        // GRN -> Send Green
-        _spr_text.fillRect(start_x+42, start_y, sq_w, sq_h, 0x00FF00U);
-        _spr_text.setTextColor(0x000000U, 0x00FF00U); _spr_text.drawString("GRN", start_x+42+20, start_y+15);
-        
-        // BLU -> Send Red
-        _spr_text.fillRect(start_x+84, start_y, sq_w, sq_h, 0xFF0000U);
-        _spr_text.setTextColor(0xFFFFFFU, 0xFF0000U); _spr_text.drawString("BLU", start_x+84+20, start_y+15);
-        
-        // YEL -> Send Cyan
-        _spr_text.fillRect(start_x+126, start_y, sq_w, sq_h, 0x00FFFFU);
-        _spr_text.setTextColor(0x000000U, 0x00FFFFU); _spr_text.drawString("YEL", start_x+126+20, start_y+15);
-        
-        // CYN -> Send Yellow
-        _spr_text.fillRect(start_x+168, start_y, sq_w, sq_h, 0xFFFF00U);
-        _spr_text.setTextColor(0x000000U, 0xFFFF00U); _spr_text.drawString("CYN", start_x+168+20, start_y+15);
-        
-        // MAG -> Send Magenta
-        _spr_text.fillRect(start_x+210, start_y, sq_w, sq_h, 0xFF00FFU);
-        _spr_text.setTextColor(0xFFFFFFU, 0xFF00FFU); _spr_text.drawString("MAG", start_x+210+20, start_y+15);
+        if (show_palette) {
+            // Diagnostic Color Swatches (Using R/B Swap Logic)
+            int sq_w = 40, sq_h = 30, start_x = 220, start_y = 65;
+            _spr_text.setTextDatum(middle_center);
+            
+            // RED -> Send Blue
+            _spr_text.fillRect(start_x, start_y, sq_w, sq_h, 0x0000FFU);
+            _spr_text.setTextColor(0xFFFFFFU, 0x0000FFU); _spr_text.drawString("RED", start_x+20, start_y+15);
+            
+            // GRN -> Send Green
+            _spr_text.fillRect(start_x+42, start_y, sq_w, sq_h, 0x00FF00U);
+            _spr_text.setTextColor(0x000000U, 0x00FF00U); _spr_text.drawString("GRN", start_x+42+20, start_y+15);
+            
+            // BLU -> Send Red
+            _spr_text.fillRect(start_x+84, start_y, sq_w, sq_h, 0xFF0000U);
+            _spr_text.setTextColor(0xFFFFFFU, 0xFF0000U); _spr_text.drawString("BLU", start_x+84+20, start_y+15);
+            
+            // YEL -> Send Cyan
+            _spr_text.fillRect(start_x+126, start_y, sq_w, sq_h, 0x00FFFFU);
+            _spr_text.setTextColor(0x000000U, 0x00FFFFU); _spr_text.drawString("YEL", start_x+126+20, start_y+15);
+            
+            // CYN -> Send Yellow
+            _spr_text.fillRect(start_x+168, start_y, sq_w, sq_h, 0xFFFF00U);
+            _spr_text.setTextColor(0x000000U, 0xFFFF00U); _spr_text.drawString("CYN", start_x+168+20, start_y+15);
+            
+            // MAG -> Send Magenta
+            _spr_text.fillRect(start_x+210, start_y, sq_w, sq_h, 0xFF00FFU);
+            _spr_text.setTextColor(0xFFFFFFU, 0xFF00FFU); _spr_text.drawString("MAG", start_x+210+20, start_y+15);
+        }
 
         ili9488_push_colors(0, UI_Y_TEXT, 480, 112, (uint16_t*)_spr_text.getBuffer());
     }

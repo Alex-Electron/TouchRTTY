@@ -162,6 +162,14 @@ void ili9488_push_waterfall(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint
     uint32_t c_space = expand_color_dynamic(0x07FFU);
     uint32_t c_mark = expand_color_dynamic(0xFFE0U);
 
+    // Prepare first row
+    for(int col = 0; col < w; col++) {
+        if (col == tune_x) buf[0][col] = c_center;
+        else if (col == tune_x - shift) buf[0][col] = c_space;
+        else if (col == tune_x + shift) buf[0][col] = c_mark;
+        else buf[0][col] = expand_color_dynamic(colors[col]);
+    }
+
     gpio_put(PIN_DC, 1);
     gpio_put(PIN_CS, 0);
     switch_to_pio();
