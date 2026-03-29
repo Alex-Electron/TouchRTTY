@@ -34,8 +34,26 @@ volatile float shared_core1_load = 0.0f;
 volatile char rtty_new_char = 0;
 volatile bool rtty_char_ready = false;
 
-const char* baudot_ltrs = " \n\r  QWERTYUIOPASDFGHKJZXCVBNM  "; // Very simplified
-const char* baudot_figs = " \n\r  1234567890-+=:/()$!.,?&#  ";
+volatile float shared_target_freq = 1535.0f;
+volatile float shared_actual_freq = 1535.0f;
+volatile int shared_baud_idx = 0;
+volatile int shared_shift_idx = 0;
+
+const char ita2_ltrs[32] = {
+    '\0', 'E', '\n', 'A', ' ', 'S', 'I', 'U', 
+    '\r', 'D', 'R', 'J', 'N', 'F', 'C', 'K', 
+    'T', 'Z', 'L', 'W', 'H', 'Y', 'P', 'Q', 
+    'O', 'B', 'G', '\0', 'M', 'X', 'V', '\0'
+};
+const char ita2_figs[32] = {
+    '\0', '3', '\n', '-', ' ', '\'', '8', '7', 
+    '\r', '$', '4', '\'', ',', '!', ':', '(', 
+    '5', '\"', ')', '2', '#', '6', '0', '1', 
+    '9', '?', '&', '\0', '.', '/', '=', '\0'
+};
+
+float sin_table[1024];
+float cos_table[1024];
 
 // 63-Tap FIR Bandpass Filter (200Hz - 3200Hz, Fs=10000Hz)
 #define FIR_TAPS 63
@@ -84,7 +102,7 @@ void core1_main() {
     const float shifts[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
     const float stop_bits[] = {1.0f, 1.5f, 2.0f};
     
-    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, rtty_baud_idx, rtty_shift_idx, stop_bits[rtty_stop_idx], show_palette);
+    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, shared_baud_idx, shared_shift_idx, stop_bits[rtty_stop_idx], show_palette);
 
     LGFX_Sprite spectrum(&tft); spectrum.setColorDepth(16); spectrum.createSprite(480, UI_DSP_ZONE_H);
     LGFX_Sprite marker_spr(&tft); marker_spr.setColorDepth(16); marker_spr.createSprite(480, UI_MARKER_H);
@@ -111,11 +129,15 @@ void core1_main() {
         if (loop_start - last_ui_update > 500000) {
             uint32_t fps = frame_count * 2; frame_count = 0; last_ui_update = loop_start;
             float hz_px = ((bin_end-bin_start)*(SAMPLE_RATE/(float)FFT_SIZE))/480.0f;
-            int shift_px = (int)(shifts[rtty_shift_idx]/hz_px);
+            int shift_px = (int)(shifts[shared_shift_idx]/hz_px);
             int half_shift = shift_px / 2;
             
-            float m_freq = (bin_start + ((tune_x - half_shift) / 480.0f) * (bin_end - bin_start)) * (SAMPLE_RATE / (float)FFT_SIZE);
-            float s_freq = (bin_start + ((tune_x + half_shift) / 480.0f) * (bin_end - bin_start)) * (SAMPLE_RATE / (float)FFT_SIZE);
+            float bin_idx = shared_actual_freq / (SAMPLE_RATE / (float)FFT_SIZE);
+            tune_x = (int)((bin_idx - bin_start) / bin_per_pixel);
+            tune_x = std::clamp((int)tune_x, 10, 470);
+            
+            float m_freq = shared_actual_freq + shifts[shared_shift_idx]/2.0f;
+            float s_freq = shared_actual_freq - shifts[shared_shift_idx]/2.0f;
             bool is_clipping = shared_adc_clipping; shared_adc_clipping = false; 
             ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load);
         }
@@ -136,7 +158,7 @@ void core1_main() {
             }
             
             float hz_px = ((bin_end-bin_start)*(SAMPLE_RATE/(float)FFT_SIZE))/480.0f;
-            int shift_px = (int)(shifts[rtty_shift_idx]/hz_px);
+            int shift_px = (int)(shifts[shared_shift_idx]/hz_px);
             int half_shift = shift_px / 2;
             int m_x = tune_x - half_shift;
             int s_x = tune_x + half_shift;
@@ -190,12 +212,14 @@ void core1_main() {
             uint16_t tx, ty; static bool was_touched = false;
             bool is_touched = tft.getTouch(&tx, &ty);
             if (is_touched) {
-                if (ty >= UI_Y_MARKER && ty <= (UI_Y_DSP + UI_DSP_ZONE_H)) tune_x = tx;
+                if (ty >= UI_Y_MARKER && ty <= (UI_Y_DSP + UI_DSP_ZONE_H)) {
+                    shared_target_freq = (bin_start + (tx / 480.0f) * (bin_end - bin_start)) * (SAMPLE_RATE / (float)FFT_SIZE);
+                }
                 else if (ty > UI_Y_BOTTOM && !was_touched) {
                     int btn_idx = tx / 80;
                     if (!menu_mode) {
-                        if (btn_idx == 0) { rtty_baud_idx = (rtty_baud_idx + 1) % 3; }
-                        else if (btn_idx == 1) { rtty_shift_idx = (rtty_shift_idx + 1) % 5; }
+                        if (btn_idx == 0) { shared_baud_idx = (shared_baud_idx + 1) % 3; }
+                        else if (btn_idx == 1) { shared_shift_idx = (shared_shift_idx + 1) % 5; }
                         else if (btn_idx == 2) { rtty_stop_idx = (rtty_stop_idx + 1) % 3; }
                         else if (btn_idx == 3) { auto_scale = true; }
                         else if (btn_idx == 4) { ui.clearRTTY(); }
@@ -208,7 +232,7 @@ void core1_main() {
                         else if (btn_idx == 4) { show_palette = !show_palette; ui.drawInfo(show_palette); }
                         else if (btn_idx == 5) { menu_mode = false; } 
                     }
-                    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, rtty_baud_idx, rtty_shift_idx, stop_bits[rtty_stop_idx], show_palette);
+                    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, shared_baud_idx, shared_shift_idx, stop_bits[rtty_stop_idx], show_palette);
                 }
             }
             was_touched = is_touched; last_touch = loop_start;
@@ -225,16 +249,103 @@ void core1_main() {
 }
 
 void core0_dsp_loop() {
+    for(int i=0; i<1024; i++) {
+        sin_table[i] = sinf(2.0f * (float)M_PI * i / 1024.0f);
+        cos_table[i] = cosf(2.0f * (float)M_PI * i / 1024.0f);
+    }
+    
     static SimpleFFT fft; static float ts[FFT_SIZE], real[FFT_SIZE], imag[FFT_SIZE], mag[FFT_SIZE/2], tw[480], fb[63]={0};
     int sc=0, wi=0, fi=0; adc_init(); adc_gpio_init(ADC_PIN); adc_select_input(0);
     float dc=0.0f;
+    
+    // Demodulator state
+    float phase_m = 0, phase_s = 0;
+    float i_m = 0, q_m = 0, i_s = 0, q_s = 0;
+    int baudot_state = 0;
+    float symbol_phase = 0.0f;
+    uint8_t current_char = 0;
+    bool is_figs = false;
+    bool last_d_sign = false;
+    const float shifts_hz[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
+    const float bauds[] = {45.45f, 50.0f, 75.0f};
+    
     while(true) {
         uint32_t st = time_us_32(); uint16_t rv = adc_read();
         if(rv<50 || rv>4045) shared_adc_clipping=true;
         float v = (rv/4095.0f)*3.3f; shared_adc_v=v; float s = (rv-2048.0f)/2048.0f;
-        dc = dc*0.99f + s*0.01f; s -= dc; fb[fi]=s; float f=0.0f; int bi=fi;
-        for(int i=0; i<63; i++) { f += fir_coeffs[i]*fb[bi]; bi--; if(bi<0) bi=62; }
-        fi=(fi+1)%63; if(wi<480) tw[wi++]=f*1.65f+1.65f; ts[sc++]=f*2.0f;
+        dc = dc*0.99f + s*0.01f; s -= dc; fb[fi]=s; float f_out=0.0f; int bi=fi;
+        for(int i=0; i<63; i++) { f_out += fir_coeffs[i]*fb[bi]; bi--; if(bi<0) bi=62; }
+        fi=(fi+1)%63; if(wi<480) tw[wi++]=f_out*1.65f+1.65f; ts[sc++]=f_out*2.0f;
+        
+        // --- I/Q DEMODULATOR PER SAMPLE ---
+        float shift = shifts_hz[shared_shift_idx];
+        float fm = shared_actual_freq + shift / 2.0f;
+        float fs = shared_actual_freq - shift / 2.0f;
+        
+        phase_m += fm / SAMPLE_RATE; if(phase_m >= 1.0f) phase_m -= 1.0f;
+        phase_s += fs / SAMPLE_RATE; if(phase_s >= 1.0f) phase_s -= 1.0f;
+        
+        int idx_m = (int)(phase_m * 1024) % 1024;
+        int idx_s = (int)(phase_s * 1024) % 1024;
+        
+        // Lowpass I/Q (Alpha ~0.02 for ~30Hz bandwidth)
+        i_m += 0.02f * ((f_out * sin_table[idx_m]) - i_m);
+        q_m += 0.02f * ((f_out * cos_table[idx_m]) - q_m);
+        i_s += 0.02f * ((f_out * sin_table[idx_s]) - i_s);
+        q_s += 0.02f * ((f_out * cos_table[idx_s]) - q_s);
+        
+        float mag_m = i_m*i_m + q_m*q_m;
+        float mag_s = i_s*i_s + q_s*q_s;
+        
+        // Discriminator (Mark = Positive, Space = Negative)
+        float D = mag_m - mag_s;
+        bool d_sign = (D > 0);
+        
+        // --- BAUDOT PLL & DECODER ---
+        float phase_inc = bauds[shared_baud_idx] / SAMPLE_RATE;
+        
+        if (d_sign != last_d_sign) {
+            if (baudot_state > 0) {
+                // Adjust PLL phase on transitions
+                float err = 0.5f - symbol_phase;
+                symbol_phase += err * 0.15f; 
+            } else if (!d_sign) {
+                // START BIT DETECTED (Transition to Space)
+                baudot_state = 1;
+                symbol_phase = 0.5f; // Sample directly in the middle of the start bit
+                current_char = 0;
+            }
+        }
+        last_d_sign = d_sign;
+        
+        if (baudot_state > 0) {
+            symbol_phase += phase_inc;
+            if (symbol_phase >= 1.0f) {
+                symbol_phase -= 1.0f;
+                if (baudot_state >= 1 && baudot_state <= 5) {
+                    // Data bits (LSB first)
+                    if (d_sign) current_char |= (1 << (baudot_state - 1));
+                    baudot_state++;
+                } else if (baudot_state == 6) {
+                    // Stop bit
+                    if (d_sign) { // Valid mark stop bit
+                        char decoded = '\0';
+                        if (current_char == 27) is_figs = true;
+                        else if (current_char == 31) is_figs = false;
+                        else {
+                            decoded = is_figs ? ita2_figs[current_char] : ita2_ltrs[current_char];
+                            if (decoded != '\0') {
+                                rtty_new_char = decoded;
+                                rtty_char_ready = true;
+                            }
+                        }
+                    }
+                    baudot_state = 0; // Return to idle
+                }
+            }
+        }
+        // ----------------------------------
+        
         if(sc==FFT_SIZE) {
             float sq=0.0f; for(int i=0; i<FFT_SIZE; i++) sq+=ts[i]*ts[i];
             shared_signal_db = 10.0f*log10f((sq/FFT_SIZE)+1e-10f);
@@ -242,11 +353,35 @@ void core0_dsp_loop() {
             fft.apply_window(real); fft.compute(real, imag); fft.calc_magnitude(real, imag, mag);
             float pk=-100.0f, sm=0.0f; for(int i=0; i<FFT_SIZE/2; i++) { if(mag[i]>pk) pk=mag[i]; sm+=mag[i]; }
             shared_snr_db = pk - (sm/(FFT_SIZE/2)); memcpy((void*)shared_fft_mag, mag, sizeof(mag)); memcpy((void*)shared_adc_waveform, tw, sizeof(tw));
-            new_data_ready=true; wi=0; memmove(ts, &ts[480], (FFT_SIZE-480)*sizeof(float)); sc=FFT_SIZE-480;
             
-            // Dummy RTTY Logic for now: if strong signal in passband, output 'A'
-            static int rtty_timer = 0;
-            if (pk > -40.0f && ++rtty_timer > 50) { rtty_new_char = 'A' + (rand()%26); rtty_char_ready = true; rtty_timer = 0; }
+            // --- AUTOMATIC FREQUENCY CONTROL (AFC) ---
+            int m_bin = (shared_target_freq + shift/2) * FFT_SIZE / SAMPLE_RATE;
+            int s_bin = (shared_target_freq - shift/2) * FFT_SIZE / SAMPLE_RATE;
+            int search_r = 10; // ~100 Hz search window
+            
+            float best_m_mag = 0, best_s_mag = 0;
+            int best_m_bin = m_bin, best_s_bin = s_bin;
+            
+            for(int i = m_bin - search_r; i <= m_bin + search_r; i++) {
+                if (i>0 && i<FFT_SIZE/2 && mag[i] > best_m_mag) { best_m_mag = mag[i]; best_m_bin = i; }
+            }
+            for(int i = s_bin - search_r; i <= s_bin + search_r; i++) {
+                if (i>0 && i<FFT_SIZE/2 && mag[i] > best_s_mag) { best_s_mag = mag[i]; best_s_bin = i; }
+            }
+            
+            // If strong signal found near target, gently pull the actual freq towards it
+            if (best_m_mag > 1.0f || best_s_mag > 1.0f) {
+                float found_m_f = best_m_bin * SAMPLE_RATE / (float)FFT_SIZE;
+                float found_s_f = best_s_bin * SAMPLE_RATE / (float)FFT_SIZE;
+                float implied_center = (best_m_mag > best_s_mag) ? (found_m_f - shift/2) : (found_s_f + shift/2);
+                shared_actual_freq = shared_actual_freq * 0.8f + implied_center * 0.2f;
+            } else {
+                // Slowly drift back to manual target if signal is lost
+                shared_actual_freq = shared_actual_freq * 0.95f + shared_target_freq * 0.05f;
+            }
+            // ------------------------------------------
+            
+            new_data_ready=true; wi=0; memmove(ts, &ts[480], (FFT_SIZE-480)*sizeof(float)); sc=FFT_SIZE-480;
         }
         
         static uint32_t total_work = 0, total_time = 0;
