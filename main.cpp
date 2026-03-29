@@ -410,15 +410,15 @@ void core0_dsp_loop() {
                                 }
                             }
                         }
-                        baudot_state = 0; 
                         
-                        // Critical fix for 1.0 stop bit:
-                        // If the signal is already Space, the next start bit has begun!
+                        // Critical fix for 1.0 stop bit tracking:
+                        // If the signal is already Space, do not reset phase or wait for edge!
                         if (!d_sign) {
                             baudot_state = 1;
-                            symbol_phase = 0.0f;
                             integrate_acc = D;
                             current_char = 0;
+                        } else {
+                            baudot_state = 0;
                         }
                     }
                 }
