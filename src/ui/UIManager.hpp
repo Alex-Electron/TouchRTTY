@@ -96,7 +96,7 @@ public:
         snprintf(labels_main[0], 16, "B %d", bauds[baud_idx]);
         snprintf(labels_main[1], 16, "S %d", shifts[shift_idx]);
         snprintf(labels_main[2], 16, inv ? "INV" : "NORM");
-        snprintf(labels_main[3], 16, "AUTO");
+        snprintf(labels_main[3], 16, "ST %.1f", stop_bits);
         snprintf(labels_main[4], 16, "CLEAR");
         snprintf(labels_main[5], 16, "MENU");
         
@@ -107,7 +107,7 @@ public:
         snprintf(labels_menu[1], 16, exp_scale ? "EXP" : "LIN");
         snprintf(labels_menu[2], 16, "FL-/+");
         snprintf(labels_menu[3], 16, "GN-/+");
-        snprintf(labels_menu[4], 16, "ST %.1f", stop_bits);
+        snprintf(labels_menu[4], 16, "AUTO");
         snprintf(labels_menu[5], 16, "BACK");
 
         int btn_w = 480 / 6; _spr_bottom.setFont(&fonts::Font2); _spr_bottom.setTextDatum(middle_center);
@@ -115,7 +115,7 @@ public:
             int x = i * btn_w; 
             uint32_t bg = 0x333333U, brd = 0x777777U;
             if (!menu_mode && i == 2 && inv) { bg = 0x660000U; brd = 0xFF0000U; }
-            if (!menu_mode && i == 3 && auto_scale) { bg = 0x006600U; brd = 0x00FF00U; }
+            if (menu_mode && i == 4 && auto_scale) { bg = 0x006600U; brd = 0x00FF00U; }
             if (menu_mode && i == 5) { bg = 0x660000U; brd = 0xFF0000U; } 
             
             _spr_bottom.fillRoundRect(x + 2, 2, btn_w - 4, UI_BOTTOM_BAR_H - 4, 6, bg);

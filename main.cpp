@@ -43,6 +43,7 @@ volatile int shared_baud_idx = 0;
 volatile int shared_shift_idx = 0;
 volatile bool shared_rtty_inv = false;
 volatile bool shared_squelch_open = false;
+volatile bool shared_clear_dsp = false;
 
 const char ita2_ltrs[32] = {
     '\0', 'E', '\n', 'A', ' ', 'S', 'I', 'U', 
@@ -237,15 +238,15 @@ void core1_main() {
                         if (btn_idx == 0) { shared_baud_idx = (shared_baud_idx + 1) % 3; }
                         else if (btn_idx == 1) { shared_shift_idx = (shared_shift_idx + 1) % 5; }
                         else if (btn_idx == 2) { shared_rtty_inv = !shared_rtty_inv; }
-                        else if (btn_idx == 3) { auto_scale = !auto_scale; }
-                        else if (btn_idx == 4) { ui.clearRTTY(); }
+                        else if (btn_idx == 3) { rtty_stop_idx = (rtty_stop_idx + 1) % 3; }
+                        else if (btn_idx == 4) { ui.clearRTTY(); shared_clear_dsp = true; }
                         else if (btn_idx == 5) { menu_mode = true; } 
                     } else {
                         if (btn_idx == 0) { display_mode = (display_mode + 1) % 3; spectrum.fillSprite(PAL_BG); }
                         else if (btn_idx == 1) { exp_scale = !exp_scale; }
                         else if (btn_idx == 2) { ui_noise_floor -= 5.0f; auto_scale = false; }
                         else if (btn_idx == 3) { ui_noise_floor += 5.0f; auto_scale = false; }
-                        else if (btn_idx == 4) { rtty_stop_idx = (rtty_stop_idx + 1) % 3; }
+                        else if (btn_idx == 4) { auto_scale = !auto_scale; }
                         else if (btn_idx == 5) { menu_mode = false; show_palette = false; ui.drawRTTY(); } 
                     }
                     ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, shared_baud_idx, shared_shift_idx, stop_bits[rtty_stop_idx], shared_rtty_inv);
@@ -297,6 +298,17 @@ void core0_dsp_loop() {
     const float bauds[] = {45.45f, 50.0f, 75.0f};
     
     while(true) {
+        if (shared_clear_dsp) {
+            shared_clear_dsp = false;
+            shared_actual_freq = shared_target_freq;
+            baudot_state = 0;
+            symbol_phase = 0.0f;
+            integrate_acc = 0.0f;
+            atc_mark_env = 0.01f;
+            atc_space_env = 0.01f;
+            shared_squelch_open = false;
+            last_d_sign = true;
+        }
         uint32_t st = time_us_32(); uint16_t rv = adc_read();
         if(rv<50 || rv>4045) shared_adc_clipping=true;
         float v = (rv/4095.0f)*3.3f; shared_adc_v=v; float s = (rv-2048.0f)/2048.0f;
@@ -416,8 +428,8 @@ void core0_dsp_loop() {
             memcpy((void*)shared_mag_m, tw_m, sizeof(tw_m));
             memcpy((void*)shared_mag_s, tw_s, sizeof(tw_s));
             
-            int m_bin = (shared_target_freq + shift/2) * FFT_SIZE / SAMPLE_RATE;
-            int s_bin = (shared_target_freq - shift/2) * FFT_SIZE / SAMPLE_RATE;
+            int m_bin = (int)((shared_target_freq - shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
+            int s_bin = (int)((shared_target_freq + shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
             int search_r = 6; 
             
             float best_m_mag = 0, best_s_mag = 0;
@@ -436,7 +448,7 @@ void core0_dsp_loop() {
             if (shared_squelch_open && (best_m_mag > best_s_mag * 1.5f || best_s_mag > best_m_mag * 1.5f)) {
                 float found_m_f = best_m_bin * SAMPLE_RATE / (float)FFT_SIZE;
                 float found_s_f = best_s_bin * SAMPLE_RATE / (float)FFT_SIZE;
-                float implied_center = (best_m_mag > best_s_mag) ? (found_m_f - shift/2) : (found_s_f + shift/2);
+                float implied_center = (best_m_mag > best_s_mag) ? (found_m_f + shift/2.0f) : (found_s_f - shift/2.0f);
                 shared_actual_freq = shared_actual_freq * 0.9f + implied_center * 0.1f;
             } else {
                 shared_actual_freq = shared_actual_freq * 0.98f + shared_target_freq * 0.02f;
