@@ -5,12 +5,12 @@
 #include "../display/ili9341_test.h"
 #include "../version.h"
 
-// Hardcoded Palette (Yaesu Blue from Build 107)
+// Hardcoded Palette (Yellow Spectrum on Blue Background)
 static constexpr uint32_t PAL_BG = 0x000033U;
 static constexpr uint32_t PAL_GRID = 0x003366U;
-static constexpr uint32_t PAL_WAVE = 0xFFFFFFU;
-static constexpr uint32_t PAL_PEAK = 0xFFFF00U;
-static constexpr uint32_t PAL_TEXT = 0x00FFFFU;
+static constexpr uint32_t PAL_WAVE = 0xFFFF00U; // Yellow wave
+static constexpr uint32_t PAL_PEAK = 0xFFFF00U; // Yellow peak
+static constexpr uint32_t PAL_TEXT = 0xFFFFFFU; // White text
 
 #define UI_TOP_BAR_H   48
 #define UI_DSP_ZONE_H  112
