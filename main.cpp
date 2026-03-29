@@ -169,8 +169,8 @@ void core1_main() {
             float hz_px = ((bin_end-bin_start)*(SAMPLE_RATE/(float)FFT_SIZE))/480.0f;
             int shift_px = (int)(shifts[shared_shift_idx]/hz_px);
             int half_shift = shift_px / 2;
-            int m_x = tune_x - half_shift;
-            int s_x = tune_x + half_shift;
+            int m_x = tune_x + half_shift;
+            int s_x = tune_x - half_shift;
             
             marker_spr.fillSprite(PAL_BG);
             marker_spr.drawFastHLine(0, 13, 480, PAL_GRID); 
@@ -428,8 +428,8 @@ void core0_dsp_loop() {
             memcpy((void*)shared_mag_m, tw_m, sizeof(tw_m));
             memcpy((void*)shared_mag_s, tw_s, sizeof(tw_s));
             
-            int m_bin = (int)((shared_target_freq - shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
-            int s_bin = (int)((shared_target_freq + shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
+            int m_bin = (int)((shared_target_freq + shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
+            int s_bin = (int)((shared_target_freq - shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
             int search_r = 6; 
             
             float best_m_mag = 0, best_s_mag = 0;
@@ -448,7 +448,7 @@ void core0_dsp_loop() {
             if (shared_squelch_open && (best_m_mag > best_s_mag * 1.5f || best_s_mag > best_m_mag * 1.5f)) {
                 float found_m_f = best_m_bin * SAMPLE_RATE / (float)FFT_SIZE;
                 float found_s_f = best_s_bin * SAMPLE_RATE / (float)FFT_SIZE;
-                float implied_center = (best_m_mag > best_s_mag) ? (found_m_f + shift/2.0f) : (found_s_f - shift/2.0f);
+                float implied_center = (best_m_mag > best_s_mag) ? (found_m_f - shift/2.0f) : (found_s_f + shift/2.0f);
                 shared_actual_freq = shared_actual_freq * 0.9f + implied_center * 0.1f;
             } else {
                 shared_actual_freq = shared_actual_freq * 0.98f + shared_target_freq * 0.02f;
