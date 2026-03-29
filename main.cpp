@@ -76,6 +76,8 @@ void core1_main() {
     ui.drawInfo(show_palette);
 
     LGFX_Sprite spectrum(&tft); spectrum.setColorDepth(16); spectrum.createSprite(480, UI_DSP_ZONE_H);
+    LGFX_Sprite marker_spr(&tft); marker_spr.setColorDepth(16); marker_spr.createSprite(480, UI_MARKER_H);
+    
     const int bin_start = 5, bin_end = 358;
     const float bin_per_pixel = (float)(bin_end - bin_start) / 480.0f;
     uint32_t last_touch = time_us_32(), last_ui_update = time_us_32(), frame_count = 0;
@@ -94,10 +96,6 @@ void core1_main() {
 
         if (now - last_ui_update > 500000) {
             uint32_t fps = frame_count * 2; frame_count = 0; last_ui_update = now;
-            float hz_px = ((bin_end-bin_start)*(SAMPLE_RATE/(float)FFT_SIZE))/480.0f;
-            int shift_px = (int)(rtty_shift_hz/hz_px);
-            int half_shift = shift_px / 2;
-            
             float marker_freq = (bin_start + (tune_x / 480.0f) * (bin_end - bin_start)) * (SAMPLE_RATE / (float)FFT_SIZE);
             bool is_clipping = shared_adc_clipping; shared_adc_clipping = false; 
             ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, marker_freq, is_clipping, shared_core0_load, shared_core1_load);
@@ -121,6 +119,38 @@ void core1_main() {
             float hz_px = ((bin_end-bin_start)*(SAMPLE_RATE/(float)FFT_SIZE))/480.0f;
             int shift_px = (int)(rtty_shift_hz/hz_px);
             int half_shift = shift_px / 2;
+            
+            int m_x = tune_x - half_shift;
+            int s_x = tune_x + half_shift;
+            
+            // --- Render Marker Bar independently ---
+            marker_spr.fillSprite(PAL_BG);
+            marker_spr.drawFastHLine(0, 13, 480, PAL_GRID); // bottom border line
+            
+            // Triangles pointing down to the DSP zone
+            marker_spr.fillTriangle(m_x, 13, m_x - 5, 5, m_x + 5, 5, 0x00FFFFU); // Cyan hex -> Yellow Visual (Space)
+            marker_spr.fillTriangle(s_x, 13, s_x - 5, 5, s_x + 5, 5, 0xFFFF00U); // Yellow hex -> Cyan Visual (Mark)
+            
+            float m_freq = (bin_start + (m_x / 480.0f) * (bin_end - bin_start)) * (SAMPLE_RATE / (float)FFT_SIZE);
+            float s_freq = (bin_start + (s_x / 480.0f) * (bin_end - bin_start)) * (SAMPLE_RATE / (float)FFT_SIZE);
+            
+            char mbuf[16], sbuf[16];
+            snprintf(mbuf, sizeof(mbuf), "M %.0f", m_freq);
+            snprintf(sbuf, sizeof(sbuf), "S %.0f", s_freq);
+            
+            marker_spr.setTextColor(0xFFFFFFU);
+            marker_spr.setTextDatum(top_center);
+            marker_spr.setFont(&fonts::Font0); // Tiny font to fit within 14px
+            
+            // Prevent text from clipping off screen edges
+            int m_tx = std::clamp(m_x, 20, 460);
+            int s_tx = std::clamp(s_x, 20, 460);
+            
+            marker_spr.drawString(mbuf, m_tx, 0);
+            marker_spr.drawString(sbuf, s_tx, 0);
+            
+            ili9488_push_colors(0, UI_Y_MARKER, 480, UI_MARKER_H, (uint16_t*)marker_spr.getBuffer());
+            // ---------------------------------------
 
             if (display_mode == 0) { // Waterfall
                 if (frame_count % waterfall_speed == 0) {
@@ -139,23 +169,7 @@ void core1_main() {
                         spectrum.drawPixel(x, 0, lgfx::color565(b, g, r)); // Swapped R/B
                     }
                 }
-                
-                int m_x = tune_x - half_shift;
-                int s_x = tune_x + half_shift;
-                
-                spectrum.fillTriangle(m_x, 0, m_x - 5, 8, m_x + 5, 8, 0x00FFFFU); // Cyan hex (Yellow visual)
-                spectrum.fillTriangle(s_x, 0, s_x - 5, 8, s_x + 5, 8, 0xFFFF00U); // Yellow hex (Cyan visual)
-                
-                spectrum.setTextColor(0x0000FFU); // Red text (Blue hex)
-                spectrum.setTextDatum(top_center);
-                spectrum.drawString("M", m_x, 10);
-                spectrum.drawString("S", s_x, 10);
-                
                 ili9488_push_waterfall(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer(), tune_x, half_shift);
-                
-                spectrum.fillRect(m_x - 8, 0, 16, 20, PAL_BG);
-                spectrum.fillRect(s_x - 8, 0, 16, 20, PAL_BG);
-                
             } else if (display_mode == 1) { // Spectrum
                 spectrum.fillSprite(PAL_BG);
                 
@@ -166,16 +180,8 @@ void core1_main() {
                     int h = (int)(norm * UI_DSP_ZONE_H); if (h > 0) spectrum.drawFastVLine(x, UI_DSP_ZONE_H - h, h, PAL_PEAK);
                 }
                 
-                spectrum.drawFastVLine(tune_x - half_shift, 0, UI_DSP_ZONE_H, 0x00FFFFU);
-                spectrum.drawFastVLine(tune_x + half_shift, 0, UI_DSP_ZONE_H, 0xFFFF00U);
-                
-                int m_x = tune_x - half_shift;
-                int s_x = tune_x + half_shift;
-                spectrum.fillTriangle(m_x, 0, m_x - 5, 8, m_x + 5, 8, 0x00FFFFU);
-                spectrum.fillTriangle(s_x, 0, s_x - 5, 8, s_x + 5, 8, 0xFFFF00U);
-                spectrum.setTextColor(0x0000FFU); spectrum.setTextDatum(top_center);
-                spectrum.drawString("M", m_x, 10);
-                spectrum.drawString("S", s_x, 10);
+                spectrum.drawFastVLine(tune_x - half_shift, 0, UI_DSP_ZONE_H, 0x00FFFFU); // Cyan hex
+                spectrum.drawFastVLine(tune_x + half_shift, 0, UI_DSP_ZONE_H, 0xFFFF00U); // Yellow hex
                 
                 ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
             } else if (display_mode == 2) { // Oscilloscope
@@ -192,14 +198,6 @@ void core1_main() {
                 spectrum.drawFastVLine(tune_x - half_shift, 0, UI_DSP_ZONE_H, 0x00FFFFU);
                 spectrum.drawFastVLine(tune_x + half_shift, 0, UI_DSP_ZONE_H, 0xFFFF00U);
                 
-                int m_x = tune_x - half_shift;
-                int s_x = tune_x + half_shift;
-                spectrum.fillTriangle(m_x, 0, m_x - 5, 8, m_x + 5, 8, 0x00FFFFU);
-                spectrum.fillTriangle(s_x, 0, s_x - 5, 8, s_x + 5, 8, 0xFFFF00U);
-                spectrum.setTextColor(0x0000FFU); spectrum.setTextDatum(top_center);
-                spectrum.drawString("M", m_x, 10);
-                spectrum.drawString("S", s_x, 10);
-                
                 ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
             }
         }
@@ -208,7 +206,10 @@ void core1_main() {
         if (now - last_touch > 50000) {
             uint16_t tx, ty; bool is_touched = tft.getTouch(&tx, &ty);
             if (is_touched) {
-                if (ty >= UI_Y_DSP && ty <= (UI_Y_DSP + UI_DSP_ZONE_H)) tune_x = tx;
+                // Check if touch is within the combined Marker + DSP zone
+                if (ty >= UI_Y_MARKER && ty <= (UI_Y_DSP + UI_DSP_ZONE_H)) {
+                    tune_x = tx;
+                }
                 else if (ty > UI_Y_BOTTOM && !was_touched) {
                     int btn_idx = tx / 80;
                     if (!menu_mode) {

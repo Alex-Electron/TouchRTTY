@@ -12,12 +12,15 @@ static constexpr uint32_t PAL_WAVE = 0x00FFFFU; // Renders as Yellow
 static constexpr uint32_t PAL_PEAK = 0x00FFFFU; // Renders as Yellow
 static constexpr uint32_t PAL_TEXT = 0xFFFFFFU; // White // White text
 
-#define UI_TOP_BAR_H   48
+#define UI_TOP_BAR_H   34
+#define UI_MARKER_H    14
 #define UI_DSP_ZONE_H  64
 #define UI_TEXT_ZONE_H 160
 #define UI_BOTTOM_BAR_H 48
+
 #define UI_Y_TOP       0
-#define UI_Y_DSP       (UI_TOP_BAR_H)
+#define UI_Y_MARKER    (UI_TOP_BAR_H)
+#define UI_Y_DSP       (UI_Y_MARKER + UI_MARKER_H)
 #define UI_Y_TEXT      (UI_Y_DSP + UI_DSP_ZONE_H)
 #define UI_Y_BOTTOM    (UI_Y_TEXT + UI_TEXT_ZONE_H)
 
@@ -78,38 +81,40 @@ public:
     }
     
     void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float marker_freq, bool clipping, float load_c0, float load_c1) {
-        _spr_top.fillSprite(COLOR_BG); _spr_top.drawFastHLine(0, 47, 480, COLOR_GRID); 
+        _spr_top.fillSprite(COLOR_BG); _spr_top.drawFastHLine(0, 33, 480, COLOR_GRID); 
         _spr_top.setTextDatum(middle_left); _spr_top.setTextColor(COLOR_TEXT, COLOR_BG); _spr_top.setFont(&fonts::Font2);
-        _spr_top.drawString("SIG", 5, 12); _spr_top.drawRect(40, 5, 120, 14, COLOR_GRID);
+        
+        _spr_top.drawString("SIG", 5, 8); _spr_top.drawRect(40, 1, 120, 14, COLOR_GRID);
         int lw = (int)((signal_db+80)*(120/70.0f)); if(lw<0) lw=0; if(lw>120) lw=120;
         uint32_t sig_color = 0x00FF00U; // Green
         if (clipping) sig_color = 0x0000FFU; // Red
         else if (signal_db > -30.0f) sig_color = 0xFF0000U; // Blue
-        _spr_top.fillRect(40, 5, lw, 14, sig_color);
-        char buf[64]; snprintf(buf, sizeof(buf), "%3.0f dB", signal_db); _spr_top.drawString(buf, 165, 12);
+        _spr_top.fillRect(40, 1, lw, 14, sig_color);
+        char buf[64]; snprintf(buf, sizeof(buf), "%3.0f dB", signal_db); _spr_top.drawString(buf, 165, 8);
         
         if (clipping) { 
-            _spr_top.fillRoundRect(225, 2, 50, 20, 4, 0x0000FFU); 
+            _spr_top.fillRoundRect(225, 0, 50, 16, 4, 0x0000FFU); 
             _spr_top.setTextColor(0xFFFFFFU); _spr_top.setTextDatum(middle_center); 
-            _spr_top.drawString("CLIP", 250, 12); _spr_top.setTextDatum(middle_left); 
+            _spr_top.drawString("CLIP", 250, 8); _spr_top.setTextDatum(middle_left); 
         } else { 
-            _spr_top.setTextColor(0x00FFFFU, COLOR_BG); snprintf(buf, sizeof(buf), "MRK:%4.0fHz", marker_freq); 
-            _spr_top.drawString(buf, 225, 12); 
+            _spr_top.setTextColor(0x00FFFFU, COLOR_BG); snprintf(buf, sizeof(buf), "MRK: %4.0f Hz", marker_freq); 
+            _spr_top.drawString(buf, 225, 8); 
         }
         
-        _spr_top.setTextColor(0xFFFFFFU, COLOR_BG); _spr_top.drawString("RTTY 45  SH: 170", 5, 32);
-        _spr_top.setTextColor(0x00FF00U, COLOR_BG); snprintf(buf, sizeof(buf), "SNR:%2.0fdB", snr_db); _spr_top.drawString(buf, 170, 32);
+        _spr_top.setTextColor(0xFFFFFFU, COLOR_BG); _spr_top.drawString("RTTY 45  SH: 170", 5, 24);
+        _spr_top.setTextColor(0x00FF00U, COLOR_BG); snprintf(buf, sizeof(buf), "SNR:%2.0fdB", snr_db); _spr_top.drawString(buf, 170, 24);
         
-        _spr_top.setTextDatum(top_right); _spr_top.setTextColor(0x00FFFFU, COLOR_BG); 
-        snprintf(buf, sizeof(buf), "B:%d F:%lu C0:%.0f%% C1:%.0f%%", BUILD_NUMBER, fps, load_c0, load_c1); _spr_top.drawString(buf, 470, 24);
+        _spr_top.setTextDatum(middle_right); _spr_top.setTextColor(0x00FFFFU, COLOR_BG); 
+        snprintf(buf, sizeof(buf), "B:%d FPS:%lu CPU0:%.0f%% CPU1:%.0f%%", BUILD_NUMBER, fps, load_c0, load_c1); 
+        _spr_top.drawString(buf, 475, 24);
         
         // Zero Bias Meter
-        int meter_w = 60, meter_x = 400, meter_y = 6; 
+        int meter_w = 60, meter_x = 400, meter_y = 2; 
         _spr_top.setTextDatum(middle_right); _spr_top.setTextColor(0xFFFFFFU, COLOR_BG); 
-        _spr_top.drawString("ZERO", meter_x - 5, meter_y + 4); 
+        _spr_top.drawString("ZERO", meter_x - 5, meter_y + 6); 
         
-        _spr_top.drawFastHLine(meter_x, meter_y+4, meter_w, COLOR_GRID); 
-        _spr_top.drawFastVLine(meter_x+30, meter_y, 9, COLOR_TEXT); // Center
+        _spr_top.drawFastHLine(meter_x, meter_y+6, meter_w, COLOR_GRID); 
+        _spr_top.drawFastVLine(meter_x+30, meter_y, 12, COLOR_TEXT); // Center
         
         float err = adc_v - 1.65f; 
         float norm_err = err / 0.5f;
@@ -118,8 +123,8 @@ public:
         int nx = meter_x + 30 + (int)(norm_err * 30);
 
         uint32_t nc = (abs(err) < 0.05f) ? 0x00FF00U : 0x0000FFU; // Green if good, Red if bad
-        _spr_top.fillTriangle(nx, meter_y+4, nx-3, meter_y-2, nx+3, meter_y-2, nc); 
-        _spr_top.fillTriangle(nx, meter_y+4, nx-3, meter_y+10, nx+3, meter_y+10, nc);
+        _spr_top.fillTriangle(nx, meter_y+6, nx-3, meter_y, nx+3, meter_y, nc); 
+        _spr_top.fillTriangle(nx, meter_y+6, nx-3, meter_y+12, nx+3, meter_y+12, nc);
 
         ili9488_push_colors(0, UI_Y_TOP, 480, UI_TOP_BAR_H, (uint16_t*)_spr_top.getBuffer());
     }
