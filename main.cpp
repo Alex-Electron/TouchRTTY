@@ -13,109 +13,247 @@
 #include "hardware/uart.h"
 #include "LGFX_Config.hpp"
 #include "src/display/ili9341_test.h"
+#include "src/dsp/fft.hpp"
 
 // --- Hardware Configuration ---
 #define ADC_PIN 26
 #define SAMPLE_RATE 10000
-#define RING_BUFFER_SAMPLES 2048
-#define RING_BUFFER_BYTES (RING_BUFFER_SAMPLES * 2)
-#define RING_ALIGN_BITS 12 
 
-uint16_t adc_ring_buffer[RING_BUFFER_SAMPLES] __attribute__((aligned(RING_BUFFER_BYTES)));
-int dma_adc_chan;
+// --- Shared DSP Data ---
+volatile float shared_fft_mag[FFT_SIZE / 2];
+volatile bool new_fft_ready = false;
+volatile float shared_adc_v = 0.0f; // Live ADC voltage
 
-// --- BENCHMARK FUNCTIONS ON CUSTOM DRIVER ---
+// Waterfall layout (SDR Style)
+const int wf_w = 480;
+const int wf_h = 100; // Better proportions
+const int wf_x = 0;
+const int wf_y = 90;
+static uint16_t wf_buffer[480 * 100]; 
 
-uint32_t testFillScreen() {
-    uint32_t start = time_us_32();
-    ili9341_fill_screen(COLOR_WHITE);
-    ili9341_fill_screen(COLOR_RED);
-    ili9341_fill_screen(COLOR_GREEN);
-    ili9341_fill_screen(COLOR_BLUE);
-    ili9341_fill_screen(COLOR_BLACK);
-    return (time_us_32() - start) / 5;
-}
+// FFT Scope Layout
+const int sp_h = 54;
+const int sp_y = 36;
 
-// NOTE: Pixel-by-pixel drawing sets a 1x1 window over SPI for EVERY pixel.
-// This is an intentional worst-case scenario for block-optimized drivers.
-uint32_t testLines() {
-    uint32_t start = time_us_32();
-    for (int i = 0; i < 500; i++) {
-        ili9488_draw_line(rand() % 480, rand() % 320, rand() % 480, rand() % 320, rand() % 0xFFFF);
+// Convert 0.0-1.0 magnitude to an SDR-style heatmap color
+static inline uint16_t get_heatmap_color(float val) {
+    if (val < 0.0f) val = 0.0f;
+    if (val > 1.0f) val = 1.0f;
+    
+    int r = 0, g = 0, b = 0;
+    if (val < 0.2f) {
+        b = val * 5.0f * 255;
+    } else if (val < 0.4f) {
+        b = 255;
+        r = (val - 0.2f) * 5.0f * 255;
+    } else if (val < 0.6f) {
+        r = 255;
+        b = 255 - (val - 0.4f) * 5.0f * 255;
+    } else if (val < 0.8f) {
+        r = 255;
+        g = (val - 0.6f) * 5.0f * 255;
+    } else {
+        r = 255;
+        g = 255;
+        b = (val - 0.8f) * 5.0f * 255;
     }
-    return time_us_32() - start;
-}
-
-uint32_t testFilledRects() {
-    uint32_t start = time_us_32();
-    for (int i = 0; i < 200; i++) {
-        ili9488_draw_rect(rand() % 400, rand() % 240, rand() % 80, rand() % 80, rand() % 0xFFFF);
-    }
-    return time_us_32() - start;
-}
-
-uint32_t testCircles() {
-    uint32_t start = time_us_32();
-    for (int i = 0; i < 200; i++) {
-        ili9488_draw_circle(rand() % 480, rand() % 320, rand() % 40, rand() % 0xFFFF);
-    }
-    return time_us_32() - start;
+    return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
 }
 
 void core1_main() {
+    printf("Core 1: Starting UI...\n");
+    
     LGFX_RP2350 tft;
     tft.init();
     tft.setRotation(1); 
     
-    // We keep LGFX around just to render nice text into a RAM sprite
-    LGFX_Sprite text_sprite(&tft);
-    text_sprite.setColorDepth(16);
-    text_sprite.createSprite(480, 160);
+    uint16_t calData[8];
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_WHITE);
+    tft.setCursor(10, 10);
+    tft.setTextSize(2);
+    tft.println("Touch arrows to calibrate");
+    tft.calibrateTouch(calData, TFT_WHITE, TFT_BLACK, 15);
 
-    // Initialize our custom 60MHz PIO DMA driver
-    printf("Switching to Custom High-Speed PIO Driver...\n");
+    // Initialize custom display driver (Ping-Pong DMA)
     ili9341_init(); 
+    ili9341_fill_screen(COLOR_BLACK);
+
+    memset(wf_buffer, 0, sizeof(wf_buffer));
+
+    // UI Overlays using LGFX Sprites
+    LGFX_Sprite top_bar(&tft);
+    top_bar.setColorDepth(16);
+    top_bar.createSprite(480, 36);
+
+    LGFX_Sprite text_area(&tft);
+    text_area.setColorDepth(16);
+    text_area.createSprite(480, 130);
     
+    LGFX_Sprite spectrum(&tft);
+    spectrum.setColorDepth(16);
+    spectrum.createSprite(480, sp_h);
+
+    int16_t tune_x = 240;
+    const int shift = 17; // Roughly 170Hz on the screen
+    
+    const int bin_start = 31;  // ~300 Hz
+    const int bin_end = 338;   // ~3300 Hz
+    const float bin_per_pixel = (float)(bin_end - bin_start) / 480.0f;
+
+    uint32_t last_touch = time_us_32();
+    uint32_t last_ui_update = time_us_32();
+    uint32_t frame_count = 0;
+    float local_mag[FFT_SIZE / 2];
+
     while (true) {
-        printf("\n--- Custom Driver Benchmark Starting ---\n");
-        ili9341_fill_screen(COLOR_BLACK);
-        
-        uint32_t t_fill = testFillScreen();
-        uint32_t t_lines = testLines();
-        uint32_t t_rects = testFilledRects();
-        uint32_t t_circles = testCircles();
+        uint32_t now = time_us_32();
 
-        // Print results to screen using LGFX Sprite pushed via Custom DMA
-        ili9341_fill_screen(COLOR_BLACK);
-        
-        text_sprite.fillSprite(TFT_BLACK);
-        text_sprite.setTextColor(TFT_YELLOW);
-        text_sprite.setTextSize(3);
-        text_sprite.setCursor(20, 10);
-        text_sprite.println("CUSTOM DRIVER BENCHMARK");
-        text_sprite.println("=======================");
-        
-        text_sprite.setTextSize(2);
-        text_sprite.setTextColor(TFT_WHITE);
-        text_sprite.printf("Fill Screen: %7lu us\n", t_fill);
-        text_sprite.printf("500 Lines:   %7lu us\n", t_lines);
-        text_sprite.printf("200 F-Rects: %7lu us\n", t_rects);
-        text_sprite.printf("200 Circles: %7lu us\n", t_circles);
-        
-        // Push the entire rendered text block to the middle of the screen via our ultra-fast DMA
-        ili9488_push_colors(0, 80, 480, 160, (uint16_t*)text_sprite.getBuffer());
+        // A. Poll Touch
+        if (now - last_touch > 50000) {
+            uint16_t tx, ty;
+            if (tft.getTouch(&tx, &ty)) {
+                if (ty >= sp_y && ty <= (wf_y + wf_h)) {
+                    tune_x = tx;
+                }
+            }
+            last_touch = now;
+        }
 
-        printf("FillScreen: %lu us\n", t_fill);
-        printf("500 Lines:  %lu us\n", t_lines);
-        printf("200 F.Rects: %lu us\n", t_rects);
-        printf("200 Circles: %lu us\n", t_circles);
+        // B. Update UI Elements Periodically (2 FPS)
+        if (now - last_ui_update > 500000) {
+            uint32_t fps = frame_count * 2;
+            frame_count = 0;
+            last_ui_update = now;
 
-        sleep_ms(15000);
+            // Render Top Bar
+            top_bar.fillSprite(tft.color565(26, 26, 26));
+            top_bar.setTextColor(tft.color565(0, 255, 0));
+            top_bar.setTextSize(2);
+            top_bar.setCursor(10, 10);
+            top_bar.print("2125.0 Hz");
+            top_bar.setTextSize(1);
+            top_bar.setTextColor(TFT_WHITE);
+            top_bar.setCursor(130, 12);
+            top_bar.printf("RTTY-45 | S:170 | ADC: %.2fV | FPS: %lu", shared_adc_v, fps);
+            ili9488_push_colors(0, 0, 480, 36, (uint16_t*)top_bar.getBuffer());
+
+            // Render Text Area
+            text_area.fillSprite(TFT_BLACK);
+            text_area.setTextColor(tft.color565(0, 255, 0));
+            text_area.setTextSize(2);
+            text_area.setCursor(5, 5);
+            text_area.println("DECODER READY.");
+            text_area.printf("\nLive ADC: %.2f V\n", shared_adc_v);
+            if (shared_adc_v < 0.1f) text_area.setTextColor(TFT_RED), text_area.println("WARN: ADC grounded?");
+            else if (shared_adc_v > 3.2f) text_area.setTextColor(TFT_RED), text_area.println("WARN: ADC clipped?");
+            else text_area.setTextColor(TFT_GREEN), text_area.println("ADC nominal range.");
+            ili9488_push_colors(0, 190, 480, 130, (uint16_t*)text_area.getBuffer());
+        }
+
+        // C. Render Loop (Syncs with FFT readiness, ~30 FPS)
+        if (new_fft_ready) {
+            frame_count++;
+            memcpy(local_mag, (void*)shared_fft_mag, sizeof(local_mag));
+            new_fft_ready = false;
+
+            // 1. Scroll Waterfall
+            memmove(&wf_buffer[wf_w], &wf_buffer[0], wf_w * (wf_h - 1) * sizeof(uint16_t));
+            
+            // 2. Generate Spectrum
+            float min_db = 20.0f; // Noise floor
+            float max_db = 55.0f; // Peak signal
+            
+            spectrum.fillSprite(tft.color565(5,5,5)); // Clear spectrum sprite
+
+            for (int x = 0; x < 480; x++) {
+                // Interpolate bins for smoothness
+                float exact_bin = bin_start + x * bin_per_pixel;
+                int b0 = (int)exact_bin;
+                int b1 = b0 + 1;
+                float frac = exact_bin - b0;
+                float db = local_mag[b0] * (1.0f - frac) + local_mag[b1] * frac;
+                
+                // Waterfall Pixel
+                float normalized = (db - min_db) / (max_db - min_db);
+                wf_buffer[x] = get_heatmap_color(normalized);
+
+                // Spectrum Pixel
+                int h = (int)(normalized * sp_h);
+                if (h > sp_h) h = sp_h;
+                if (h > 0) {
+                    spectrum.drawFastVLine(x, sp_h - h, h, tft.color565(0, 255, 255));
+                }
+            }
+
+            // Draw Markers on Spectrum Sprite
+            spectrum.drawFastVLine(tune_x, 0, sp_h, TFT_WHITE);
+            spectrum.drawFastVLine(tune_x - shift, 0, sp_h, TFT_CYAN);
+            spectrum.drawFastVLine(tune_x + shift, 0, sp_h, TFT_YELLOW);
+
+            // Push Spectrum
+            ili9488_push_colors(0, sp_y, 480, sp_h, (uint16_t*)spectrum.getBuffer());
+
+            // Push Waterfall
+            ili9488_push_waterfall(wf_x, wf_y, wf_w, wf_h, wf_buffer, tune_x, shift);
+        }
+        
+        if (multicore_fifo_rvalid()) (void)multicore_fifo_pop_blocking();
+        tight_loop_contents();
     }
 }
 
 void core0_dsp_loop() {
-    while (true) { tight_loop_contents(); }
+    static SimpleFFT fft;
+    static float real[FFT_SIZE];
+    static float imag[FFT_SIZE];
+    static float mag[FFT_SIZE / 2];
+
+    int samples_collected = 0;
+    const int SLIDE = 333; // ~30 FFTs per second
+    
+    // Initialize ADC directly on Core 0 for 100% control
+    adc_init();
+    adc_gpio_init(ADC_PIN);
+    adc_select_input(0);
+
+    while (true) {
+        uint32_t start_time = time_us_32();
+        
+        // 1. Direct ADC Read (bulletproof, no DMA hangs)
+        uint16_t raw_val = adc_read();
+        
+        // Calculate live ADC voltage for UI
+        shared_adc_v = ((float)raw_val / 4095.0f) * 3.3f;
+
+        // Normalize to -1.0 to 1.0 (12-bit ADC centered at 2048)
+        float sample = ((float)raw_val - 2048.0f) / 2048.0f;
+        
+        real[samples_collected] = sample;
+        imag[samples_collected] = 0.0f;
+        
+        samples_collected++;
+
+        // 2. Process FFT when buffer is full
+        if (samples_collected == FFT_SIZE) {
+            fft.apply_window(real);
+            fft.compute(real, imag);
+            fft.calc_magnitude(real, imag, mag);
+
+            // Safely update shared memory
+            memcpy((void*)shared_fft_mag, mag, sizeof(mag));
+            new_fft_ready = true;
+
+            // Shift buffer down to create overlap for the next FFT frame
+            memmove(real, &real[SLIDE], (FFT_SIZE - SLIDE) * sizeof(float));
+            samples_collected = FFT_SIZE - SLIDE;
+        }
+        
+        // 3. Precision timing: Wait until exactly 100us have passed since start (10kHz rate)
+        while (time_us_32() - start_time < 100) {
+            tight_loop_contents();
+        }
+    }
 }
 
 int main() {
@@ -124,22 +262,11 @@ int main() {
     
     stdio_init_all();
     sleep_ms(2000);
+    printf("\n\nREAL AUDIO DSP WATERFALL STARTING...\n\n");
 
     multicore_launch_core1(core1_main);
 
-    // Dummy ADC init to satisfy dependencies
-    adc_init(); adc_gpio_init(ADC_PIN); adc_select_input(0);
-    adc_fifo_setup(true, true, 1, false, false);
-    adc_set_clkdiv(48000000.0f / SAMPLE_RATE);
-    dma_adc_chan = dma_claim_unused_channel(true);
-    dma_channel_config c = dma_channel_get_default_config(dma_adc_chan);
-    channel_config_set_transfer_data_size(&c, DMA_SIZE_16);
-    channel_config_set_write_increment(&c, true);
-    channel_config_set_ring(&c, true, RING_ALIGN_BITS);
-    channel_config_set_dreq(&c, DREQ_ADC);
-    dma_channel_configure(dma_adc_chan, &c, adc_ring_buffer, &adc_hw->result, 0xFFFFFFFF, true);
-    adc_run(true);
-
+    // Enter DSP loop directly (ADC is initialized inside the loop)
     core0_dsp_loop();
     return 0;
 }
