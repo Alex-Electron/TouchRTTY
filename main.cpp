@@ -169,8 +169,8 @@ void core1_main() {
             float hz_px = ((bin_end-bin_start)*(SAMPLE_RATE/(float)FFT_SIZE))/480.0f;
             int shift_px = (int)(shifts[shared_shift_idx]/hz_px);
             int half_shift = shift_px / 2;
-            int m_x = tune_x + half_shift;
-            int s_x = tune_x - half_shift;
+            int m_x = tune_x - half_shift;
+            int s_x = tune_x + half_shift;
             
             marker_spr.fillSprite(PAL_BG);
             marker_spr.drawFastHLine(0, 13, 480, PAL_GRID); 
@@ -325,8 +325,8 @@ void core0_dsp_loop() {
         }
         
         float shift = shifts_hz[shared_shift_idx];
-        float fm = shared_actual_freq + shift / 2.0f;
-        float fs = shared_actual_freq - shift / 2.0f;
+        float fm = shared_actual_freq - shift / 2.0f;
+        float fs = shared_actual_freq + shift / 2.0f;
         
         phase_m += fm / SAMPLE_RATE; if(phase_m >= 1.0f) phase_m -= 1.0f;
         phase_s += fs / SAMPLE_RATE; if(phase_s >= 1.0f) phase_s -= 1.0f;
