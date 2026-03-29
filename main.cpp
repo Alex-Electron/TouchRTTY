@@ -138,9 +138,9 @@ void core1_main() {
             float hz_px = ((bin_end-bin_start)*(SAMPLE_RATE/(float)FFT_SIZE))/480.0f;
             int shift_px = (int)(rtty_shift_hz/hz_px);
             int half_shift = shift_px / 2;
-            spectrum.drawFastVLine(tune_x, 0, UI_DSP_ZONE_H, 0xFFFFU);
-            spectrum.drawFastVLine(tune_x - half_shift, 0, UI_DSP_ZONE_H, 0x07FFU);
-            spectrum.drawFastVLine(tune_x + half_shift, 0, UI_DSP_ZONE_H, 0xFFE0U);
+            spectrum.drawFastVLine(tune_x, 0, UI_DSP_ZONE_H, 0xFFFFFFU);
+            spectrum.drawFastVLine(tune_x - half_shift, 0, UI_DSP_ZONE_H, 0x00FFFFU);
+            spectrum.drawFastVLine(tune_x + half_shift, 0, UI_DSP_ZONE_H, 0xFFFF00U);
             
             ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
         }

@@ -1,4 +1,4 @@
 #ifndef VERSION_H
 #define VERSION_H
-#define BUILD_NUMBER 105
+#define BUILD_NUMBER 106
 #endif
