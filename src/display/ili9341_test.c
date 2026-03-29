@@ -49,7 +49,7 @@ void ili9341_init(void) {
     write_command(0xC0); write_data(0x17); write_data(0x15);
     write_command(0xC1); write_data(0x41);
     write_command(0xC5); write_data(0x00); write_data(0x12); write_data(0x80);
-    write_command(0x36); write_data(0x28);
+    write_command(0x36); write_data(0x20); // Landscape, RGB Mode (No BGR swap)
     write_command(0x3A); write_data(0x66);
     write_command(0xB0); write_data(0x00);
     write_command(0xB1); write_data(0xA0);
@@ -69,25 +69,31 @@ void ili9341_init(void) {
     channel_config_set_transfer_data_size(&dma_conf, DMA_SIZE_32);
     channel_config_set_dreq(&dma_conf, pio_get_dreq(pio_inst, pio_sm, true));
 
-    // Return pins to SPI
     gpio_set_function(PIN_SCK, GPIO_FUNC_SPI);
     gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI);
 }
 
-static inline uint32_t expand_color_native(uint16_t color) {
+volatile int shared_color_mode = 0;
+
+static inline uint32_t expand_color_dynamic(uint16_t color) {
+    if (shared_color_mode >= 6) {
+        color = (color >> 8) | (color << 8); // Swap bytes
+    }
     uint8_t r = (color >> 8) & 0xF8;
     uint8_t g = (color >> 3) & 0xFC;
     uint8_t b = (color << 3) & 0xF8;
-    return ((uint32_t)r << 24) | ((uint32_t)g << 16) | ((uint32_t)b << 8);
+    
+    int mode = shared_color_mode % 6;
+    if (mode == 0) return ((uint32_t)r << 24) | ((uint32_t)g << 16) | ((uint32_t)b << 8); // RGB
+    if (mode == 1) return ((uint32_t)r << 24) | ((uint32_t)b << 16) | ((uint32_t)g << 8); // RBG
+    if (mode == 2) return ((uint32_t)g << 24) | ((uint32_t)r << 16) | ((uint32_t)b << 8); // GRB
+    if (mode == 3) return ((uint32_t)g << 24) | ((uint32_t)b << 16) | ((uint32_t)r << 8); // GBR
+    if (mode == 4) return ((uint32_t)b << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8); // BRG
+    if (mode == 5) return ((uint32_t)b << 24) | ((uint32_t)g << 16) | ((uint32_t)r << 8); // BGR
+    return 0;
 }
 
-static inline uint32_t expand_color_swapped(uint16_t color) {
-    uint16_t c = (color >> 8) | (color << 8);
-    uint8_t r = (c >> 8) & 0xF8;
-    uint8_t g = (c >> 3) & 0xFC;
-    uint8_t b = (c << 3) & 0xF8;
-    return ((uint32_t)r << 24) | ((uint32_t)g << 16) | ((uint32_t)b << 8);
-}
+
 
 static void switch_to_pio() {
     while (spi_is_busy(SPI_PORT));
@@ -111,7 +117,7 @@ void ili9488_draw_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t 
     if (x + w > 480) w = 480 - x;
     if (y + h > 320) h = 320 - y;
 
-    uint32_t c32 = expand_color_native(color);
+    uint32_t c32 = expand_color_dynamic(color);
     ili9488_set_window(x, y, x + w - 1, y + h - 1);
     
     static uint32_t line_buf[480];
@@ -145,7 +151,7 @@ void ili9488_push_colors(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_
 
     for(int row = 0; row < h; row++) {
         for(int col = 0; col < w; col++) {
-            c32_buf[col] = expand_color_swapped(colors[row * w + col]);
+            c32_buf[col] = expand_color_dynamic(colors[row * w + col]);
         }
         dma_channel_configure(dma_chan, &dma_conf, &pio_inst->txf[pio_sm], c32_buf, w, true);
         dma_channel_wait_for_finish_blocking(dma_chan);
@@ -165,16 +171,9 @@ void ili9488_push_waterfall(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint
     static uint32_t buf[2][480]; 
     int current_buf = 0;
 
-    uint32_t c_center = expand_color_native(COLOR_WHITE);
-    uint32_t c_space = expand_color_native(COLOR_CYAN);
-    uint32_t c_mark = expand_color_native(COLOR_YELLOW);
-
-    for(int col = 0; col < w; col++) {
-        if (col == tune_x) buf[current_buf][col] = c_center;
-        else if (col == tune_x - shift) buf[current_buf][col] = c_space;
-        else if (col == tune_x + shift) buf[current_buf][col] = c_mark;
-        else buf[current_buf][col] = expand_color_native(colors[col]);
-    }
+    uint32_t c_center = expand_color_dynamic(0xFFFFU);
+    uint32_t c_space = expand_color_dynamic(0x07FFU);
+    uint32_t c_mark = expand_color_dynamic(0xFFE0U);
 
     gpio_put(PIN_DC, 1);
     gpio_put(PIN_CS, 0);
@@ -192,7 +191,7 @@ void ili9488_push_waterfall(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint
                 if (col == tune_x) buf[next_buf][col] = c_center;
                 else if (col == tune_x - shift) buf[next_buf][col] = c_space;
                 else if (col == tune_x + shift) buf[next_buf][col] = c_mark;
-                else buf[next_buf][col] = expand_color_native(colors[offset + col]);
+                else buf[next_buf][col] = expand_color_dynamic(colors[offset + col]);
             }
         }
         

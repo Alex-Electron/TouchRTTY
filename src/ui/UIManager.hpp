@@ -5,23 +5,6 @@
 #include "../display/ili9341_test.h"
 #include "../version.h"
 
-// Palettes for DSP display
-struct Palette {
-    const char* name;
-    uint32_t bg;
-    uint32_t grid;
-    uint32_t wave;
-    uint32_t peak;
-    uint32_t text;
-};
-
-static const Palette PALETTES[4] = {
-    {"0: Classic Black",          0x000000U, 0x333333U, 0xFFFF00U, 0xFF8800U, 0xFFFFFFU}, 
-    {"1: Deep Blue (Stable Ref)", 0x000033U, 0x003366U, 0xFFFF00U, 0xFF8800U, 0xFFFFFFU}, 
-    {"2: Bright Blue (SDR#)",     0x000096U, 0x00C8FFU, 0xFFFFFFU, 0xFFFF00U, 0x00FFFFU}, 
-    {"3: Hacker Green",           0x002200U, 0x004400U, 0x00FF00U, 0x00FF00U, 0x00FF00U}  
-};
-
 #define UI_TOP_BAR_H   48
 #define UI_DSP_ZONE_H  112
 #define UI_TEXT_ZONE_H 112
@@ -48,10 +31,11 @@ public:
         _spr_text.setColorDepth(16); _spr_text.createSprite(480, UI_TEXT_ZONE_H);
         _spr_bottom.setColorDepth(16); _spr_bottom.createSprite(480, UI_BOTTOM_BAR_H);
         _tft->fillScreen(COLOR_BG);
+        drawColorModeInfo(0);
     }
     void drawBottomBar(bool auto_scale, bool exp_scale) {
         _spr_bottom.fillSprite(COLOR_BG);
-        const char* labels[6] = {"FL-", "FL+", "GN-", "GN+", "AUTO", "COLOR"};
+        const char* labels[6] = {"FL-", "FL+", "GN-", "GN+", "AUTO", "C-MODE"};
         int btn_w = 480 / 6; _spr_bottom.setFont(&fonts::Font2); _spr_bottom.setTextDatum(middle_center);
         for (int i = 0; i < 6; i++) {
             int x = i * btn_w; 
@@ -105,28 +89,62 @@ public:
         ili9488_push_colors(0, UI_Y_TOP, 480, UI_TOP_BAR_H, (uint16_t*)_spr_top.getBuffer());
     }
 
-    void drawPaletteInfo(int idx) {
+    void drawColorModeInfo(int mode) {
         _spr_text.fillSprite(COLOR_BG); 
         _spr_text.drawFastHLine(0, 111, 480, COLOR_GRID); 
         _spr_text.setTextDatum(top_left); _spr_text.setFont(&fonts::Font2); 
-        _spr_text.setTextColor(0x00FF00U, COLOR_BG); // Green
         
         char buf[128];
-        const Palette& p = PALETTES[idx];
-        
-        snprintf(buf, sizeof(buf), "PALETTE SET: [%s]", p.name);
-        _spr_text.drawString(buf, 5, 5);
+        bool swapped = mode >= 6;
+        int m = mode % 6;
+        const char* orders[] = {"RGB", "RBG", "GRB", "GBR", "BRG", "BGR"};
         
         _spr_text.setTextColor(0xFFFFFFU, COLOR_BG); // White
-        snprintf(buf, sizeof(buf), "BG: 0x%06lX | Grid: 0x%06lX", p.bg, p.grid);
-        _spr_text.drawString(buf, 5, 25);
-        
-        snprintf(buf, sizeof(buf), "Wave: 0x%06lX | Peak: 0x%06lX", p.wave, p.peak);
-        _spr_text.drawString(buf, 5, 45);
+        snprintf(buf, sizeof(buf), "COLOR DIAGNOSTIC MODE: %d", mode);
+        _spr_text.drawString(buf, 5, 5);
         
         _spr_text.setTextColor(0x00FFFFU, COLOR_BG); // Cyan
-        _spr_text.drawString("Check Terminal for serial output log.", 5, 65);
+        snprintf(buf, sizeof(buf), "Endian Swap: %s | Color Order: %s", swapped ? "YES (16-bit swapped)" : "NO (Native)", orders[m]);
+        _spr_text.drawString(buf, 5, 25);
         
+        // Draw test swatches
+        int y = 50;
+        int size = 40;
+        
+        // Ideal Red
+        _spr_text.fillRect(10, y, size, size, 0xFF0000U);
+        _spr_text.setTextColor(0xFFFFU); 
+        _spr_text.setTextDatum(middle_center);
+        _spr_text.drawString("RED", 10 + size/2, y + size/2);
+        
+        // Ideal Green
+        _spr_text.fillRect(60, y, size, size, 0x00FF00U);
+        _spr_text.drawString("GRN", 60 + size/2, y + size/2);
+        
+        // Ideal Blue
+        _spr_text.fillRect(110, y, size, size, 0x0000FFU);
+        _spr_text.drawString("BLU", 110 + size/2, y + size/2);
+        
+        // Ideal Yellow
+        _spr_text.fillRect(160, y, size, size, 0xFFFF00U);
+        _spr_text.setTextColor(0x0000U); // Black text on yellow
+        _spr_text.drawString("YEL", 160 + size/2, y + size/2);
+        
+        _spr_text.setTextColor(0xFFFFU); // White text again
+        // Ideal Cyan
+        _spr_text.fillRect(210, y, size, size, 0x00FFFFU);
+        _spr_text.setTextColor(0x0000U);
+        _spr_text.drawString("CYN", 210 + size/2, y + size/2);
+        
+        _spr_text.setTextColor(0xFFFFU);
+        // Ideal Magenta
+        _spr_text.fillRect(260, y, size, size, 0xFF00FFU);
+        _spr_text.drawString("MAG", 260 + size/2, y + size/2);
+
+        _spr_text.setTextDatum(top_left);
+        _spr_text.setTextColor(0xFFFFFFU, COLOR_BG);
+        _spr_text.drawString("Find the mode where RED is Red and GRN is Green.", 5, y + size + 5);
+
         ili9488_push_colors(0, UI_Y_TEXT, 480, 112, (uint16_t*)_spr_text.getBuffer());
     }
 };
