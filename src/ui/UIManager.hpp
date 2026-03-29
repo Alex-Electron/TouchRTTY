@@ -124,7 +124,7 @@ public:
             _spr_top.drawString(buf, 225, 12);
         }
 
-        _spr_top.setTextColor(TFT_CYAN, COLOR_BG);
+        _spr_top.setTextColor(TFT_WHITE, COLOR_BG);
         _spr_top.drawString("RTTY 45", 5, 32);
         _spr_top.setTextColor(TFT_WHITE, COLOR_BG);
         _spr_top.drawString("SH: 170", 90, 32);
