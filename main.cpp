@@ -134,8 +134,8 @@ void core1_main() {
 
         if (loop_start - last_ui_update > 500000) {
             uint32_t fps = frame_count * 2; frame_count = 0; last_ui_update = loop_start;
-            float m_freq = shared_actual_freq + shifts[shared_shift_idx]/2.0f;
-            float s_freq = shared_actual_freq - shifts[shared_shift_idx]/2.0f;
+            float m_freq = shared_actual_freq - shifts[shared_shift_idx]/2.0f;
+            float s_freq = shared_actual_freq + shifts[shared_shift_idx]/2.0f;
             bool is_clipping = shared_adc_clipping; shared_adc_clipping = false; 
             
             if (show_palette) {
