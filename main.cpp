@@ -41,6 +41,7 @@ volatile float shared_target_freq = 1535.0f;
 volatile float shared_actual_freq = 1535.0f;
 volatile int shared_baud_idx = 0;
 volatile int shared_shift_idx = 0;
+volatile int shared_stop_idx = 1;
 volatile bool shared_rtty_inv = false;
 volatile bool shared_squelch_open = false;
 volatile bool shared_clear_dsp = false;
@@ -361,19 +362,22 @@ void core0_dsp_loop() {
         bool d_sign = (D > 0);
         
         float phase_inc = baud / SAMPLE_RATE;
+        float dpll_alpha = 0.035f; // From TZ BnT approx 0.008 -> 0.05
+        float stop_bits_expected = (shared_stop_idx == 0) ? 1.0f : ((shared_stop_idx == 1) ? 1.5f : 2.0f);
         
         if (!shared_squelch_open) {
             baudot_state = 0;
             last_d_sign = true; 
         } else {
+            // Edge detection (zero crossing)
             if (d_sign != last_d_sign) {
                 if (baudot_state > 0) {
                     float err = symbol_phase;
-                    if (err > 0.5f) err -= 1.0f;
-                    symbol_phase -= err * 0.05f; 
-                } else if (!d_sign) { 
+                    if (err > 0.5f) err -= 1.0f; // Late
+                    symbol_phase -= dpll_alpha * err; // Nudge PLL 
+                } else if (!d_sign) { // Transition to space = start bit
                     baudot_state = 1;
-                    symbol_phase = 0.0f;
+                    symbol_phase = 0.5f; // Jump to center of start bit
                     integrate_acc = 0.0f;
                     current_char = 0;
                 }
@@ -390,35 +394,39 @@ void core0_dsp_loop() {
                     integrate_acc = 0.0f;
                     
                     if (baudot_state == 1) { 
-                        if (bit) baudot_state = 0; 
+                        if (bit) baudot_state = 0; // False start
                         else baudot_state = 2;
                     } else if (baudot_state >= 2 && baudot_state <= 6) { 
                         if (bit) current_char |= (1 << (baudot_state - 2));
                         baudot_state++;
                     } else if (baudot_state == 7) { 
-                        if (bit) { 
+                        if (bit) { // Valid stop
                             char decoded = '\0';
-                            if (current_char == 27) is_figs = true; 
-                            else if (current_char == 31) is_figs = false; 
+                            if (current_char == 27) { is_figs = true; printf("[FIGS]"); }
+                            else if (current_char == 31) { is_figs = false; printf("[LTRS]"); }
                             else {
                                 decoded = is_figs ? ita2_figs[current_char] : ita2_ltrs[current_char];
-                                if (decoded == ' ') is_figs = false; 
+                                if (decoded == ' ') is_figs = false; // Unshift on space (fldigi)
                                 if (decoded != '\0') {
                                     rtty_new_char = decoded;
                                     rtty_char_ready = true;
                                     printf("%c", decoded); 
                                 }
                             }
+                        } else {
+                            printf("[ERR]"); // Framing error
                         }
                         
-                        // Critical fix for 1.0 stop bit tracking:
-                        // If the signal is already Space, do not reset phase or wait for edge!
-                        if (!d_sign) {
-                            baudot_state = 1;
-                            integrate_acc = D;
-                            current_char = 0;
-                        } else {
-                            baudot_state = 0;
+                        baudot_state = 0; 
+                        
+                        // For tight 1.0 stop bits, if we are ALREADY in Space, a new start bit has begun!
+                        if (stop_bits_expected <= 1.0f) {
+                            if (!d_sign) {
+                                baudot_state = 1;
+                                symbol_phase = 0.5f; // Center sampling
+                                integrate_acc = D;
+                                current_char = 0;
+                            }
                         }
                     }
                 }
