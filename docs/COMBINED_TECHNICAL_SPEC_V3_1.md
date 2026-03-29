@@ -144,3 +144,7 @@ To achieve sub-Hz precision from a coarse FFT (e.g., 20Hz/bin):
 - **Phase 3: DSP Engine:** Implement Parabolic Interpolation TUNE and I/Q Demodulator.
 - **Phase 4: SD Card (exFAT):** Add logging of decoded text.
 - **Phase 5: Wideband CW:** Parallel processing of the 3kHz passband.
+- **Phase 6: Audio DSP & Noise Reduction (Future Expansion):** 
+  - **Hardware:** Integration of an external 12-bit DAC (e.g., MCP4725 via I2C) using spare RP2350 GPIO pins.
+  - **Features:** Real-time audio output for headphones/speakers. Implementation of CW Peaking (ultra-narrow 50Hz FIR/IIR filters) to pull Morse code out of the noise floor.
+  - **Advanced DSP:** Spectral subtraction (FFT -> Noise Masking -> IFFT) and Adaptive LMS Noise Reduction for SSB/voice signals, leveraging the Cortex-M33's FPU and DSP instructions on Core 0.
