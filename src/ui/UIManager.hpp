@@ -75,7 +75,11 @@ public:
             }
             
             _spr_bottom.fillRoundRect(x + 2, y + 2, btn_w - 4, btn_h - 4, 6, bg_color);
+            
+            // Draw 3px thick border
             _spr_bottom.drawRoundRect(x + 2, y + 2, btn_w - 4, btn_h - 4, 6, border_color);
+            _spr_bottom.drawRoundRect(x + 3, y + 3, btn_w - 6, btn_h - 6, 5, border_color);
+            _spr_bottom.drawRoundRect(x + 4, y + 4, btn_w - 8, btn_h - 8, 4, border_color);
             
             _spr_bottom.setTextColor(0xFFFFU); // White text
             

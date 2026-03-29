@@ -72,8 +72,8 @@ void core1_main() {
     const int shift = 17; // Roughly 170Hz
 
     // Interactive SDR Controls
-    float ui_noise_floor = -50.0f;
-    float ui_gain = 40.0f;
+    float ui_noise_floor = -60.0f;
+    float ui_gain = 0.0f; // 0 dB digital gain
     static float smooth_mag[FFT_SIZE / 2] = {0};
 
     while (true) {
