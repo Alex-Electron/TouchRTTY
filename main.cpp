@@ -186,13 +186,14 @@ void core1_main() {
                     float norm = (db + ui_gain - ui_noise_floor) / 50.0f;
                     norm = std::clamp(norm, 0.0f, 1.0f); if (exp_scale) norm *= norm;
                     
-                    uint8_t r=0, g=0, b=0;
-                    if (norm < 0.25f) { b = (uint8_t)(norm * 4.0f * 255.0f); }
-                    else if (norm < 0.5f) { b = 255; g = (uint8_t)((norm - 0.25f) * 4.0f * 255.0f); }
-                    else if (norm < 0.75f) { g = 255; r = (uint8_t)((norm - 0.5f) * 4.0f * 255.0f); b = 255 - r; }
-                    else { r = 255; g = 255 - (uint8_t)((norm - 0.75f) * 4.0f * 255.0f); }
+                    uint8_t r=0, g=0, b=0; // r=visual_B, g=visual_G, b=visual_R
+                    if (norm < 0.25f) { r = (uint8_t)(norm * 4.0f * 255.0f); }
+                    else if (norm < 0.5f) { r = 255; g = (uint8_t)((norm - 0.25f) * 4.0f * 255.0f); }
+                    else if (norm < 0.75f) { g = 255; b = (uint8_t)((norm - 0.5f) * 4.0f * 255.0f); r = 255 - b; }
+                    else { b = 255; g = 255 - (uint8_t)((norm - 0.75f) * 4.0f * 255.0f); }
                     
-                    line_ptr[x] = lgfx::color565(b, g, r);
+                    uint16_t c = lgfx::color565(r, g, b); // b goes to blue physically, r goes to red physically
+                    line_ptr[x] = (c >> 8) | (c << 8); // Swap for SPI DMA
                 }
                 ili9488_push_waterfall(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer(), tune_x, half_shift);
             } else if (display_mode == 1) { 
@@ -428,9 +429,9 @@ void core0_dsp_loop() {
             memcpy((void*)shared_mag_m, tw_m, sizeof(tw_m));
             memcpy((void*)shared_mag_s, tw_s, sizeof(tw_s));
             
-            int m_bin = (int)((shared_target_freq + shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
-            int s_bin = (int)((shared_target_freq - shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
-            int search_r = 6; 
+            int m_bin = (int)((shared_target_freq - shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
+            int s_bin = (int)((shared_target_freq + shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
+            int search_r = 12; 
             
             float best_m_mag = 0, best_s_mag = 0;
             int best_m_bin = m_bin, best_s_bin = s_bin;
@@ -443,15 +444,13 @@ void core0_dsp_loop() {
             }
             
             float avg_noise = sm / (FFT_SIZE/2);
-            bool sq_strong = (best_m_mag > avg_noise * 3.0f || best_s_mag > avg_noise * 3.0f) && (shared_snr_db > 4.0f);
-            bool sq_weak = (best_m_mag < avg_noise * 2.0f && best_s_mag < avg_noise * 2.0f) || (shared_snr_db < 2.0f);
-            if (sq_strong) shared_squelch_open = true;
-            else if (sq_weak) shared_squelch_open = false;
+            // Squelch requires a basic signal level, good SNR, and clear peaks
+            shared_squelch_open = (shared_signal_db > -60.0f) && (shared_snr_db > 4.0f) && (best_m_mag > avg_noise * 2.0f || best_s_mag > avg_noise * 2.0f);
             
             if (shared_squelch_open && (best_m_mag > best_s_mag * 1.5f || best_s_mag > best_m_mag * 1.5f)) {
                 float found_m_f = best_m_bin * SAMPLE_RATE / (float)FFT_SIZE;
                 float found_s_f = best_s_bin * SAMPLE_RATE / (float)FFT_SIZE;
-                float implied_center = (best_m_mag > best_s_mag) ? (found_m_f - shift/2.0f) : (found_s_f + shift/2.0f);
+                float implied_center = (best_m_mag > best_s_mag) ? (found_m_f + shift/2.0f) : (found_s_f - shift/2.0f);
                 shared_actual_freq = shared_actual_freq * 0.9f + implied_center * 0.1f;
             } else {
                 shared_actual_freq = shared_actual_freq * 0.98f + shared_target_freq * 0.02f;
