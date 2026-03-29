@@ -129,7 +129,7 @@ void core1_main() {
                 float target_max = current_max_db;
                 if (target_max < -40.0f) target_max = -40.0f;
                 ui_noise_floor = ui_noise_floor * 0.90f + (target_max - 50.0f) * 0.10f;
-                ui_gain = ui_gain * 0.90f + 50.0f * 0.10f;
+                ui_gain = 50.0f; // Reset gain to standard 50%
             }
             
             for (int x = 0; x < 480; x++) {
@@ -143,7 +143,8 @@ void core1_main() {
                 // Use smoothed magnitude
                 float db = smooth_mag[b0] * (1.0f - frac) + smooth_mag[b1] * frac;
                 
-                float normalized = (db - ui_noise_floor) / ui_gain;
+                float span_db = 2500.0f / ui_gain; // If gain=50, span=50dB. If gain=100, span=25dB.
+                float normalized = (db - ui_noise_floor) / span_db;
                 if (normalized < 0.0f) normalized = 0.0f;
                 if (normalized > 1.0f) normalized = 1.0f;
                 
@@ -167,9 +168,9 @@ void core1_main() {
             spectrum.print("3.5 kHz");
             spectrum.setCursor(180, fft_y_offset + 5);
             if (auto_scale) {
-                spectrum.printf("AUTO | Floor: %.0fdB | Gain: %.0fdB", ui_noise_floor, ui_gain);
+                spectrum.printf("AUTO | Floor: %.0fdB | Gain: %.0f%%", ui_noise_floor, ui_gain);
             } else {
-                spectrum.printf("MANUAL | Floor: %.0fdB | Gain: %.0fdB", ui_noise_floor, ui_gain);
+                spectrum.printf("MANUAL | Floor: %.0fdB | Gain: %.0f%%", ui_noise_floor, ui_gain);
             }
 
             // Draw Markers on Spectrum Sprite
@@ -191,14 +192,13 @@ void core1_main() {
                     static uint32_t last_btn_touch = 0;
                     if (now - last_btn_touch > 500000) {
                         int btn_idx = tx / (480 / 6);
-                        if (btn_idx == 0) { ui_noise_floor -= 5.0f; auto_scale = false; }      // FL- (Lowers floor)
-                        else if (btn_idx == 1) { ui_noise_floor += 5.0f; auto_scale = false; } // FL+ (Raises floor)
-                        else if (btn_idx == 2) { ui_gain += 5.0f; auto_scale = false; }        // GN- (More gain)
-                        else if (btn_idx == 3) { ui_gain -= 5.0f; auto_scale = false; }        // GN+ (Less gain)
+                        if (btn_idx == 0) { ui_noise_floor -= 5.0f; auto_scale = false; }      // FL- 
+                        else if (btn_idx == 1) { ui_noise_floor += 5.0f; auto_scale = false; } // FL+ 
+                        else if (btn_idx == 2) { ui_gain -= 5.0f; auto_scale = false; }        // GN- (Less Gain)
+                        else if (btn_idx == 3) { ui_gain += 5.0f; auto_scale = false; }        // GN+ (More Gain)
                         else if (btn_idx == 4) { auto_scale = true; }
                         else if (btn_idx == 5) { 
                             exp_scale = !exp_scale; 
-                            ui_gain = exp_scale ? 25.0f : 50.0f; // Scale button toggles dynamic range between 25dB (steep) and 50dB (normal)
                             auto_scale = false;
                         }
                         

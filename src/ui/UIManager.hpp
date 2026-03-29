@@ -65,26 +65,19 @@ public:
             int x = i * btn_w;
             int y = 0;
             
-            // Windows 3.11 Deep 3D Button style
-            _spr_bottom.fillRect(x, y, btn_w, btn_h, WIN_BTN_FACE);
+            // Yaesu Flat Style with Rounded Corners
+            uint32_t bg_color = 0x2104U; // Dark Grey
+            uint32_t border_color = 0x8410U; // Light Grey
             
-            // Outer Highlight (Top, Left)
-            _spr_bottom.drawFastHLine(x, y, btn_w, WIN_BTN_HILITE);
-            _spr_bottom.drawFastVLine(x, y, btn_h, WIN_BTN_HILITE);
-            _spr_bottom.drawFastHLine(x+1, y+1, btn_w-2, WIN_BTN_HILITE);
-            _spr_bottom.drawFastVLine(x+1, y+1, btn_h-2, WIN_BTN_HILITE);
+            if (i == 4 && auto_scale) {
+                bg_color = 0x03E0U; // Dark Green when AUTO is active
+                border_color = 0x07E0U; // Bright Green border
+            }
             
-            // Outer Shadow (Bottom, Right)
-            _spr_bottom.drawFastHLine(x, y + btn_h - 1, btn_w, WIN_BTN_TEXT);
-            _spr_bottom.drawFastVLine(x + btn_w - 1, y, btn_h, WIN_BTN_TEXT);
-            _spr_bottom.drawFastHLine(x+1, y + btn_h - 2, btn_w-2, WIN_BTN_TEXT);
-            _spr_bottom.drawFastVLine(x + btn_w - 2, y+1, btn_h-2, WIN_BTN_TEXT);
-
-            // Inner Shadow (Bottom, Right)
-            _spr_bottom.drawFastHLine(x + 2, y + btn_h - 3, btn_w - 4, WIN_BTN_SHADOW);
-            _spr_bottom.drawFastVLine(x + btn_w - 3, y + 2, btn_h - 4, WIN_BTN_SHADOW);
+            _spr_bottom.fillRoundRect(x + 2, y + 2, btn_w - 4, btn_h - 4, 6, bg_color);
+            _spr_bottom.drawRoundRect(x + 2, y + 2, btn_w - 4, btn_h - 4, 6, border_color);
             
-            _spr_bottom.setTextColor(WIN_BTN_TEXT);
+            _spr_bottom.setTextColor(0xFFFFU); // White text
             
             char label[16];
             if (i == 4) {
