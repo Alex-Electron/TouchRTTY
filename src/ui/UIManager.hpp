@@ -5,12 +5,12 @@
 #include "../display/ili9341_test.h"
 #include "../version.h"
 
-// Hardcoded Palette (Yellow Spectrum on Blue Background)
-static constexpr uint32_t PAL_BG = 0x000033U;
-static constexpr uint32_t PAL_GRID = 0x003366U;
-static constexpr uint32_t PAL_WAVE = 0xFFFF00U; // Yellow wave
-static constexpr uint32_t PAL_PEAK = 0xFFFF00U; // Yellow peak
-static constexpr uint32_t PAL_TEXT = 0xFFFFFFU; // White text
+// Hardcoded Palette (Yellow on Blue - R and B channels swapped for Mode 11 quirk)
+static constexpr uint32_t PAL_BG = 0x330000U; // Renders as Dark Blue
+static constexpr uint32_t PAL_GRID = 0x663300U; // Renders as Blue-Grey
+static constexpr uint32_t PAL_WAVE = 0x00FFFFU; // Renders as Yellow
+static constexpr uint32_t PAL_PEAK = 0x00FFFFU; // Renders as Yellow
+static constexpr uint32_t PAL_TEXT = 0xFFFFFFU; // White // White text
 
 #define UI_TOP_BAR_H   48
 #define UI_DSP_ZONE_H  112
@@ -69,15 +69,15 @@ public:
         _spr_top.setTextDatum(middle_left); _spr_top.setTextColor(COLOR_TEXT, COLOR_BG); _spr_top.setFont(&fonts::Font2);
         _spr_top.drawString("SIG", 5, 12); _spr_top.drawRect(40, 5, 120, 14, COLOR_GRID);
         int lw = (int)((signal_db+80)*(120/70.0f)); if(lw<0) lw=0; if(lw>120) lw=120;
-        _spr_top.fillRect(40, 5, lw, 14, (signal_db > -30.0f) ? 0xFF0000U : 0x00FF00U);
+        _spr_top.fillRect(40, 5, lw, 14, (signal_db > -30.0f) ? 0x0000FFU : 0x00FF00U);
         char buf[32]; snprintf(buf, sizeof(buf), "%3.0f dB", signal_db); _spr_top.drawString(buf, 165, 12);
         
         if (clipping) { 
-            _spr_top.fillRoundRect(225, 2, 50, 20, 4, 0xFF0000U); 
+            _spr_top.fillRoundRect(225, 2, 50, 20, 4, 0x0000FFU); 
             _spr_top.setTextColor(0xFFFFFFU); _spr_top.setTextDatum(middle_center); 
             _spr_top.drawString("CLIP", 250, 12); _spr_top.setTextDatum(middle_left); 
         } else { 
-            _spr_top.setTextColor(0xFFFF00U, COLOR_BG); snprintf(buf, sizeof(buf), "MRK:%4.0fHz", marker_freq); 
+            _spr_top.setTextColor(0x00FFFFU, COLOR_BG); snprintf(buf, sizeof(buf), "MRK:%4.0fHz", marker_freq); 
             _spr_top.drawString(buf, 225, 12); 
         }
         
@@ -101,7 +101,7 @@ public:
         if (norm_err > 1.0f) norm_err = 1.0f;
         int nx = meter_x + 30 + (int)(norm_err * 30);
 
-        uint32_t nc = (abs(err) < 0.05f) ? 0x00FF00U : 0xFF0000U; // Green if good, Red if bad
+        uint32_t nc = (abs(err) < 0.05f) ? 0x00FF00U : 0x0000FFU; // Green if good, Red if bad
         _spr_top.fillTriangle(nx, meter_y+4, nx-3, meter_y-2, nx+3, meter_y-2, nc); 
         _spr_top.fillTriangle(nx, meter_y+4, nx-3, meter_y+10, nx+3, meter_y+10, nc);
 
