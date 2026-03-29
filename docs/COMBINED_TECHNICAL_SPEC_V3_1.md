@@ -67,6 +67,10 @@ To achieve professional-grade SDR waterfall performance, the system utilizes a c
 | T_CS         | GPIO 15     | 20           | Chip Select for Touch Controller |
 | SD_CS (SCS)  | GPIO 13     | 17           | Chip Select for SD Card Reader |
 | T_IRQ        | GPIO 14     | 19           | Touch Interrupt (Requires internal `gpio_pull_up(14)`) |
+| **Hardware Expansion (Reserved)**| | | |
+| Enc A        | GPIO 2      | 4            | Rotary Encoder Phase A |
+| Enc B        | GPIO 3      | 5            | Rotary Encoder Phase B |
+| Enc SW       | GPIO 4      | 6            | Rotary Encoder Push Button |
 | **Power (CRITICAL)**|        |              | |
 | VCC/VDD      | VBUS (5V)   | 40           | **MUST be 5V** (Module has onboard 662K 3.3V LDO) |
 | LED (BL)     | 3.3V(OUT)   | 36           | Connect directly or via 10-47Ω resistor for backlight |
@@ -93,16 +97,17 @@ To combat this, the UI loop implements a multi-stage noise rejection algorithm:
 - **Top (16px):** Status Bar (Baud, Shift, SNR).
 - **Middle (128px):** Waterfall (FFT Scope, 300Hz - 3300Hz). Width expanded to 480px.
 - **Middle (16px):** Signal Info Panel (Live Frequencies, Mark/Space Levels).
-- **Bottom (128px):** Decoded Text Area.
+- **Bottom (128px):** Decoded Text Area. Features fast, hardware-accelerated touch-scrolling (swipe up/down) to review history effortlessly.
 - **Bottom (32px):** Toolbar (TUNE, AFC, Speed, Menu).
 
-### 3.2 The Three Markers (Mark, Space, Center)
-- **Visuals:** Space (Cyan Line), Center (White Dashed Line), Mark (Yellow Line). Green tinted blend area between Space and Mark.
-- **Interactions (The "Smart Tap"):**
+### 3.2 Interactions & Gestures
+- **The "Smart Tap":**
   1. User taps anywhere near a visible signal on the waterfall.
   2. System searches for the nearest peak.
   3. System automatically searches for a secondary peak at common shift intervals (170Hz, 425Hz, 850Hz).
   4. Markers snap to the found pair automatically.
+- **Text Scrolling:** Vertical swipe gestures within the Decoded Text Area enable rapid scrolling through historical received text.
+- **Hardware Controls:** A rotary encoder (reserved on GPIO 2, 3, 4) will provide a tactile alternative for fine-tuning frequencies and navigating menus.
 
 ### 3.3 TUNE Algorithm (Parabolic Interpolation)
 To achieve sub-Hz precision from a coarse FFT (e.g., 20Hz/bin):
