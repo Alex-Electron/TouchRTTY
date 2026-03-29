@@ -88,15 +88,9 @@ public:
             
             char label[16];
             if (i == 4) {
-                // Just 'AUTO' with a visual state indicator (e.g. green text or asterisk if active)
-                if (auto_scale) {
-                    _spr_bottom.setTextColor(COLOR_GOOD);
-                    snprintf(label, sizeof(label), "* AUTO *");
-                } else {
-                    snprintf(label, sizeof(label), "AUTO");
-                }
+                snprintf(label, sizeof(label), "AUTO");
             } else if (i == 5) {
-                snprintf(label, sizeof(label), "SCL: %s", exp_scale ? "25" : "50");
+                snprintf(label, sizeof(label), "SCL: %s", exp_scale ? "EXP" : "LIN");
             } else {
                 snprintf(label, sizeof(label), "%s", labels[i]);
             }

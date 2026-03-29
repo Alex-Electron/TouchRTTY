@@ -187,23 +187,27 @@ void core1_main() {
                 if (ty >= UI_Y_DSP && ty <= (UI_Y_DSP + UI_DSP_ZONE_H)) {
                     tune_x = tx;
                 } else if (ty > UI_Y_BOTTOM) {
-                    // Button row clicked
-                    int btn_idx = tx / (480 / 6);
-                    if (btn_idx == 0) { ui_noise_floor -= 5.0f; auto_scale = false; }      // FL- (Lowers floor)
-                    else if (btn_idx == 1) { ui_noise_floor += 5.0f; auto_scale = false; } // FL+ (Raises floor)
-                    else if (btn_idx == 2) { ui_gain += 5.0f; auto_scale = false; }        // GN- (More gain)
-                    else if (btn_idx == 3) { ui_gain -= 5.0f; auto_scale = false; }        // GN+ (Less gain)
-                    else if (btn_idx == 4) { auto_scale = true; }
-                    else if (btn_idx == 5) { 
-                        exp_scale = !exp_scale; 
-                        ui_gain = exp_scale ? 25.0f : 50.0f; // Scale button toggles dynamic range between 25dB (steep) and 50dB (normal)
-                        auto_scale = false;
+                    // Button row clicked (with 500ms debounce to prevent bouncing)
+                    static uint32_t last_btn_touch = 0;
+                    if (now - last_btn_touch > 500000) {
+                        int btn_idx = tx / (480 / 6);
+                        if (btn_idx == 0) { ui_noise_floor -= 5.0f; auto_scale = false; }      // FL- (Lowers floor)
+                        else if (btn_idx == 1) { ui_noise_floor += 5.0f; auto_scale = false; } // FL+ (Raises floor)
+                        else if (btn_idx == 2) { ui_gain += 5.0f; auto_scale = false; }        // GN- (More gain)
+                        else if (btn_idx == 3) { ui_gain -= 5.0f; auto_scale = false; }        // GN+ (Less gain)
+                        else if (btn_idx == 4) { auto_scale = true; }
+                        else if (btn_idx == 5) { 
+                            exp_scale = !exp_scale; 
+                            ui_gain = exp_scale ? 25.0f : 50.0f; // Scale button toggles dynamic range between 25dB (steep) and 50dB (normal)
+                            auto_scale = false;
+                        }
+                        
+                        if (ui_gain < 5.0f) ui_gain = 5.0f;
+                        
+                        // Redraw the bottom bar to update the ON/OFF and SCL texts
+                        ui.drawBottomBar(auto_scale, exp_scale);
+                        last_btn_touch = now;
                     }
-                    
-                    if (ui_gain < 5.0f) ui_gain = 5.0f;
-                    
-                    // Redraw the bottom bar to update the ON/OFF and SCL texts
-                    ui.drawBottomBar(auto_scale, exp_scale);
                 }
             }
             last_touch = now;
