@@ -15,6 +15,7 @@
 #include "src/display/ili9341_test.h"
 #include "src/dsp/fft.hpp"
 #include "src/dsp/biquad.hpp"
+#include "src/dsp/dpll_framer.hpp"
 #include "src/ui/UIManager.hpp"
 #include "src/version.h"
 
@@ -23,6 +24,7 @@
 
 volatile float shared_fft_mag[FFT_SIZE / 2];
 volatile float shared_adc_waveform[480];
+volatile float shared_fft_ts[FFT_SIZE];
 volatile bool new_data_ready = false;
 volatile float shared_adc_v = 0.0f;
 volatile float shared_signal_db = -80.0f;
@@ -36,6 +38,16 @@ volatile float shared_mag_s[480];
 
 volatile char rtty_new_char = 0;
 volatile bool rtty_char_ready = false;
+volatile bool shared_err_flag = false;
+volatile bool shared_figs_flag = false;
+volatile bool shared_ltrs_flag = false;
+
+volatile float shared_diag_adc_min = 4096.0f;
+volatile float shared_diag_adc_max = 0.0f;
+volatile float shared_atc_m = 0.0f;
+volatile float shared_atc_s = 0.0f;
+volatile float shared_dpll_phase = 0.0f;
+volatile bool shared_diag_ready = false;
 
 volatile float shared_target_freq = 1535.0f;
 volatile float shared_actual_freq = 1535.0f;
@@ -132,6 +144,7 @@ void core1_main() {
     int display_mode = 0;
     bool show_palette = false;
     
+    const float bauds[] = {45.45f, 50.0f, 75.0f};
     const float shifts[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
     const float stop_bits[] = {1.0f, 1.5f, 2.0f};
     
@@ -143,10 +156,12 @@ void core1_main() {
     const int bin_start = 5, bin_end = 358;
     const float bin_per_pixel = (float)(bin_end - bin_start) / 480.0f;
     uint32_t last_touch = time_us_32(), last_ui_update = time_us_32(), frame_count = 0;
-    float local_mag[FFT_SIZE / 2], local_wave[480], local_mag_m[480], local_mag_s[480];
+    float local_mag[FFT_SIZE / 2], local_wave[480], local_mag_m[480], local_mag_s[480], local_ts[FFT_SIZE];
     int16_t tune_x = 240;
     float ui_noise_floor = -60.0f, ui_gain = 0.0f;
     static float smooth_mag[FFT_SIZE / 2] = {0};
+    
+    static SimpleFFT fft; static float real[FFT_SIZE], imag[FFT_SIZE], mag[FFT_SIZE/2];
 
     uint32_t c1_total_work = 0;
     uint32_t c1_last_measure = time_us_32();
@@ -156,8 +171,26 @@ void core1_main() {
         handle_serial_commands();
 
         if (rtty_char_ready) {
-            ui.addRTTYChar((char)rtty_new_char, !show_palette);
+            char c = rtty_new_char;
+            ui.addRTTYChar(c, !show_palette);
             rtty_char_ready = false;
+            printf("%c", c);
+        }
+        
+        if (shared_err_flag) { shared_err_flag = false; printf("[ERR]"); }
+        if (shared_figs_flag) { shared_figs_flag = false; printf("[FIGS]"); }
+        if (shared_ltrs_flag) { shared_ltrs_flag = false; printf("[LTRS]"); }
+
+        if (shared_diag_ready) {
+            shared_diag_ready = false;
+            printf("\n--- TUNING DIAGNOSTICS (B153) ---\n");
+            printf("Step 1 (ADC): V=%.2fV (Range: %.0f-%.0f)\n", shared_adc_v, shared_diag_adc_min, shared_diag_adc_max);
+            printf("Step 2 (ATC Level): Mark_Env=%.4f Space_Env=%.4f\n", shared_atc_m, shared_atc_s);
+            printf("Step 3 (FFT Peaks): SNR=%.1f dB, Signal=%.1f dB\n", shared_snr_db, shared_signal_db);
+            printf("Step 4 (RTTY Status): Squelch=%s DPLL_Phase=%.2f\n", shared_squelch_open ? "OPEN" : "SHUT", shared_dpll_phase);
+            float b = bauds[shared_baud_idx];
+            printf("Params: Baud=%.2f ALPHA=%.4f K=%.2f SQ=%.1f\n", b, tuning_dpll_alpha, tuning_lpf_k, tuning_sq_snr);
+            printf("---------------------------------\n");
         }
 
         float bin_idx = shared_actual_freq / (SAMPLE_RATE / (float)FFT_SIZE);
@@ -178,14 +211,59 @@ void core1_main() {
         }
         
         if (new_data_ready) {
-            frame_count++; 
-            memcpy(local_mag, (void*)shared_fft_mag, sizeof(local_mag)); 
+            // ---- PERFORM FFT EXCLUSIVELY ON CORE 1 TO PREVENT CORE 0 TIMING JITTER ----
+            memcpy(local_ts, (void*)shared_fft_ts, sizeof(local_ts));
             memcpy(local_wave, (void*)shared_adc_waveform, sizeof(local_wave)); 
             memcpy(local_mag_m, (void*)shared_mag_m, sizeof(local_mag_m));
             memcpy(local_mag_s, (void*)shared_mag_s, sizeof(local_mag_s));
             new_data_ready = false;
             
-            for (int i = 0; i < FFT_SIZE / 2; i++) smooth_mag[i] = smooth_mag[i] * 0.7f + local_mag[i] * 0.3f;
+            float sq=0.0f; for(int i=0; i<FFT_SIZE; i++) sq+=local_ts[i]*local_ts[i];
+            shared_signal_db = 10.0f*log10f((sq/FFT_SIZE)+1e-10f);
+            
+            memcpy(real, local_ts, sizeof(local_ts)); memset(imag, 0, sizeof(imag));
+            fft.apply_window(real); fft.compute(real, imag); fft.calc_magnitude(real, imag, mag);
+            
+            float pk=-100.0f, sm=0.0f; for(int i=0; i<FFT_SIZE/2; i++) { if(mag[i]>pk) pk=mag[i]; sm+=mag[i]; }
+            shared_snr_db = pk - (sm/(FFT_SIZE/2)); 
+            
+            float shift = shifts[shared_shift_idx];
+            int m_bin = (int)((shared_target_freq - shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
+            int s_bin = (int)((shared_target_freq + shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
+            int search_r = 12; 
+            
+            float best_m_mag = 0, best_s_mag = 0;
+            int best_m_bin = m_bin, best_s_bin = s_bin;
+            
+            for(int i = m_bin - search_r; i <= m_bin + search_r; i++) {
+                if (i>0 && i<FFT_SIZE/2 && mag[i] > best_m_mag) { best_m_mag = mag[i]; best_m_bin = i; }
+            }
+            for(int i = s_bin - search_r; i <= s_bin + search_r; i++) {
+                if (i>0 && i<FFT_SIZE/2 && mag[i] > best_s_mag) { best_s_mag = mag[i]; best_s_bin = i; }
+            }
+            
+            float avg_noise = sm / (FFT_SIZE/2);
+            bool sq_strong = (best_m_mag > avg_noise * 2.0f || best_s_mag > avg_noise * 2.0f) && (shared_snr_db > tuning_sq_snr);
+            bool sq_weak = (best_m_mag < avg_noise * 1.2f && best_s_mag < avg_noise * 1.2f) || (shared_snr_db < 1.0f);
+            
+            if (shared_signal_db < -65.0f) shared_squelch_open = false; // Hard noise floor
+            else if (sq_strong) shared_squelch_open = true;
+            else if (sq_weak) shared_squelch_open = false;
+            
+            if (shared_squelch_open && (best_m_mag > best_s_mag * 1.5f || best_s_mag > best_m_mag * 1.5f)) {
+                float found_m_f = best_m_bin * SAMPLE_RATE / (float)FFT_SIZE;
+                float found_s_f = best_s_bin * SAMPLE_RATE / (float)FFT_SIZE;
+                float implied_center = (best_m_mag > best_s_mag) ? (found_m_f + shift/2.0f) : (found_s_f - shift/2.0f);
+                shared_actual_freq = shared_actual_freq * 0.9f + implied_center * 0.1f;
+            } else {
+                shared_actual_freq = shared_actual_freq * 0.98f + shared_target_freq * 0.02f;
+            }
+            
+            // --- END FFT/AFC CORE 1 PROCESSING ---
+            
+            frame_count++;
+            
+            for (int i = 0; i < FFT_SIZE / 2; i++) smooth_mag[i] = smooth_mag[i] * 0.7f + mag[i] * 0.3f;
             
             if (auto_scale) {
                 float peak_db = -100.0f;
@@ -308,15 +386,13 @@ void core0_dsp_loop() {
         cos_table[i] = cosf(2.0f * (float)M_PI * i / 1024.0f);
     }
     
-    static SimpleFFT fft; static float ts[FFT_SIZE], real[FFT_SIZE], imag[FFT_SIZE], mag[FFT_SIZE/2], tw[480], tw_m[480], tw_s[480], fb[63]={0};
+    static float ts[FFT_SIZE], tw[480], tw_m[480], tw_s[480], fb[63]={0};
     int sc=0, wi=0, fi=0; adc_init(); adc_gpio_init(ADC_PIN); adc_select_input(0);
     float dc=0.0f;
     
     float phase_m = 0, phase_s = 0;
-    
     Biquad lp_mi, lp_mq, lp_si, lp_sq;
     float current_baud = -1.0f;
-    
     float atc_mark_env = 0.01f, atc_space_env = 0.01f;
     
     // Diagnostics
@@ -334,6 +410,8 @@ void core0_dsp_loop() {
     const float shifts_hz[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
     const float bauds[] = {45.45f, 50.0f, 75.0f};
     
+    uint32_t next_sample_time = time_us_32();
+
     while(true) {
         if (shared_clear_dsp) {
             shared_clear_dsp = false;
@@ -346,8 +424,9 @@ void core0_dsp_loop() {
             shared_squelch_open = false;
             last_d_sign = true;
         }
-        
-        uint32_t st = time_us_32(); uint16_t rv = adc_read();
+
+        uint32_t st = time_us_32(); 
+        uint16_t rv = adc_read();
         
         if (rv < diag_adc_min) diag_adc_min = rv;
         if (rv > diag_adc_max) diag_adc_max = rv;
@@ -360,6 +439,8 @@ void core0_dsp_loop() {
         
         float baud = bauds[shared_baud_idx];
         static float current_k = -1.0f;
+        float stop_bits_expected = (shared_stop_idx == 0) ? 1.0f : ((shared_stop_idx == 1) ? 1.5f : 2.0f);
+        
         if (baud != current_baud || tuning_lpf_k != current_k) {
             current_baud = baud;
             current_k = tuning_lpf_k;
@@ -372,8 +453,8 @@ void core0_dsp_loop() {
         float fm = shared_actual_freq - shift / 2.0f;
         float fs = shared_actual_freq + shift / 2.0f;
         
-        phase_m += fm / SAMPLE_RATE; if(phase_m >= 1.0f) phase_m -= 1.0f;
-        phase_s += fs / SAMPLE_RATE; if(phase_s >= 1.0f) phase_s -= 1.0f;
+        phase_m += fm * 0.0001f; if(phase_m >= 1.0f) phase_m -= 1.0f;
+        phase_s += fs * 0.0001f; if(phase_s >= 1.0f) phase_s -= 1.0f;
         int idx_m = (int)(phase_m * 1024) % 1024;
         int idx_s = (int)(phase_s * 1024) % 1024;
         
@@ -408,22 +489,29 @@ void core0_dsp_loop() {
         bool d_sign = (D > 0);
         
         float phase_inc = baud / SAMPLE_RATE;
-        float stop_bits_expected = (shared_stop_idx == 0) ? 1.0f : ((shared_stop_idx == 1) ? 1.5f : 2.0f);
+        static float freq_error = 0.0f;
+        float dpll_beta = tuning_dpll_alpha * tuning_dpll_alpha / 2.0f;
         
         if (!shared_squelch_open) {
             baudot_state = 0;
             last_d_sign = true; 
+            freq_error = 0.0f;
         } else {
-            // Edge detection (zero crossing) for synchronization
+            // Full PI loop DPLL
             if (d_sign != last_d_sign) {
                 if (baudot_state > 0) {
-                    float err = symbol_phase;
-                    if (err > 0.5f) err -= 1.0f; // Late
-                    symbol_phase -= tuning_dpll_alpha * err; // Nudge PLL 
+                    float phase_error;
+                    if (symbol_phase < 0.5f) phase_error = symbol_phase;
+                    else phase_error = symbol_phase - 1.0f;
+                    
+                    phase_error = fmaxf(-0.1f, fminf(0.1f, phase_error));
+                    symbol_phase -= tuning_dpll_alpha * phase_error; 
+                    freq_error -= dpll_beta * phase_error;
+                    freq_error = fmaxf(-0.05f, fminf(0.05f, freq_error));
                 } else if (!d_sign) { 
                     // Transition to space = start bit
                     baudot_state = 1;
-                    symbol_phase = 0.0f; // Start integrating from the exact beginning of the bit
+                    symbol_phase = 0.0f; 
                     integrate_acc = 0.0f;
                     current_char = 0;
                 }
@@ -431,7 +519,7 @@ void core0_dsp_loop() {
             last_d_sign = d_sign;
             
             if (baudot_state > 0) {
-                symbol_phase += phase_inc;
+                symbol_phase += phase_inc + freq_error; // Add the accumulated frequency error!
                 integrate_acc += D; 
                 
                 if (symbol_phase >= 1.0f) {
@@ -448,25 +536,24 @@ void core0_dsp_loop() {
                     } else if (baudot_state == 7) { 
                         if (bit) { // Valid stop
                             char decoded = '\0';
-                            if (current_char == 27) { is_figs = true; printf("[FIGS]"); }
-                            else if (current_char == 31) { is_figs = false; printf("[LTRS]"); }
+                            if (current_char == 27) { is_figs = true; shared_figs_flag = true; }
+                            else if (current_char == 31) { is_figs = false; shared_ltrs_flag = true; }
                             else {
                                 decoded = is_figs ? ita2_figs[current_char] : ita2_ltrs[current_char];
-                                if (decoded == ' ') is_figs = false; // Unshift on space (fldigi)
+                                if (decoded == ' ') is_figs = false; // Unshift on space
                                 if (decoded != '\0') {
                                     rtty_new_char = decoded;
                                     rtty_char_ready = true;
-                                    printf("%c", decoded); 
                                 }
                             }
                         } else {
-                            printf("[ERR]"); // Framing error
+                            shared_err_flag = true; // Framing error
                         }
                         
                         // For tight 1.0 stop bits, if we are ALREADY in Space, a new start bit has begun!
                         if (stop_bits_expected <= 1.0f && !d_sign) {
                             baudot_state = 1;
-                            symbol_phase = 0.5f; // Center sampling
+                            symbol_phase = 0.0f; // Exact start of bit!
                             integrate_acc = D;
                             current_char = 0;
                         } else {
@@ -478,65 +565,24 @@ void core0_dsp_loop() {
         }
         
         if(sc==FFT_SIZE) {
-            float sq=0.0f; for(int i=0; i<FFT_SIZE; i++) sq+=ts[i]*ts[i];
-            shared_signal_db = 10.0f*log10f((sq/FFT_SIZE)+1e-10f);
-            memcpy(real, ts, sizeof(ts)); memset(imag, 0, sizeof(imag));
-            fft.apply_window(real); fft.compute(real, imag); fft.calc_magnitude(real, imag, mag);
-            float pk=-100.0f, sm=0.0f; for(int i=0; i<FFT_SIZE/2; i++) { if(mag[i]>pk) pk=mag[i]; sm+=mag[i]; }
-            shared_snr_db = pk - (sm/(FFT_SIZE/2)); 
-            
-            memcpy((void*)shared_fft_mag, mag, sizeof(mag)); 
+            // PASS TO CORE 1 AND DO NOT BLOCK HERE
+            memcpy((void*)shared_fft_ts, ts, sizeof(ts)); 
             memcpy((void*)shared_adc_waveform, tw, sizeof(tw));
             memcpy((void*)shared_mag_m, tw_m, sizeof(tw_m));
             memcpy((void*)shared_mag_s, tw_s, sizeof(tw_s));
+            new_data_ready=true; 
             
-            int m_bin = (int)((shared_target_freq - shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
-            int s_bin = (int)((shared_target_freq + shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
-            int search_r = 12; 
-            
-            float best_m_mag = 0, best_s_mag = 0;
-            int best_m_bin = m_bin, best_s_bin = s_bin;
-            
-            for(int i = m_bin - search_r; i <= m_bin + search_r; i++) {
-                if (i>0 && i<FFT_SIZE/2 && mag[i] > best_m_mag) { best_m_mag = mag[i]; best_m_bin = i; }
-            }
-            for(int i = s_bin - search_r; i <= s_bin + search_r; i++) {
-                if (i>0 && i<FFT_SIZE/2 && mag[i] > best_s_mag) { best_s_mag = mag[i]; best_s_bin = i; }
-            }
-            
-            float avg_noise = sm / (FFT_SIZE/2);
-            // Relaxed squelch with hysteresis for 75 Baud
-            bool sq_strong = (best_m_mag > avg_noise * 2.0f || best_s_mag > avg_noise * 2.0f) && (shared_snr_db > tuning_sq_snr);
-            bool sq_weak = (best_m_mag < avg_noise * 1.2f && best_s_mag < avg_noise * 1.2f) || (shared_snr_db < 1.0f);
-            
-            if (shared_signal_db < -65.0f) shared_squelch_open = false; // Hard noise floor
-            else if (sq_strong) shared_squelch_open = true;
-            else if (sq_weak) shared_squelch_open = false;
-            
-            if (shared_squelch_open && (best_m_mag > best_s_mag * 1.5f || best_s_mag > best_m_mag * 1.5f)) {
-                float found_m_f = best_m_bin * SAMPLE_RATE / (float)FFT_SIZE;
-                float found_s_f = best_s_bin * SAMPLE_RATE / (float)FFT_SIZE;
-                float implied_center = (best_m_mag > best_s_mag) ? (found_m_f + shift/2.0f) : (found_s_f - shift/2.0f);
-                shared_actual_freq = shared_actual_freq * 0.9f + implied_center * 0.1f;
-            } else {
-                shared_actual_freq = shared_actual_freq * 0.98f + shared_target_freq * 0.02f;
-            }
-            
-            new_data_ready=true; wi=0; memmove(ts, &ts[480], (FFT_SIZE-480)*sizeof(float)); sc=FFT_SIZE-480;
+            wi=0; memmove(ts, &ts[480], (FFT_SIZE-480)*sizeof(float)); sc=FFT_SIZE-480;
             
             static int diag_timer = 0;
             if (++diag_timer >= 10) { // Approx 500ms
                 diag_timer = 0;
-                float m_avg = sqrtf(diag_m_pow / diag_samples);
-                float s_avg = sqrtf(diag_s_pow / diag_samples);
-                printf("\n--- TUNING DIAGNOSTICS (B146) ---\n");
-                printf("Step 1 (ADC): V=%.2fV (Range: %.0f-%.0f)\n", shared_adc_v, diag_adc_min, diag_adc_max);
-                printf("Step 2 (ATC Level): Mark_Env=%.4f Space_Env=%.4f\n", atc_mark_env, atc_space_env);
-                printf("Step 3 (FFT Peaks): Mark_Mag=%.1f Space_Mag=%.1f Noise=%.1f\n", best_m_mag, best_s_mag, avg_noise);
-                printf("Step 4 (RTTY Status): Squelch=%s DPLL_Phase=%.2f\n", shared_squelch_open ? "OPEN" : "SHUT", symbol_phase);
-                printf("Step 5/6 (AFC & SNR): SNR=%.1f dB, Signal=%.1f dB\n", shared_snr_db, shared_signal_db);
-                printf("Params: Baud=%.2f ALPHA=%.4f K=%.2f SQ=%.1f\n", current_baud, tuning_dpll_alpha, tuning_lpf_k, tuning_sq_snr);
-                printf("---------------------------------\n");
+                shared_diag_adc_min = diag_adc_min;
+                shared_diag_adc_max = diag_adc_max;
+                shared_atc_m = atc_mark_env;
+                shared_atc_s = atc_space_env;
+                shared_dpll_phase = symbol_phase;
+                shared_diag_ready = true;
                 
                 diag_adc_min = 4096.0f; diag_adc_max = 0.0f;
                 diag_m_pow = 0.0f; diag_s_pow = 0.0f;
@@ -552,7 +598,8 @@ void core0_dsp_loop() {
             shared_core0_load = (total_work * 100.0f) / total_time; 
             total_work = 0; total_time = 0; 
         }
-        while(time_us_32()-st < 100) tight_loop_contents();
+        next_sample_time += 100;
+        while(time_us_32() < next_sample_time) tight_loop_contents();
     }
 }
 
