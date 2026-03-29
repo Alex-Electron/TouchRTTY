@@ -1,6 +1,7 @@
 #include "ili9341_test.h"
 #include "ili9488_spi.pio.h"
 #include "pico/time.h"
+#include <stdlib.h>
 
 static int dma_chan;
 static dma_channel_config dma_conf;
@@ -206,4 +207,55 @@ void ili9488_draw_hline(uint16_t x, uint16_t y, uint16_t w, uint16_t color) {
 }
 void ili9488_draw_vline(uint16_t x, uint16_t y, uint16_t h, uint16_t color) {
     ili9488_draw_rect(x, y, 1, h, color);
+}
+
+void ili9488_draw_pixel(uint16_t x, uint16_t y, uint16_t color) {
+    ili9488_draw_rect(x, y, 1, 1, color);
+}
+
+void ili9488_draw_line(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint16_t color) {
+    int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1; 
+    int err = dx + dy, e2; 
+ 
+    for(;;) {
+        ili9488_draw_pixel(x0, y0, color);
+        if (x0 == x1 && y0 == y1) break;
+        e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+void ili9488_draw_circle(uint16_t x0, uint16_t y0, uint16_t r, uint16_t color) {
+    int f = 1 - r;
+    int ddF_x = 1;
+    int ddF_y = -2 * r;
+    int x = 0;
+    int y = r;
+ 
+    ili9488_draw_pixel(x0, y0 + r, color);
+    ili9488_draw_pixel(x0, y0 - r, color);
+    ili9488_draw_pixel(x0 + r, y0, color);
+    ili9488_draw_pixel(x0 - r, y0, color);
+ 
+    while (x < y) {
+        if (f >= 0) {
+            y--;
+            ddF_y += 2;
+            f += ddF_y;
+        }
+        x++;
+        ddF_x += 2;
+        f += ddF_x;
+  
+        ili9488_draw_pixel(x0 + x, y0 + y, color);
+        ili9488_draw_pixel(x0 - x, y0 + y, color);
+        ili9488_draw_pixel(x0 + x, y0 - y, color);
+        ili9488_draw_pixel(x0 - x, y0 - y, color);
+        ili9488_draw_pixel(x0 + y, y0 + x, color);
+        ili9488_draw_pixel(x0 - y, y0 + x, color);
+        ili9488_draw_pixel(x0 + y, y0 - x, color);
+        ili9488_draw_pixel(x0 - y, y0 - x, color);
+    }
 }
