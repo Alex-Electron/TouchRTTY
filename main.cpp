@@ -69,10 +69,13 @@ void core1_main() {
     bool auto_scale = true, exp_scale = true;
     bool menu_mode = false;
     int display_mode = 0; // 0=WF, 1=SPEC, 2=OSC
-    int waterfall_speed = 1;
     bool show_palette = false;
     
-    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, waterfall_speed, show_palette);
+    int rtty_baud_idx = 0; // 0=45, 1=50, 2=75
+    int rtty_shift_idx = 0; // 0=170, 1=200, 2=425, 3=850
+    const float shifts[] = {170.0f, 200.0f, 425.0f, 850.0f};
+    
+    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, show_palette, rtty_baud_idx, rtty_shift_idx);
     ui.drawInfo(show_palette);
 
     LGFX_Sprite spectrum(&tft); spectrum.setColorDepth(16); spectrum.createSprite(480, UI_DSP_ZONE_H);
@@ -83,7 +86,6 @@ void core1_main() {
     uint32_t last_touch = time_us_32(), last_ui_update = time_us_32(), frame_count = 0;
     float local_mag[FFT_SIZE / 2], local_wave[480];
     int16_t tune_x = 240;
-    float rtty_shift_hz = 170.0f;
     float ui_noise_floor = -60.0f, ui_gain = 0.0f;
     static float smooth_mag[FFT_SIZE / 2] = {0};
 
@@ -96,9 +98,14 @@ void core1_main() {
 
         if (now - last_ui_update > 500000) {
             uint32_t fps = frame_count * 2; frame_count = 0; last_ui_update = now;
-            float marker_freq = (bin_start + (tune_x / 480.0f) * (bin_end - bin_start)) * (SAMPLE_RATE / (float)FFT_SIZE);
+            float hz_px = ((bin_end-bin_start)*(SAMPLE_RATE/(float)FFT_SIZE))/480.0f;
+            int shift_px = (int)(shifts[rtty_shift_idx]/hz_px);
+            int half_shift = shift_px / 2;
+            
+            float m_freq = (bin_start + ((tune_x - half_shift) / 480.0f) * (bin_end - bin_start)) * (SAMPLE_RATE / (float)FFT_SIZE);
+            float s_freq = (bin_start + ((tune_x + half_shift) / 480.0f) * (bin_end - bin_start)) * (SAMPLE_RATE / (float)FFT_SIZE);
             bool is_clipping = shared_adc_clipping; shared_adc_clipping = false; 
-            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, marker_freq, is_clipping, shared_core0_load, shared_core1_load);
+            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load);
         }
         
         if (new_data_ready) {
@@ -117,7 +124,7 @@ void core1_main() {
             }
             
             float hz_px = ((bin_end-bin_start)*(SAMPLE_RATE/(float)FFT_SIZE))/480.0f;
-            int shift_px = (int)(rtty_shift_hz/hz_px);
+            int shift_px = (int)(shifts[rtty_shift_idx]/hz_px);
             int half_shift = shift_px / 2;
             
             int m_x = tune_x - half_shift;
@@ -131,44 +138,26 @@ void core1_main() {
             marker_spr.fillTriangle(m_x, 13, m_x - 5, 5, m_x + 5, 5, 0x00FFFFU); // Cyan hex -> Yellow Visual (Space)
             marker_spr.fillTriangle(s_x, 13, s_x - 5, 5, s_x + 5, 5, 0xFFFF00U); // Yellow hex -> Cyan Visual (Mark)
             
-            float m_freq = (bin_start + (m_x / 480.0f) * (bin_end - bin_start)) * (SAMPLE_RATE / (float)FFT_SIZE);
-            float s_freq = (bin_start + (s_x / 480.0f) * (bin_end - bin_start)) * (SAMPLE_RATE / (float)FFT_SIZE);
-            
-            char mbuf[16], sbuf[16];
-            snprintf(mbuf, sizeof(mbuf), "M %.0f", m_freq);
-            snprintf(sbuf, sizeof(sbuf), "S %.0f", s_freq);
-            
-            marker_spr.setTextColor(0xFFFFFFU);
-            marker_spr.setTextDatum(top_center);
-            marker_spr.setFont(&fonts::Font0); // Tiny font to fit within 14px
-            
-            // Prevent text from clipping off screen edges
-            int m_tx = std::clamp(m_x, 20, 460);
-            int s_tx = std::clamp(s_x, 20, 460);
-            
-            marker_spr.drawString(mbuf, m_tx, 0);
-            marker_spr.drawString(sbuf, s_tx, 0);
-            
             ili9488_push_colors(0, UI_Y_MARKER, 480, UI_MARKER_H, (uint16_t*)marker_spr.getBuffer());
             // ---------------------------------------
 
             if (display_mode == 0) { // Waterfall
-                if (frame_count % waterfall_speed == 0) {
-                    spectrum.scroll(0, 1);
-                    for (int x = 0; x < 480; x++) {
-                        float eb = bin_start + x * bin_per_pixel; int b0 = (int)eb; float db = smooth_mag[b0] * (1.0f-(eb-b0)) + smooth_mag[std::min(b0+1,FFT_SIZE/2-1)] * (eb-b0);
-                        float norm = (db + ui_gain - ui_noise_floor) / 50.0f;
-                        norm = std::clamp(norm, 0.0f, 1.0f); if (exp_scale) norm *= norm;
-                        
-                        uint8_t r=0, g=0, b=0;
-                        if (norm < 0.25f) { b = (uint8_t)(norm * 4.0f * 255); }
-                        else if (norm < 0.5f) { b = 255; g = (uint8_t)((norm - 0.25f) * 4.0f * 255); }
-                        else if (norm < 0.75f) { g = 255; r = (uint8_t)((norm - 0.5f) * 4.0f * 255); b = 255 - r; }
-                        else { r = 255; g = 255 - (uint8_t)((norm - 0.75f) * 4.0f * 255); }
-                        
-                        spectrum.drawPixel(x, 0, lgfx::color565(b, g, r)); // Swapped R/B
-                    }
+                // Waterfall scrolls on every new frame
+                spectrum.scroll(0, 1);
+                for (int x = 0; x < 480; x++) {
+                    float eb = bin_start + x * bin_per_pixel; int b0 = (int)eb; float db = smooth_mag[b0] * (1.0f-(eb-b0)) + smooth_mag[std::min(b0+1,FFT_SIZE/2-1)] * (eb-b0);
+                    float norm = (db + ui_gain - ui_noise_floor) / 50.0f;
+                    norm = std::clamp(norm, 0.0f, 1.0f); if (exp_scale) norm *= norm;
+                    
+                    uint8_t r=0, g=0, b=0;
+                    if (norm < 0.25f) { b = (uint8_t)(norm * 4.0f * 255); }
+                    else if (norm < 0.5f) { b = 255; g = (uint8_t)((norm - 0.25f) * 4.0f * 255); }
+                    else if (norm < 0.75f) { g = 255; r = (uint8_t)((norm - 0.5f) * 4.0f * 255); b = 255 - r; }
+                    else { r = 255; g = 255 - (uint8_t)((norm - 0.75f) * 4.0f * 255); }
+                    
+                    spectrum.drawPixel(x, 0, lgfx::color565(b, g, r)); // Swapped R/B
                 }
+                
                 ili9488_push_waterfall(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer(), tune_x, half_shift);
             } else if (display_mode == 1) { // Spectrum
                 spectrum.fillSprite(PAL_BG);
@@ -190,8 +179,10 @@ void core1_main() {
                 int osc_h = UI_DSP_ZONE_H; 
                 spectrum.drawFastHLine(0, osc_h/2, 480, PAL_GRID); 
                 for (int x = 0; x < 479; x++) {
-                    int y0 = osc_h/2 - (int)((local_wave[x] / 1.65f) * (osc_h/2));
-                    int y1 = osc_h/2 - (int)((local_wave[x+1] / 1.65f) * (osc_h/2));
+                    float ac0 = local_wave[x] - 1.65f;
+                    float ac1 = local_wave[x+1] - 1.65f;
+                    int y0 = osc_h/2 - (int)((ac0 / 1.65f) * (osc_h/2));
+                    int y1 = osc_h/2 - (int)((ac1 / 1.65f) * (osc_h/2));
                     spectrum.drawLine(x, std::clamp(y0,0,osc_h-1), x+1, std::clamp(y1,0,osc_h-1), PAL_WAVE);
                 }
                 
@@ -202,9 +193,9 @@ void core1_main() {
             }
         }
         
-        static bool was_touched = false;
         if (now - last_touch > 50000) {
-            uint16_t tx, ty; bool is_touched = tft.getTouch(&tx, &ty);
+            uint16_t tx, ty; static bool was_touched = false;
+            bool is_touched = tft.getTouch(&tx, &ty);
             if (is_touched) {
                 // Check if touch is within the combined Marker + DSP zone
                 if (ty >= UI_Y_MARKER && ty <= (UI_Y_DSP + UI_DSP_ZONE_H)) {
@@ -213,20 +204,23 @@ void core1_main() {
                 else if (ty > UI_Y_BOTTOM && !was_touched) {
                     int btn_idx = tx / 80;
                     if (!menu_mode) {
+                        // MAIN MENU: BAUD, SHIFT, DISP, EXP/LIN, AUTO, MENU
+                        if (btn_idx == 0) { rtty_baud_idx = (rtty_baud_idx + 1) % 3; }
+                        else if (btn_idx == 1) { rtty_shift_idx = (rtty_shift_idx + 1) % 4; }
+                        else if (btn_idx == 2) { display_mode = (display_mode + 1) % 3; spectrum.fillSprite(PAL_BG); }
+                        else if (btn_idx == 3) { exp_scale = !exp_scale; }
+                        else if (btn_idx == 4) { auto_scale = true; }
+                        else if (btn_idx == 5) { menu_mode = true; } 
+                    } else {
+                        // SUB MENU: FL-, FL+, GN-, GN+, PAL, BACK
                         if (btn_idx == 0) { ui_noise_floor -= 5.0f; auto_scale = false; }
                         else if (btn_idx == 1) { ui_noise_floor += 5.0f; auto_scale = false; }
                         else if (btn_idx == 2) { ui_gain -= 1.0f; auto_scale = false; }
                         else if (btn_idx == 3) { ui_gain += 1.0f; auto_scale = false; }
-                        else if (btn_idx == 4) { auto_scale = true; }
-                        else if (btn_idx == 5) { menu_mode = true; } 
-                    } else {
-                        if (btn_idx == 0) { display_mode = (display_mode + 1) % 3; spectrum.fillSprite(PAL_BG); }
-                        else if (btn_idx == 1) { exp_scale = !exp_scale; }
-                        else if (btn_idx == 2) { waterfall_speed = (waterfall_speed % 3) + 1; }
-                        else if (btn_idx == 3) { show_palette = !show_palette; ui.drawInfo(show_palette); }
+                        else if (btn_idx == 4) { show_palette = !show_palette; ui.drawInfo(show_palette); }
                         else if (btn_idx == 5) { menu_mode = false; } 
                     }
-                    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, waterfall_speed, show_palette);
+                    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, show_palette, rtty_baud_idx, rtty_shift_idx);
                 }
             }
             was_touched = is_touched; last_touch = now;

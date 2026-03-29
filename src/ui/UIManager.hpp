@@ -44,30 +44,38 @@ public:
         _tft->fillScreen(COLOR_BG);
     }
     
-    void drawBottomBar(bool auto_scale, bool exp_scale, bool menu_mode, int display_mode, int waterfall_speed, bool show_palette) {
+    void drawBottomBar(bool auto_scale, bool exp_scale, bool menu_mode, int display_mode, bool show_palette, int baud_idx, int shift_idx) {
         _spr_bottom.fillSprite(COLOR_BG);
-        const char* labels_main[6] = {"FL-", "FL+", "GN-", "GN+", "AUTO", "MENU"};
+        
+        const int bauds[] = {45, 50, 75};
+        const int shifts[] = {170, 200, 425, 850};
+        
+        char labels_main[6][16];
+        snprintf(labels_main[0], 16, "B %d", bauds[baud_idx]);
+        snprintf(labels_main[1], 16, "S %d", shifts[shift_idx]);
+        
+        if (display_mode == 0) snprintf(labels_main[2], 16, "WF");
+        else if (display_mode == 1) snprintf(labels_main[2], 16, "SPEC");
+        else snprintf(labels_main[2], 16, "OSC");
+        
+        snprintf(labels_main[3], 16, exp_scale ? "EXP" : "LIN");
+        snprintf(labels_main[4], 16, "AUTO");
+        snprintf(labels_main[5], 16, "MENU");
         
         char labels_menu[6][16];
-        const char* mode_str = "WF";
-        if (display_mode == 1) mode_str = "SPEC";
-        else if (display_mode == 2) mode_str = "OSC";
-        
-        snprintf(labels_menu[0], 16, "%s", mode_str);
-        snprintf(labels_menu[1], 16, exp_scale ? "EXP" : "LIN");
-        snprintf(labels_menu[2], 16, "SPD %d", waterfall_speed);
-        snprintf(labels_menu[3], 16, show_palette ? "PAL ON" : "PAL OFF");
-        snprintf(labels_menu[4], 16, "");
+        snprintf(labels_menu[0], 16, "FL-");
+        snprintf(labels_menu[1], 16, "FL+");
+        snprintf(labels_menu[2], 16, "GN-");
+        snprintf(labels_menu[3], 16, "GN+");
+        snprintf(labels_menu[4], 16, show_palette ? "PAL ON" : "PAL OFF");
         snprintf(labels_menu[5], 16, "BACK");
 
         int btn_w = 480 / 6; _spr_bottom.setFont(&fonts::Font2); _spr_bottom.setTextDatum(middle_center);
         for (int i = 0; i < 6; i++) {
-            if (menu_mode && i == 4) continue;
-            
             int x = i * btn_w; 
             uint32_t bg = 0x333333U, brd = 0x777777U;
             if (!menu_mode && i == 4 && auto_scale) { bg = 0x006600U; brd = 0x00FF00U; }
-            if (menu_mode && i == 5) { bg = 0x660000U; brd = 0xFF0000U; }
+            if (menu_mode && i == 5) { bg = 0x660000U; brd = 0xFF0000U; } // BACK is red
             
             _spr_bottom.fillRoundRect(x + 2, 2, btn_w - 4, UI_BOTTOM_BAR_H - 4, 6, bg);
             _spr_bottom.drawRoundRect(x + 2, 2, btn_w - 4, UI_BOTTOM_BAR_H - 4, 6, brd);
@@ -80,7 +88,7 @@ public:
         ili9488_push_colors(0, UI_Y_BOTTOM, 480, 48, (uint16_t*)_spr_bottom.getBuffer());
     }
     
-    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float marker_freq, bool clipping, float load_c0, float load_c1) {
+    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float m_freq, float s_freq, bool clipping, float load_c0, float load_c1) {
         _spr_top.fillSprite(COLOR_BG); _spr_top.drawFastHLine(0, 33, 480, COLOR_GRID); 
         _spr_top.setTextDatum(middle_left); _spr_top.setTextColor(COLOR_TEXT, COLOR_BG); _spr_top.setFont(&fonts::Font2);
         
@@ -97,15 +105,15 @@ public:
             _spr_top.setTextColor(0xFFFFFFU); _spr_top.setTextDatum(middle_center); 
             _spr_top.drawString("CLIP", 250, 8); _spr_top.setTextDatum(middle_left); 
         } else { 
-            _spr_top.setTextColor(0x00FFFFU, COLOR_BG); snprintf(buf, sizeof(buf), "MRK: %4.0f Hz", marker_freq); 
+            _spr_top.setTextColor(0x00FFFFU, COLOR_BG); snprintf(buf, sizeof(buf), "M: %4.0f  S: %4.0f", m_freq, s_freq); 
             _spr_top.drawString(buf, 225, 8); 
         }
         
-        _spr_top.setTextColor(0xFFFFFFU, COLOR_BG); _spr_top.drawString("RTTY 45  SH: 170", 5, 24);
+        _spr_top.setTextColor(0xFFFFFFU, COLOR_BG); _spr_top.drawString("RTTY DECODER (IDLE)", 5, 24);
         _spr_top.setTextColor(0x00FF00U, COLOR_BG); snprintf(buf, sizeof(buf), "SNR:%2.0fdB", snr_db); _spr_top.drawString(buf, 170, 24);
         
         _spr_top.setTextDatum(middle_right); _spr_top.setTextColor(0x00FFFFU, COLOR_BG); 
-        snprintf(buf, sizeof(buf), "B:%d FPS:%lu CPU0:%.0f%% CPU1:%.0f%%", BUILD_NUMBER, fps, load_c0, load_c1); 
+        snprintf(buf, sizeof(buf), "B:%d F:%lu C0:%.0f%% C1:%.0f%%", BUILD_NUMBER, fps, load_c0, load_c1); 
         _spr_top.drawString(buf, 475, 24);
         
         // Zero Bias Meter
@@ -132,18 +140,15 @@ public:
     void drawInfo(bool show_palette) {
         _spr_text.fillSprite(COLOR_BG); 
         _spr_text.drawFastHLine(0, 111, 480, COLOR_GRID); 
-        _spr_text.setTextDatum(top_left); _spr_text.setFont(&fonts::Font2); 
-        
-        _spr_text.setTextColor(0x00FF00U, COLOR_BG); 
-        _spr_text.drawString("ACTIVE MODE: 11 (Hardcoded Build 107 Engine)", 5, 5);
-        
-        _spr_text.setTextColor(0xFFFFFFU, COLOR_BG); 
-        _spr_text.drawString("Hardware: 16-bit Swapped, BGR out", 5, 25);
-        
-        _spr_text.setTextColor(0x00FFFFU, COLOR_BG); 
-        _spr_text.drawString("Audio Input Active. AGC Running.", 5, 45);
 
         if (show_palette) {
+            _spr_text.setTextDatum(top_left); _spr_text.setFont(&fonts::Font2); 
+            _spr_text.setTextColor(0x00FF00U, COLOR_BG); 
+            _spr_text.drawString("ACTIVE MODE: 11 (Hardcoded Build 107 Engine)", 5, 5);
+            
+            _spr_text.setTextColor(0xFFFFFFU, COLOR_BG); 
+            _spr_text.drawString("Hardware: 16-bit Swapped, BGR out", 5, 25);
+            
             // Diagnostic Color Swatches (Using R/B Swap Logic)
             int sq_w = 40, sq_h = 30, start_x = 220, start_y = 65;
             _spr_text.setTextDatum(middle_center);
