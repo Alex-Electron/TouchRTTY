@@ -129,7 +129,7 @@ void core1_main() {
                 float target_max = current_max_db;
                 if (target_max < -40.0f) target_max = -40.0f;
                 ui_noise_floor = ui_noise_floor * 0.90f + (target_max - 50.0f) * 0.10f;
-                ui_gain = 50.0f; // Reset gain to standard 50%
+                ui_gain = 0.0f; // Reset gain to 0 dB when in auto mode
             }
             
             for (int x = 0; x < 480; x++) {
@@ -143,8 +143,8 @@ void core1_main() {
                 // Use smoothed magnitude
                 float db = smooth_mag[b0] * (1.0f - frac) + smooth_mag[b1] * frac;
                 
-                float span_db = 2500.0f / ui_gain; // If gain=50, span=50dB. If gain=100, span=25dB.
-                float normalized = (db - ui_noise_floor) / span_db;
+                // Add the digital gain offset, and normalize over a standard 50dB span
+                float normalized = (db + ui_gain - ui_noise_floor) / 50.0f;
                 if (normalized < 0.0f) normalized = 0.0f;
                 if (normalized > 1.0f) normalized = 1.0f;
                 
@@ -168,9 +168,9 @@ void core1_main() {
             spectrum.print("3.5 kHz");
             spectrum.setCursor(180, fft_y_offset + 5);
             if (auto_scale) {
-                spectrum.printf("AUTO | Floor: %.0fdB | Gain: %.0f%%", ui_noise_floor, ui_gain);
+                spectrum.printf("AUTO | Floor: %.0f dB | Gain: %+2.0f dB", ui_noise_floor, ui_gain);
             } else {
-                spectrum.printf("MANUAL | Floor: %.0fdB | Gain: %.0f%%", ui_noise_floor, ui_gain);
+                spectrum.printf("MANUAL | Floor: %.0f dB | Gain: %+2.0f dB", ui_noise_floor, ui_gain);
             }
 
             // Draw Markers on Spectrum Sprite
@@ -182,34 +182,35 @@ void core1_main() {
         }
         
         // A. Poll Touch
+        static bool was_touched = false;
         if (now - last_touch > 50000) {
             uint16_t tx, ty;
-            if (tft.getTouch(&tx, &ty)) {
+            bool is_touched = tft.getTouch(&tx, &ty);
+            if (is_touched) {
                 if (ty >= UI_Y_DSP && ty <= (UI_Y_DSP + UI_DSP_ZONE_H)) {
                     tune_x = tx;
                 } else if (ty > UI_Y_BOTTOM) {
-                    // Button row clicked (with 500ms debounce to prevent bouncing)
-                    static uint32_t last_btn_touch = 0;
-                    if (now - last_btn_touch > 500000) {
+                    if (!was_touched) {
                         int btn_idx = tx / (480 / 6);
-                        if (btn_idx == 0) { ui_noise_floor -= 5.0f; auto_scale = false; }      // FL- 
-                        else if (btn_idx == 1) { ui_noise_floor += 5.0f; auto_scale = false; } // FL+ 
-                        else if (btn_idx == 2) { ui_gain -= 5.0f; auto_scale = false; }        // GN- (Less Gain)
-                        else if (btn_idx == 3) { ui_gain += 5.0f; auto_scale = false; }        // GN+ (More Gain)
+                        if (btn_idx == 0) { ui_noise_floor -= 5.0f; auto_scale = false; }      // FL- (Lowers floor, reveals noise)
+                        else if (btn_idx == 1) { ui_noise_floor += 5.0f; auto_scale = false; } // FL+ (Raises floor, squelches noise)
+                        else if (btn_idx == 2) { ui_gain -= 1.0f; auto_scale = false; }        // GN- (Decrease Gain in dB)
+                        else if (btn_idx == 3) { ui_gain += 1.0f; auto_scale = false; }        // GN+ (Increase Gain in dB)
                         else if (btn_idx == 4) { auto_scale = true; }
                         else if (btn_idx == 5) { 
                             exp_scale = !exp_scale; 
                             auto_scale = false;
                         }
                         
-                        if (ui_gain < 5.0f) ui_gain = 5.0f;
+                        if (ui_gain < -30.0f) ui_gain = -30.0f;
+                        if (ui_gain > 30.0f) ui_gain = 30.0f;
                         
                         // Redraw the bottom bar to update the ON/OFF and SCL texts
                         ui.drawBottomBar(auto_scale, exp_scale);
-                        last_btn_touch = now;
                     }
                 }
             }
+            was_touched = is_touched;
             last_touch = now;
         }
 
