@@ -14,6 +14,7 @@
 #include "LGFX_Config.hpp"
 #include "src/display/ili9341_test.h"
 #include "src/dsp/fft.hpp"
+#include "src/dsp/biquad.hpp"
 #include "src/ui/UIManager.hpp"
 #include "src/version.h"
 
@@ -33,7 +34,6 @@ volatile float shared_core1_load = 0.0f;
 volatile float shared_mag_m[480];
 volatile float shared_mag_s[480];
 
-// RTTY Decoding Globals
 volatile char rtty_new_char = 0;
 volatile bool rtty_char_ready = false;
 
@@ -60,7 +60,6 @@ const char ita2_figs[32] = {
 float sin_table[1024];
 float cos_table[1024];
 
-// 63-Tap FIR Bandpass Filter (200Hz - 3200Hz, Fs=10000Hz)
 #define FIR_TAPS 63
 const float fir_coeffs[FIR_TAPS] = {
     0.000167f, 0.000000f, 0.001438f, 0.000137f,
@@ -98,10 +97,10 @@ void core1_main() {
     
     bool auto_scale = true, exp_scale = true;
     bool menu_mode = false;
-    int display_mode = 0; // 0=WF, 1=SPEC, 2=LISS
+    int display_mode = 0;
     bool show_palette = false;
     
-    int rtty_stop_idx = 1; // 1.5 stop bits default
+    int rtty_stop_idx = 1;
     const float shifts[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
     const float stop_bits[] = {1.0f, 1.5f, 2.0f};
     
@@ -129,7 +128,6 @@ void core1_main() {
             rtty_char_ready = false;
         }
 
-        // AFC Tracking: Visuals strictly follow the DSP locked frequency
         float bin_idx = shared_actual_freq / (SAMPLE_RATE / (float)FFT_SIZE);
         tune_x = (int)((bin_idx - bin_start) / bin_per_pixel);
         tune_x = std::clamp((int)tune_x, 10, 470);
@@ -173,14 +171,13 @@ void core1_main() {
             int m_x = tune_x - half_shift;
             int s_x = tune_x + half_shift;
             
-            // Render Marker Bar
             marker_spr.fillSprite(PAL_BG);
             marker_spr.drawFastHLine(0, 13, 480, PAL_GRID); 
-            marker_spr.fillTriangle(m_x, 13, m_x - 5, 5, m_x + 5, 5, 0x00FFFFU); // Cyan hex -> Yellow Visual (Space)
-            marker_spr.fillTriangle(s_x, 13, s_x - 5, 5, s_x + 5, 5, 0xFFFF00U); // Yellow hex -> Cyan Visual (Mark)
+            marker_spr.fillTriangle(m_x, 13, m_x - 5, 5, m_x + 5, 5, 0x00FFFFU);
+            marker_spr.fillTriangle(s_x, 13, s_x - 5, 5, s_x + 5, 5, 0xFFFF00U);
             ili9488_push_colors(0, UI_Y_MARKER, 480, UI_MARKER_H, (uint16_t*)marker_spr.getBuffer());
 
-            if (display_mode == 0) { // Waterfall
+            if (display_mode == 0) { 
                 spectrum.scroll(0, 1);
                 uint16_t* line_ptr = (uint16_t*)spectrum.getBuffer();
                 for (int x = 0; x < 480; x++) {
@@ -194,11 +191,10 @@ void core1_main() {
                     else if (norm < 0.75f) { g = 255; r = (uint8_t)((norm - 0.5f) * 4.0f * 255.0f); b = 255 - r; }
                     else { r = 255; g = 255 - (uint8_t)((norm - 0.75f) * 4.0f * 255.0f); }
                     
-                    // Crucial fix: passing clean un-swapped rgb to color565 which returns BGR mapped color
-                    line_ptr[x] = lgfx::color565(b, g, r); // Swapped R/B logic exactly as B127
+                    line_ptr[x] = lgfx::color565(b, g, r);
                 }
                 ili9488_push_waterfall(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer(), tune_x, half_shift);
-            } else if (display_mode == 1) { // Spectrum
+            } else if (display_mode == 1) { 
                 spectrum.fillSprite(PAL_BG);
                 for (int x = 0; x < 480; x++) {
                     float eb = bin_start + x * bin_per_pixel; int b0 = (int)eb; float db = smooth_mag[b0] * (1.0f-(eb-b0)) + smooth_mag[std::min(b0+1,FFT_SIZE/2-1)] * (eb-b0);
@@ -209,7 +205,7 @@ void core1_main() {
                 spectrum.drawFastVLine(m_x, 0, UI_DSP_ZONE_H, 0x00FFFFU);
                 spectrum.drawFastVLine(s_x, 0, UI_DSP_ZONE_H, 0xFFFF00U);
                 ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
-            } else { // LISS
+            } else { 
                 spectrum.fillSprite(PAL_BG);
                 int cx = 240, cy = 32;
                 spectrum.drawFastHLine(0, cy, 480, PAL_GRID); 
@@ -221,7 +217,7 @@ void core1_main() {
                     int dx = (int)(m - s);
                     int dy = (int)(m + s);
                     int px = cx + dx;
-                    int py = 64 - dy; // Origin bottom
+                    int py = 64 - dy; 
                     spectrum.fillCircle(std::clamp(px, 0, 479), std::clamp(py, 0, 63), 1, PAL_WAVE);
                 }
                 ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
@@ -283,15 +279,20 @@ void core0_dsp_loop() {
     int sc=0, wi=0, fi=0; adc_init(); adc_gpio_init(ADC_PIN); adc_select_input(0);
     float dc=0.0f;
     
-    // Demodulator state
     float phase_m = 0, phase_s = 0;
-    float i_m = 0, q_m = 0, i_s = 0, q_s = 0;
+    
+    Biquad lp_mi, lp_mq, lp_si, lp_sq;
+    float current_baud = -1.0f;
+    
+    float atc_mark_env = 0.01f, atc_space_env = 0.01f;
+    
     int baudot_state = 0;
     float symbol_phase = 0.0f;
     float integrate_acc = 0.0f;
     uint8_t current_char = 0;
     bool is_figs = false;
     bool last_d_sign = true;
+    
     const float shifts_hz[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
     const float bauds[] = {45.45f, 50.0f, 75.0f};
     
@@ -303,47 +304,61 @@ void core0_dsp_loop() {
         for(int i=0; i<63; i++) { f_out += fir_coeffs[i]*fb[bi]; bi--; if(bi<0) bi=62; }
         fi=(fi+1)%63; if(wi<480) { tw[wi] = f_out*1.65f+1.65f; } ts[sc++]=f_out*2.0f;
         
-        // --- I/Q DEMODULATOR PER SAMPLE ---
+        float baud = bauds[shared_baud_idx];
+        if (baud != current_baud) {
+            current_baud = baud;
+            float fc = baud * 0.75f; 
+            design_lpf(&lp_mi, fc, SAMPLE_RATE); design_lpf(&lp_mq, fc, SAMPLE_RATE);
+            design_lpf(&lp_si, fc, SAMPLE_RATE); design_lpf(&lp_sq, fc, SAMPLE_RATE);
+        }
+        
         float shift = shifts_hz[shared_shift_idx];
         float fm = shared_actual_freq + shift / 2.0f;
         float fs = shared_actual_freq - shift / 2.0f;
         
         phase_m += fm / SAMPLE_RATE; if(phase_m >= 1.0f) phase_m -= 1.0f;
         phase_s += fs / SAMPLE_RATE; if(phase_s >= 1.0f) phase_s -= 1.0f;
-        
         int idx_m = (int)(phase_m * 1024) % 1024;
         int idx_s = (int)(phase_s * 1024) % 1024;
         
-        // Lowpass I/Q (Alpha ~0.02 for ~30Hz bandwidth)
-        i_m += 0.02f * ((f_out * sin_table[idx_m]) - i_m);
-        q_m += 0.02f * ((f_out * cos_table[idx_m]) - q_m);
-        i_s += 0.02f * ((f_out * sin_table[idx_s]) - i_s);
-        q_s += 0.02f * ((f_out * cos_table[idx_s]) - q_s);
+        float mi = process_biquad(&lp_mi, f_out * cos_table[idx_m]);
+        float mq = process_biquad(&lp_mq, f_out * sin_table[idx_m]);
+        float si = process_biquad(&lp_si, f_out * cos_table[idx_s]);
+        float sq = process_biquad(&lp_sq, f_out * sin_table[idx_s]);
         
-        float mag_m = i_m*i_m + q_m*q_m;
-        float mag_s = i_s*i_s + q_s*q_s;
+        float mark_power = mi*mi + mq*mq;
+        float space_power = si*si + sq*sq;
         
-        if (wi < 480) { tw_m[wi] = mag_m; tw_s[wi] = mag_s; wi++; }
+        if (wi < 480) { tw_m[wi] = mark_power; tw_s[wi] = space_power; wi++; }
         
-        // Discriminator (Mark = Positive, Space = Negative)
-        float D = mag_m - mag_s;
+        float new_m = sqrtf(mark_power + 1e-10f);
+        float new_s = sqrtf(space_power + 1e-10f);
+        float atc_fast = expf(-1.0f / (2.0f * (SAMPLE_RATE / baud)));
+        float atc_slow = expf(-1.0f / (16.0f * (SAMPLE_RATE / baud)));
+        
+        atc_mark_env = atc_mark_env * (new_m > atc_mark_env ? atc_fast : atc_slow) + new_m * (1.0f - (new_m > atc_mark_env ? atc_fast : atc_slow));
+        atc_space_env = atc_space_env * (new_s > atc_space_env ? atc_fast : atc_slow) + new_s * (1.0f - (new_s > atc_space_env ? atc_fast : atc_slow));
+        
+        float m_norm = new_m / (atc_mark_env + 1e-6f);
+        float s_norm = new_s / (atc_space_env + 1e-6f);
+        
+        float D = m_norm - s_norm;
+        D = fmaxf(-1.5f, fminf(1.5f, D));
         if (shared_rtty_inv) D = -D;
         bool d_sign = (D > 0);
         
-        // --- BAUDOT PLL & INTEGRATE-AND-DUMP DECODER ---
-        float phase_inc = bauds[shared_baud_idx] / SAMPLE_RATE;
+        float phase_inc = baud / SAMPLE_RATE;
         
         if (!shared_squelch_open) {
             baudot_state = 0;
-            last_d_sign = true;
+            last_d_sign = true; 
         } else {
             if (d_sign != last_d_sign) {
                 if (baudot_state > 0) {
                     float err = symbol_phase;
-                    if (err > 0.5f) err -= 1.0f; 
-                    symbol_phase -= err * 0.1f; // PLL Nudge
-                } else if (!d_sign) {
-                    // Start bit detected (Mark -> Space transition)
+                    if (err > 0.5f) err -= 1.0f;
+                    symbol_phase -= err * 0.05f; 
+                } else if (!d_sign) { 
                     baudot_state = 1;
                     symbol_phase = 0.0f;
                     integrate_acc = 0.0f;
@@ -361,19 +376,20 @@ void core0_dsp_loop() {
                     bool bit = (integrate_acc > 0);
                     integrate_acc = 0.0f;
                     
-                    if (baudot_state == 1) { // Start bit
-                        if (bit) baudot_state = 0; // False start
-                        else baudot_state = 2; // Proceed
-                    } else if (baudot_state >= 2 && baudot_state <= 6) { // Data bits 0..4
+                    if (baudot_state == 1) { 
+                        if (bit) baudot_state = 0; 
+                        else baudot_state = 2;
+                    } else if (baudot_state >= 2 && baudot_state <= 6) { 
                         if (bit) current_char |= (1 << (baudot_state - 2));
                         baudot_state++;
-                    } else if (baudot_state == 7) { // Stop bit
-                        if (bit) { // Valid mark stop bit
+                    } else if (baudot_state == 7) { 
+                        if (bit) { 
                             char decoded = '\0';
-                            if (current_char == 27) is_figs = true;
-                            else if (current_char == 31) is_figs = false;
+                            if (current_char == 27) is_figs = true; 
+                            else if (current_char == 31) is_figs = false; 
                             else {
                                 decoded = is_figs ? ita2_figs[current_char] : ita2_ltrs[current_char];
+                                if (decoded == ' ') is_figs = false; 
                                 if (decoded != '\0') {
                                     rtty_new_char = decoded;
                                     rtty_char_ready = true;
@@ -381,12 +397,11 @@ void core0_dsp_loop() {
                                 }
                             }
                         }
-                        baudot_state = 0; // Return to idle
+                        baudot_state = 0; 
                     }
                 }
             }
         }
-        // ----------------------------------
         
         if(sc==FFT_SIZE) {
             float sq=0.0f; for(int i=0; i<FFT_SIZE; i++) sq+=ts[i]*ts[i];
@@ -394,15 +409,16 @@ void core0_dsp_loop() {
             memcpy(real, ts, sizeof(ts)); memset(imag, 0, sizeof(imag));
             fft.apply_window(real); fft.compute(real, imag); fft.calc_magnitude(real, imag, mag);
             float pk=-100.0f, sm=0.0f; for(int i=0; i<FFT_SIZE/2; i++) { if(mag[i]>pk) pk=mag[i]; sm+=mag[i]; }
-            shared_snr_db = pk - (sm/(FFT_SIZE/2)); memcpy((void*)shared_fft_mag, mag, sizeof(mag)); 
+            shared_snr_db = pk - (sm/(FFT_SIZE/2)); 
+            
+            memcpy((void*)shared_fft_mag, mag, sizeof(mag)); 
             memcpy((void*)shared_adc_waveform, tw, sizeof(tw));
             memcpy((void*)shared_mag_m, tw_m, sizeof(tw_m));
             memcpy((void*)shared_mag_s, tw_s, sizeof(tw_s));
             
-            // --- AUTOMATIC FREQUENCY CONTROL (AFC) ---
             int m_bin = (shared_target_freq + shift/2) * FFT_SIZE / SAMPLE_RATE;
             int s_bin = (shared_target_freq - shift/2) * FFT_SIZE / SAMPLE_RATE;
-            int search_r = 10; // ~100 Hz search window
+            int search_r = 6; 
             
             float best_m_mag = 0, best_s_mag = 0;
             int best_m_bin = m_bin, best_s_bin = s_bin;
@@ -415,19 +431,16 @@ void core0_dsp_loop() {
             }
             
             float avg_noise = sm / (FFT_SIZE/2);
-            shared_squelch_open = (best_m_mag > avg_noise * 3.0f || best_s_mag > avg_noise * 3.0f) && (shared_snr_db > 3.0f);
+            shared_squelch_open = (best_m_mag > avg_noise * 3.0f || best_s_mag > avg_noise * 3.0f) && (shared_snr_db > 2.0f);
             
-            // If strong signal found near target, gently pull the actual freq towards it
             if (shared_squelch_open && (best_m_mag > best_s_mag * 1.5f || best_s_mag > best_m_mag * 1.5f)) {
                 float found_m_f = best_m_bin * SAMPLE_RATE / (float)FFT_SIZE;
                 float found_s_f = best_s_bin * SAMPLE_RATE / (float)FFT_SIZE;
                 float implied_center = (best_m_mag > best_s_mag) ? (found_m_f - shift/2) : (found_s_f + shift/2);
                 shared_actual_freq = shared_actual_freq * 0.9f + implied_center * 0.1f;
             } else {
-                // Slowly drift back to manual target if signal is lost
                 shared_actual_freq = shared_actual_freq * 0.98f + shared_target_freq * 0.02f;
             }
-            // ------------------------------------------
             
             new_data_ready=true; wi=0; memmove(ts, &ts[480], (FFT_SIZE-480)*sizeof(float)); sc=FFT_SIZE-480;
         }
