@@ -5,29 +5,12 @@
 #include "../display/ili9341_test.h"
 #include "../version.h"
 
-// Unified Theme Engine
-struct Theme {
-    const char* name;
-    int driver_mode; // 4 (Native BRG) or 6 (Swapped RGB)
-    float default_blend; // 0.0 to 1.0 (Pastel mix)
-    uint32_t bg;
-    uint32_t grid;
-    uint32_t wave;
-    uint32_t peak;
-    uint32_t text;
-};
-
-// Build 111 Themes
-static const Theme THEMES[3] = {
-    // 0: The "Accidental Beauty" Pastel Theme (Native BRG = Mode 4)
-    {"0: Blue Pastel",   4, 1.0f, 0x000033U, 0x003366U, 0xFFFFFFU, 0xFFFF00U, 0x00FFFFU},
-    
-    // 1: The "True Color" Bright Theme (Swapped RGB = Mode 6)
-    {"1: Blue Bright",   6, 0.0f, 0x000096U, 0x00C8FFU, 0xFFFFFFU, 0xFFFF00U, 0x00FFFFU},
-    
-    // 2: Hacker Green Matrix (Must use True Color Mode 6)
-    {"2: Hacker Green",  6, 0.0f, 0x002200U, 0x004400U, 0x00FF00U, 0x00FF00U, 0x00FF00U}
-};
+// Hardcoded Palette (Yaesu Blue from Build 107)
+static constexpr uint32_t PAL_BG = 0x000033U;
+static constexpr uint32_t PAL_GRID = 0x003366U;
+static constexpr uint32_t PAL_WAVE = 0xFFFFFFU;
+static constexpr uint32_t PAL_PEAK = 0xFFFF00U;
+static constexpr uint32_t PAL_TEXT = 0x00FFFFU;
 
 #define UI_TOP_BAR_H   48
 #define UI_DSP_ZONE_H  112
@@ -60,7 +43,7 @@ public:
     
     void drawBottomBar(bool auto_scale, bool exp_scale) {
         _spr_bottom.fillSprite(COLOR_BG);
-        const char* labels[6] = {"FL-", "FL+", "GN-", "GN+", "AUTO", "THEME"};
+        const char* labels[6] = {"FL-", "FL+", "GN-", "GN+", "AUTO", "SCL"};
         int btn_w = 480 / 6; _spr_bottom.setFont(&fonts::Font2); _spr_bottom.setTextDatum(middle_center);
         for (int i = 0; i < 6; i++) {
             int x = i * btn_w; 
@@ -71,7 +54,12 @@ public:
             _spr_bottom.drawRoundRect(x + 3, 3, btn_w - 6, UI_BOTTOM_BAR_H - 6, 5, brd);
             _spr_bottom.drawRoundRect(x + 4, 4, btn_w - 8, UI_BOTTOM_BAR_H - 8, 4, brd);
             _spr_bottom.setTextColor(0xFFFFFFU); 
-            _spr_bottom.drawString(labels[i], x + (btn_w / 2), (UI_BOTTOM_BAR_H / 2));
+            
+            char label[16];
+            if (i == 5) snprintf(label, sizeof(label), exp_scale ? "EXP" : "LIN");
+            else snprintf(label, sizeof(label), "%s", labels[i]);
+            
+            _spr_bottom.drawString(label, x + (btn_w / 2), (UI_BOTTOM_BAR_H / 2));
         }
         ili9488_push_colors(0, UI_Y_BOTTOM, 480, 48, (uint16_t*)_spr_bottom.getBuffer());
     }
@@ -120,21 +108,16 @@ public:
         ili9488_push_colors(0, UI_Y_TOP, 480, UI_TOP_BAR_H, (uint16_t*)_spr_top.getBuffer());
     }
 
-    void drawThemeInfo(int theme_idx, float current_blend) {
+    void drawInfo() {
         _spr_text.fillSprite(COLOR_BG); 
         _spr_text.drawFastHLine(0, 111, 480, COLOR_GRID); 
         _spr_text.setTextDatum(top_left); _spr_text.setFont(&fonts::Font2); 
         
-        const Theme& t = THEMES[theme_idx];
-        
         _spr_text.setTextColor(0x00FF00U, COLOR_BG); 
-        char buf[128];
-        snprintf(buf, sizeof(buf), "ACTIVE THEME: [%s]", t.name);
-        _spr_text.drawString(buf, 5, 5);
+        _spr_text.drawString("ACTIVE MODE: 11 (Hardcoded Build 107 Engine)", 5, 5);
         
         _spr_text.setTextColor(0xFFFFFFU, COLOR_BG); 
-        snprintf(buf, sizeof(buf), "Hardware Mode: %d | Pastel Blend: %.2f (UART 'q', 'w')", t.driver_mode, current_blend);
-        _spr_text.drawString(buf, 5, 25);
+        _spr_text.drawString("Hardware: 16-bit Swapped, BGR out", 5, 25);
         
         _spr_text.setTextColor(0x00FFFFU, COLOR_BG); 
         _spr_text.drawString("Audio Input Active. AGC Running.", 5, 45);

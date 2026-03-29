@@ -3,9 +3,6 @@
 #include "pico/time.h"
 #include <stdlib.h>
 
-volatile int shared_color_mode = 11; // 11 = Bright, 2 = Pastel
-volatile float shared_color_blend = 0.0f; // 0.0 = Normal, 1.0 = Max Pastel (mixed with white)
-
 static int dma_chan;
 static dma_channel_config dma_conf;
 static PIO pio_inst = pio0;
@@ -76,6 +73,7 @@ void ili9341_init(void) {
     gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI);
 }
 
+// HARDCODED MODE 11 FROM BUILD 107
 static inline uint32_t expand_color_dynamic(uint16_t color) {
     uint16_t c = (color >> 8) | (color << 8); 
     uint8_t r = (c >> 8) & 0xF8;

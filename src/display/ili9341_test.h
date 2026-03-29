@@ -17,16 +17,6 @@
 #define SPI_FREQ 24000000 
 #define PIO_FREQ 60000000
 
-// Colors (RGB565)
-#define COLOR_BLACK   0x0000
-#define COLOR_RED     0xF800
-#define COLOR_GREEN   0x07E0
-#define COLOR_BLUE    0x001F
-#define COLOR_WHITE   0xFFFF
-#define COLOR_YELLOW  0xFFE0
-#define COLOR_CYAN    0x07FF
-#define COLOR_MAGENTA 0xF81F
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -35,9 +25,6 @@ void ili9341_init(void);
 void ili9488_draw_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
 void ili9488_push_colors(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t* colors);
 void ili9488_push_waterfall(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t* colors, int16_t tune_x, int16_t shift);
-
-extern volatile int shared_color_mode;
-extern volatile float shared_color_blend;
 
 void ili9488_draw_hline(uint16_t x, uint16_t y, uint16_t w, uint16_t color);
 void ili9488_draw_vline(uint16_t x, uint16_t y, uint16_t h, uint16_t color);
