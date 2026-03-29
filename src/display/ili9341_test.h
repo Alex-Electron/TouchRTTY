@@ -37,6 +37,8 @@ void ili9488_push_colors(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_
 void ili9488_push_waterfall(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t* colors, int16_t tune_x, int16_t shift);
 
 extern volatile int shared_color_mode;
+extern volatile float shared_color_blend;
+
 void ili9488_draw_hline(uint16_t x, uint16_t y, uint16_t w, uint16_t color);
 void ili9488_draw_vline(uint16_t x, uint16_t y, uint16_t h, uint16_t color);
 void ili9488_draw_pixel(uint16_t x, uint16_t y, uint16_t color);

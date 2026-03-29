@@ -3,6 +3,9 @@
 #include "pico/time.h"
 #include <stdlib.h>
 
+volatile int shared_color_mode = 11; // 11 = Bright, 2 = Pastel
+volatile float shared_color_blend = 0.0f; // 0.0 = Normal, 1.0 = Max Pastel (mixed with white)
+
 static int dma_chan;
 static dma_channel_config dma_conf;
 static PIO pio_inst = pio0;
@@ -49,7 +52,7 @@ void ili9341_init(void) {
     write_command(0xC0); write_data(0x17); write_data(0x15);
     write_command(0xC1); write_data(0x41);
     write_command(0xC5); write_data(0x00); write_data(0x12); write_data(0x80);
-    write_command(0x36); write_data(0x20); // Landscape, RGB Mode (No BGR swap)
+    write_command(0x36); write_data(0x28); // Landscape, BGR Mode
     write_command(0x3A); write_data(0x66);
     write_command(0xB0); write_data(0x00);
     write_command(0xB1); write_data(0xA0);
@@ -73,27 +76,34 @@ void ili9341_init(void) {
     gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI);
 }
 
-volatile int shared_color_mode = 0;
-
 static inline uint32_t expand_color_dynamic(uint16_t color) {
+    uint16_t c = color;
     if (shared_color_mode >= 6) {
-        color = (color >> 8) | (color << 8); // Swap bytes
+        c = (c >> 8) | (c << 8); // Swap bytes
     }
-    uint8_t r = (color >> 8) & 0xF8;
-    uint8_t g = (color >> 3) & 0xFC;
-    uint8_t b = (color << 3) & 0xF8;
+    uint8_t r = (c >> 8) & 0xF8;
+    uint8_t g = (c >> 3) & 0xFC;
+    uint8_t b = (c << 3) & 0xF8;
     
     int mode = shared_color_mode % 6;
-    if (mode == 0) return ((uint32_t)r << 24) | ((uint32_t)g << 16) | ((uint32_t)b << 8); // RGB
-    if (mode == 1) return ((uint32_t)r << 24) | ((uint32_t)b << 16) | ((uint32_t)g << 8); // RBG
-    if (mode == 2) return ((uint32_t)g << 24) | ((uint32_t)r << 16) | ((uint32_t)b << 8); // GRB
-    if (mode == 3) return ((uint32_t)g << 24) | ((uint32_t)b << 16) | ((uint32_t)r << 8); // GBR
-    if (mode == 4) return ((uint32_t)b << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8); // BRG
-    if (mode == 5) return ((uint32_t)b << 24) | ((uint32_t)g << 16) | ((uint32_t)r << 8); // BGR
-    return 0;
+    uint8_t o1, o2, o3;
+    if (mode == 0) { o1 = r; o2 = g; o3 = b; } // RGB
+    else if (mode == 1) { o1 = r; o2 = b; o3 = g; } // RBG
+    else if (mode == 2) { o1 = g; o2 = r; o3 = b; } // GRB
+    else if (mode == 3) { o1 = g; o2 = b; o3 = r; } // GBR
+    else if (mode == 4) { o1 = b; o2 = r; o3 = g; } // BRG
+    else { o1 = b; o2 = g; o3 = r; } // BGR
+
+    if (shared_color_blend > 0.01f) {
+        float mix = shared_color_blend * 0.6f * 255.0f;
+        float inv = 1.0f - (shared_color_blend * 0.6f);
+        o1 = (uint8_t)(o1 * inv + mix);
+        o2 = (uint8_t)(o2 * inv + mix);
+        o3 = (uint8_t)(o3 * inv + mix);
+    }
+    
+    return ((uint32_t)o1 << 24) | ((uint32_t)o2 << 16) | ((uint32_t)o3 << 8);
 }
-
-
 
 static void switch_to_pio() {
     while (spi_is_busy(SPI_PORT));
