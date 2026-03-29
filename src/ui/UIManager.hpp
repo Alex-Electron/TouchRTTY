@@ -13,8 +13,8 @@ static constexpr uint32_t PAL_PEAK = 0x00FFFFU; // Renders as Yellow
 static constexpr uint32_t PAL_TEXT = 0xFFFFFFU; // White // White text
 
 #define UI_TOP_BAR_H   48
-#define UI_DSP_ZONE_H  112
-#define UI_TEXT_ZONE_H 112
+#define UI_DSP_ZONE_H  64
+#define UI_TEXT_ZONE_H 160
 #define UI_BOTTOM_BAR_H 48
 #define UI_Y_TOP       0
 #define UI_Y_DSP       (UI_TOP_BAR_H)
@@ -41,12 +41,16 @@ public:
         _tft->fillScreen(COLOR_BG);
     }
     
-    void drawBottomBar(bool auto_scale, bool exp_scale, bool menu_mode, bool show_waterfall, int waterfall_speed, bool show_palette) {
+    void drawBottomBar(bool auto_scale, bool exp_scale, bool menu_mode, int display_mode, int waterfall_speed, bool show_palette) {
         _spr_bottom.fillSprite(COLOR_BG);
         const char* labels_main[6] = {"FL-", "FL+", "GN-", "GN+", "AUTO", "MENU"};
         
         char labels_menu[6][16];
-        snprintf(labels_menu[0], 16, show_waterfall ? "WF" : "SPEC");
+        const char* mode_str = "WF";
+        if (display_mode == 1) mode_str = "SPEC";
+        else if (display_mode == 2) mode_str = "OSC";
+        
+        snprintf(labels_menu[0], 16, "%s", mode_str);
         snprintf(labels_menu[1], 16, exp_scale ? "EXP" : "LIN");
         snprintf(labels_menu[2], 16, "SPD %d", waterfall_speed);
         snprintf(labels_menu[3], 16, show_palette ? "PAL ON" : "PAL OFF");
@@ -73,7 +77,7 @@ public:
         ili9488_push_colors(0, UI_Y_BOTTOM, 480, 48, (uint16_t*)_spr_bottom.getBuffer());
     }
     
-    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float marker_freq, bool clipping) {
+    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float marker_freq, bool clipping, int tune_x, int half_shift) {
         _spr_top.fillSprite(COLOR_BG); _spr_top.drawFastHLine(0, 47, 480, COLOR_GRID); 
         _spr_top.setTextDatum(middle_left); _spr_top.setTextColor(COLOR_TEXT, COLOR_BG); _spr_top.setFont(&fonts::Font2);
         _spr_top.drawString("SIG", 5, 12); _spr_top.drawRect(40, 5, 120, 14, COLOR_GRID);
@@ -116,6 +120,11 @@ public:
         uint32_t nc = (abs(err) < 0.05f) ? 0x00FF00U : 0x0000FFU; // Green if good, Red if bad
         _spr_top.fillTriangle(nx, meter_y+4, nx-3, meter_y-2, nx+3, meter_y-2, nc); 
         _spr_top.fillTriangle(nx, meter_y+4, nx-3, meter_y+10, nx+3, meter_y+10, nc);
+
+        // Draw Marker Triangles at the bottom edge (pointing down into the DSP zone)
+        _spr_top.fillTriangle(tune_x, 47, tune_x - 5, 40, tune_x + 5, 40, 0xFFFFFFU);
+        _spr_top.fillTriangle(tune_x - half_shift, 47, tune_x - half_shift - 4, 41, tune_x - half_shift + 4, 41, 0x00FFFFU);
+        _spr_top.fillTriangle(tune_x + half_shift, 47, tune_x + half_shift - 4, 41, tune_x + half_shift + 4, 41, 0xFFFF00U);
 
         ili9488_push_colors(0, UI_Y_TOP, 480, UI_TOP_BAR_H, (uint16_t*)_spr_top.getBuffer());
     }

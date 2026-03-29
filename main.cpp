@@ -66,11 +66,11 @@ void core1_main() {
     
     bool auto_scale = true, exp_scale = false;
     bool menu_mode = false;
-    bool show_waterfall = false;
+    int display_mode = 0; // 0=WF, 1=SPEC, 2=OSC
     int waterfall_speed = 1;
     bool show_palette = true;
     
-    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, show_waterfall, waterfall_speed, show_palette);
+    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, waterfall_speed, show_palette);
     ui.drawInfo(show_palette);
 
     LGFX_Sprite spectrum(&tft); spectrum.setColorDepth(16); spectrum.createSprite(480, UI_DSP_ZONE_H);
@@ -88,15 +88,18 @@ void core1_main() {
 
         if (now - last_ui_update > 500000) {
             uint32_t fps = frame_count * 2; frame_count = 0; last_ui_update = now;
+            float hz_px = ((bin_end-bin_start)*(SAMPLE_RATE/(float)FFT_SIZE))/480.0f;
+            int shift_px = (int)(rtty_shift_hz/hz_px);
+            int half_shift = shift_px / 2;
+            
             float marker_freq = (bin_start + (tune_x / 480.0f) * (bin_end - bin_start)) * (SAMPLE_RATE / (float)FFT_SIZE);
             bool is_clipping = shared_adc_clipping; shared_adc_clipping = false; 
-            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, marker_freq, is_clipping);
+            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, marker_freq, is_clipping, tune_x, half_shift);
         }
         
         if (new_data_ready) {
             frame_count++; memcpy(local_mag, (void*)shared_fft_mag, sizeof(local_mag)); memcpy(local_wave, (void*)shared_adc_waveform, sizeof(local_wave)); new_data_ready = false;
             
-            int fft_y_offset = 50, fft_h = 62;
             for (int i = 0; i < FFT_SIZE / 2; i++) smooth_mag[i] = smooth_mag[i] * 0.7f + local_mag[i] * 0.3f;
             
             if (auto_scale) {
@@ -113,7 +116,7 @@ void core1_main() {
             int shift_px = (int)(rtty_shift_hz/hz_px);
             int half_shift = shift_px / 2;
 
-            if (show_waterfall) {
+            if (display_mode == 0) { // Waterfall
                 if (frame_count % waterfall_speed == 0) {
                     spectrum.scroll(0, 1);
                     for (int x = 0; x < 480; x++) {
@@ -131,28 +134,31 @@ void core1_main() {
                     }
                 }
                 ili9488_push_waterfall(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer(), tune_x, half_shift);
-            } else {
+            } else if (display_mode == 1) { // Spectrum
                 spectrum.fillSprite(PAL_BG);
-                
-                int osc_h = 50; spectrum.drawFastHLine(0, osc_h/2, 480, PAL_GRID); 
-                for (int x = 0; x < 479; x++) {
-                    int y0 = osc_h - (int)((local_wave[x] / 3.3f) * osc_h);
-                    int y1 = osc_h - (int)((local_wave[x+1] / 3.3f) * osc_h);
-                    spectrum.drawLine(x, std::clamp(y0,0,osc_h-1), x+1, std::clamp(y1,0,osc_h-1), PAL_WAVE);
-                }
                 
                 for (int x = 0; x < 480; x++) {
                     float eb = bin_start + x * bin_per_pixel; int b0 = (int)eb; float db = smooth_mag[b0] * (1.0f-(eb-b0)) + smooth_mag[std::min(b0+1,FFT_SIZE/2-1)] * (eb-b0);
                     float norm = (db + ui_gain - ui_noise_floor) / 50.0f;
                     norm = std::clamp(norm, 0.0f, 1.0f); if (exp_scale) norm *= norm;
-                    int h = (int)(norm * fft_h); if (h > 0) spectrum.drawFastVLine(x, fft_y_offset + fft_h - h, h, PAL_PEAK);
+                    int h = (int)(norm * UI_DSP_ZONE_H); if (h > 0) spectrum.drawFastVLine(x, UI_DSP_ZONE_H - h, h, PAL_PEAK);
                 }
                 
-                spectrum.setTextColor(PAL_TEXT); spectrum.setTextSize(1);
-                spectrum.setCursor(5, fft_y_offset+5); spectrum.print("50 Hz");
-                spectrum.setCursor(410, fft_y_offset+5); spectrum.print("3.5 kHz");
-                spectrum.setCursor(180, fft_y_offset+5);
-                spectrum.printf("%s|Fl:%.0fdB|Gn:%+.0fdB", auto_scale?"AUTO":"MAN", ui_noise_floor, ui_gain);
+                spectrum.drawFastVLine(tune_x, 0, UI_DSP_ZONE_H, 0xFFFFFFU);
+                spectrum.drawFastVLine(tune_x - half_shift, 0, UI_DSP_ZONE_H, 0x00FFFFU);
+                spectrum.drawFastVLine(tune_x + half_shift, 0, UI_DSP_ZONE_H, 0xFFFF00U);
+                
+                ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
+            } else if (display_mode == 2) { // Oscilloscope
+                spectrum.fillSprite(PAL_BG);
+                
+                int osc_h = UI_DSP_ZONE_H; 
+                spectrum.drawFastHLine(0, osc_h/2, 480, PAL_GRID); 
+                for (int x = 0; x < 479; x++) {
+                    int y0 = osc_h/2 - (int)((local_wave[x] / 1.65f) * (osc_h/2));
+                    int y1 = osc_h/2 - (int)((local_wave[x+1] / 1.65f) * (osc_h/2));
+                    spectrum.drawLine(x, std::clamp(y0,0,osc_h-1), x+1, std::clamp(y1,0,osc_h-1), PAL_WAVE);
+                }
                 
                 spectrum.drawFastVLine(tune_x, 0, UI_DSP_ZONE_H, 0xFFFFFFU);
                 spectrum.drawFastVLine(tune_x - half_shift, 0, UI_DSP_ZONE_H, 0x00FFFFU);
@@ -177,13 +183,13 @@ void core1_main() {
                         else if (btn_idx == 4) { auto_scale = true; }
                         else if (btn_idx == 5) { menu_mode = true; } 
                     } else {
-                        if (btn_idx == 0) { show_waterfall = !show_waterfall; spectrum.fillSprite(PAL_BG); }
+                        if (btn_idx == 0) { display_mode = (display_mode + 1) % 3; spectrum.fillSprite(PAL_BG); }
                         else if (btn_idx == 1) { exp_scale = !exp_scale; }
                         else if (btn_idx == 2) { waterfall_speed = (waterfall_speed % 3) + 1; }
                         else if (btn_idx == 3) { show_palette = !show_palette; ui.drawInfo(show_palette); }
                         else if (btn_idx == 5) { menu_mode = false; } 
                     }
-                    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, show_waterfall, waterfall_speed, show_palette);
+                    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, waterfall_speed, show_palette);
                 }
             }
             was_touched = is_touched; last_touch = now;
