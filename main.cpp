@@ -15,6 +15,7 @@
 #include "src/display/ili9341_test.h"
 #include "src/dsp/fft.hpp"
 #include "src/dsp/biquad.hpp"
+#include "src/dsp/dpll_framer.hpp"
 #include "src/ui/UIManager.hpp"
 #include "src/version.h"
 
@@ -289,6 +290,11 @@ void core0_dsp_loop() {
     
     float atc_mark_env = 0.01f, atc_space_env = 0.01f;
     
+    // Diagnostics
+    float diag_adc_min = 4096.0f, diag_adc_max = 0.0f;
+    float diag_m_pow = 0.0f, diag_s_pow = 0.0f;
+    int diag_samples = 0;
+    
     int baudot_state = 0;
     float symbol_phase = 0.0f;
     float integrate_acc = 0.0f;
@@ -365,69 +371,36 @@ void core0_dsp_loop() {
         float dpll_alpha = 0.035f; // From TZ BnT approx 0.008 -> 0.05
         float stop_bits_expected = (shared_stop_idx == 0) ? 1.0f : ((shared_stop_idx == 1) ? 1.5f : 2.0f);
         
+        static dpll_t dpll;
+        static baudot_framer_t framer;
+        static bool dpll_initialized = false;
+        
+        if (!dpll_initialized || current_baud != baud) {
+            dpll_init(&dpll, baud, SAMPLE_RATE);
+            baudot_framer_init(&framer, stop_bits_expected);
+            dpll_initialized = true;
+        }
+        framer.stop_bits = stop_bits_expected;
+
         if (!shared_squelch_open) {
+            baudot_framer_init(&framer, stop_bits_expected);
+            dpll.phase = 0.5f;
+            dpll.prev_disc = 0.0f;
+            dpll.integrate_acc = 0.0f;
+            dpll.integrate_count = 0;
             baudot_state = 0;
             last_d_sign = true; 
         } else {
-            // Edge detection (zero crossing)
-            if (d_sign != last_d_sign) {
-                if (baudot_state > 0) {
-                    float err = symbol_phase;
-                    if (err > 0.5f) err -= 1.0f; // Late
-                    symbol_phase -= dpll_alpha * err; // Nudge PLL 
-                } else if (!d_sign) { // Transition to space = start bit
-                    baudot_state = 1;
-                    symbol_phase = 0.5f; // Jump to center of start bit
-                    integrate_acc = 0.0f;
-                    current_char = 0;
-                }
-            }
-            last_d_sign = d_sign;
-            
-            if (baudot_state > 0) {
-                symbol_phase += phase_inc;
-                integrate_acc += D; 
-                
-                if (symbol_phase >= 1.0f) {
-                    symbol_phase -= 1.0f;
-                    bool bit = (integrate_acc > 0);
-                    integrate_acc = 0.0f;
-                    
-                    if (baudot_state == 1) { 
-                        if (bit) baudot_state = 0; // False start
-                        else baudot_state = 2;
-                    } else if (baudot_state >= 2 && baudot_state <= 6) { 
-                        if (bit) current_char |= (1 << (baudot_state - 2));
-                        baudot_state++;
-                    } else if (baudot_state == 7) { 
-                        if (bit) { // Valid stop
-                            char decoded = '\0';
-                            if (current_char == 27) { is_figs = true; printf("[FIGS]"); }
-                            else if (current_char == 31) { is_figs = false; printf("[LTRS]"); }
-                            else {
-                                decoded = is_figs ? ita2_figs[current_char] : ita2_ltrs[current_char];
-                                if (decoded == ' ') is_figs = false; // Unshift on space (fldigi)
-                                if (decoded != '\0') {
-                                    rtty_new_char = decoded;
-                                    rtty_char_ready = true;
-                                    printf("%c", decoded); 
-                                }
-                            }
-                        } else {
-                            printf("[ERR]"); // Framing error
-                        }
-                        
-                        baudot_state = 0; 
-                        
-                        // For tight 1.0 stop bits, if we are ALREADY in Space, a new start bit has begun!
-                        if (stop_bits_expected <= 1.0f) {
-                            if (!d_sign) {
-                                baudot_state = 1;
-                                symbol_phase = 0.5f; // Center sampling
-                                integrate_acc = D;
-                                current_char = 0;
-                            }
-                        }
+            float bit_val;
+            if (dpll_process(&dpll, D, &bit_val)) {
+                char ch = baudot_framer_push(&framer, bit_val);
+                if (ch > 0 && ch != '\0') {
+                    if (ch == '?') {
+                        printf("[ERR]");
+                    } else {
+                        rtty_new_char = ch;
+                        rtty_char_ready = true;
+                        printf("%c", ch);
                     }
                 }
             }
@@ -461,8 +434,13 @@ void core0_dsp_loop() {
             }
             
             float avg_noise = sm / (FFT_SIZE/2);
-            // Squelch requires a basic signal level, good SNR, and clear peaks
-            shared_squelch_open = (shared_signal_db > -60.0f) && (shared_snr_db > 4.0f) && (best_m_mag > avg_noise * 2.0f || best_s_mag > avg_noise * 2.0f);
+            // Relaxed squelch with hysteresis for 75 Baud
+            bool sq_strong = (best_m_mag > avg_noise * 2.0f || best_s_mag > avg_noise * 2.0f) && (shared_snr_db > 3.0f);
+            bool sq_weak = (best_m_mag < avg_noise * 1.2f && best_s_mag < avg_noise * 1.2f) || (shared_snr_db < 1.0f);
+            
+            if (shared_signal_db < -65.0f) shared_squelch_open = false; // Hard noise floor
+            else if (sq_strong) shared_squelch_open = true;
+            else if (sq_weak) shared_squelch_open = false;
             
             if (shared_squelch_open && (best_m_mag > best_s_mag * 1.5f || best_s_mag > best_m_mag * 1.5f)) {
                 float found_m_f = best_m_bin * SAMPLE_RATE / (float)FFT_SIZE;
@@ -474,6 +452,18 @@ void core0_dsp_loop() {
             }
             
             new_data_ready=true; wi=0; memmove(ts, &ts[480], (FFT_SIZE-480)*sizeof(float)); sc=FFT_SIZE-480;
+            
+            static int diag_timer = 0;
+            if (++diag_timer >= 10) { // Approx 500ms
+                diag_timer = 0;
+                printf("\n--- TUNING DIAGNOSTICS (B142) ---\n");
+                printf("Step 1 (ADC): V=%.2fV (Peak/Clip: %d)\n", shared_adc_v, shared_adc_clipping);
+                printf("Step 2 (ATC Level): Mark_Env=%.4f Space_Env=%.4f\n", atc_mark_env, atc_space_env);
+                printf("Step 3 (FFT Peaks): Mark_Mag=%.1f Space_Mag=%.1f Noise=%.1f\n", best_m_mag, best_s_mag, avg_noise);
+                printf("Step 4 (RTTY Status): Squelch=%s DPLL_Phase=%.2f\n", shared_squelch_open ? "OPEN" : "SHUT", dpll.phase);
+                printf("Step 5/6 (AFC & SNR): SNR=%.1f dB, Signal=%.1f dB\n", shared_snr_db, shared_signal_db);
+                printf("---------------------------------\n");
+            }
         }
         
         static uint32_t total_work = 0, total_time = 0;
