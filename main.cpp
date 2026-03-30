@@ -11,6 +11,9 @@
 #include "hardware/vreg.h"
 #include "hardware/timer.h"
 #include "hardware/uart.h"
+#include "hardware/flash.h"
+#include "hardware/sync.h"
+#include "hardware/watchdog.h"
 #include "LGFX_Config.hpp"
 #include "src/display/ili9341_test.h"
 #include "src/dsp/fft.hpp"
@@ -21,6 +24,68 @@
 
 #define ADC_PIN 26
 #define SAMPLE_RATE 10000
+#define ENC_SW 4
+
+#define CAL_FLASH_OFFSET (1024 * 1024 * 2) // 2MB offset
+#define SETTINGS_FLASH_OFFSET (1024 * 1024 * 2 + FLASH_SECTOR_SIZE)
+const uint8_t* flash_target_contents = (const uint8_t *) (XIP_BASE + CAL_FLASH_OFFSET);
+const uint8_t* flash_settings_contents = (const uint8_t *) (XIP_BASE + SETTINGS_FLASH_OFFSET);
+
+struct AppSettings {
+    uint32_t magic;
+    int baud_idx;
+    int shift_idx;
+    int stop_idx;
+    bool rtty_inv;
+    int display_mode;
+    bool exp_scale;
+    bool auto_scale;
+    float filter_k;
+    float sq_snr;
+    float target_freq;
+};
+
+volatile bool settings_need_save = false;
+volatile uint32_t settings_last_change = 0;
+
+void flag_settings_change() {
+    settings_need_save = true;
+    settings_last_change = time_us_32();
+}
+
+volatile bool shared_force_cal = false;
+
+void load_or_calibrate(lgfx::LGFX_Device& tft, bool force = false) {
+    uint16_t calData[8];
+    bool valid = true;
+    for(int i=0; i<8; i++) {
+        calData[i] = ((uint16_t*)flash_target_contents)[i];
+        if (calData[i] == 0xFFFF || calData[i] == 0) valid = false;
+    }
+    
+    if (valid && !force) {
+        tft.setTouchCalibrate(calData);
+    } else {
+        tft.fillScreen(0x000000U);
+        tft.setTextColor(0xFFFFFFU, 0x000000U);
+        tft.setTextSize(2);
+        tft.setTextDatum(middle_center);
+        tft.drawString("TOUCH 4 CORNERS TO CALIBRATE", 240, 160);
+        tft.calibrateTouch(calData, 0xFFFFFFU, 0x000000U, 15);
+        
+        uint8_t page_buf[FLASH_PAGE_SIZE] = {0};
+        memcpy(page_buf, calData, 16);
+        
+        multicore_lockout_start_blocking();
+        uint32_t ints = save_and_disable_interrupts();
+        flash_range_erase(CAL_FLASH_OFFSET, FLASH_SECTOR_SIZE);
+        flash_range_program(CAL_FLASH_OFFSET, page_buf, FLASH_PAGE_SIZE);
+        restore_interrupts(ints);
+        multicore_lockout_end_blocking();
+        
+        tft.fillScreen(0x000000U);
+    }
+}
 
 volatile float shared_fft_mag[FFT_SIZE / 2];
 volatile float shared_adc_waveform[480];
@@ -101,6 +166,37 @@ const char ita2_figs[32] = {
     '9', '?', '&', '\0', '.', '/', '=', '\0'
 };
 
+typedef struct {
+    float gain;
+    float target;
+    float attack;
+    float release;
+    float rms;
+    float rms_tc;
+} agc_t;
+
+inline void agc_init(agc_t *a, float fs) {
+    a->gain    = 1.0f;
+    a->target  = 0.30f; // Target RMS
+    a->attack  = expf(-1.0f / (0.010f * fs)); // 10ms attack
+    a->release = expf(-1.0f / (0.500f * fs)); // 500ms release
+    a->rms_tc  = expf(-1.0f / (0.050f * fs)); // 50ms RMS window
+    a->rms     = 0.01f;
+}
+
+inline float agc_process(agc_t *a, float x) {
+    float out = x * a->gain;
+    a->rms = a->rms * a->rms_tc + out * out * (1.0f - a->rms_tc);
+    float rms_now = sqrtf(a->rms + 1e-10f);
+    if (rms_now > a->target) {
+        a->gain *= a->attack;
+    } else {
+        a->gain /= a->release;
+    }
+    a->gain = fmaxf(0.01f, fminf(a->gain, 200.0f));
+    return out;
+}
+
 float sin_table[1024];
 float cos_table[1024];
 
@@ -125,30 +221,52 @@ const float fir_coeffs[FIR_TAPS] = {
 };
 
 void core1_main() {
-    LGFX_RP2350 tft; tft.init(); tft.setRotation(1); 
-    
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setTextSize(2);
-    tft.setTextDatum(middle_center);
-    tft.drawString("Touch arrows to calibrate", 240, 160);
-    uint16_t calData[8]; 
-    tft.calibrateTouch(calData, TFT_WHITE, TFT_BLACK, 15);
+    LGFX_RP2350 tft; tft.init(); tft.setRotation(1);
 
-    ili9341_init(); 
-    ili9341_fill_screen(0x0000);
+    bool boot_touch = false;
+
+    if (boot_touch || shared_force_cal) {
+        multicore_lockout_start_blocking();
+        uint32_t ints = save_and_disable_interrupts();
+        flash_range_erase(CAL_FLASH_OFFSET, FLASH_SECTOR_SIZE);
+        flash_range_erase(SETTINGS_FLASH_OFFSET, FLASH_SECTOR_SIZE);
+        restore_interrupts(ints);
+        multicore_lockout_end_blocking();
+    }
+
+    load_or_calibrate(tft, boot_touch || shared_force_cal);
+
+    ili9341_init();    ili9341_fill_screen(0x0000);
     UIManager ui(&tft); ui.init();
     
     bool auto_scale = true, exp_scale = true;
     bool menu_mode = false;
     int display_mode = 0;
     bool show_palette = false;
+    bool reset_confirm_mode = false;
+    uint32_t saved_text_timer = 0;
+    
+    AppSettings loaded_set;
+    memcpy(&loaded_set, flash_settings_contents, sizeof(AppSettings));
+    if (loaded_set.magic == 0xDEADBEEF) {
+        shared_baud_idx = loaded_set.baud_idx;
+        shared_shift_idx = loaded_set.shift_idx;
+        shared_stop_idx = loaded_set.stop_idx;
+        shared_rtty_inv = loaded_set.rtty_inv;
+        display_mode = loaded_set.display_mode;
+        exp_scale = loaded_set.exp_scale;
+        auto_scale = loaded_set.auto_scale;
+        tuning_lpf_k = loaded_set.filter_k;
+        tuning_sq_snr = loaded_set.sq_snr;
+        shared_target_freq = loaded_set.target_freq;
+        shared_actual_freq = shared_target_freq;
+    }
     
     const float bauds[] = {45.45f, 50.0f, 75.0f};
     const float shifts[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
     const float stop_bits[] = {1.0f, 1.5f, 2.0f};
     
-    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_rtty_inv);
+    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_rtty_inv, menu_mode);
 
     LGFX_Sprite spectrum(&tft); spectrum.setColorDepth(16); spectrum.createSprite(480, UI_DSP_ZONE_H);
     LGFX_Sprite marker_spr(&tft); marker_spr.setColorDepth(16); marker_spr.createSprite(480, UI_MARKER_H);
@@ -172,7 +290,7 @@ void core1_main() {
 
         if (rtty_char_ready) {
             char c = rtty_new_char;
-            ui.addRTTYChar(c, !show_palette);
+            ui.addRTTYChar(c, !show_palette && !menu_mode);
             rtty_char_ready = false;
             printf("%c", c);
         }
@@ -183,8 +301,8 @@ void core1_main() {
 
         if (shared_diag_ready) {
             shared_diag_ready = false;
-            printf("\n--- TUNING DIAGNOSTICS (B153) ---\n");
-            printf("Step 1 (ADC): V=%.2fV (Range: %.0f-%.0f)\n", shared_adc_v, shared_diag_adc_min, shared_diag_adc_max);
+            printf("\n--- TUNING DIAGNOSTICS (B156) ---\n");
+            printf("Step 1 (ADC & AGC): V=%.2fV (Range: %.0f-%.0f) AGC_Gain=%.2fx\n", shared_adc_v, shared_diag_adc_min, shared_diag_adc_max, shared_agc_gain);
             printf("Step 2 (ATC Level): Mark_Env=%.4f Space_Env=%.4f\n", shared_atc_m, shared_atc_s);
             printf("Step 3 (FFT Peaks): SNR=%.1f dB, Signal=%.1f dB\n", shared_snr_db, shared_signal_db);
             printf("Step 4 (RTTY Status): Squelch=%s DPLL_Phase=%.2f\n", shared_squelch_open ? "OPEN" : "SHUT", shared_dpll_phase);
@@ -207,7 +325,7 @@ void core1_main() {
                 ui.drawInfo(shared_adc_v);
             }
             
-            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open);
+            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open, shared_agc_gain, shared_agc_enabled);
         }
         
         if (new_data_ready) {
@@ -219,7 +337,7 @@ void core1_main() {
             new_data_ready = false;
             
             float sq=0.0f; for(int i=0; i<FFT_SIZE; i++) sq+=local_ts[i]*local_ts[i];
-            shared_signal_db = 10.0f*log10f((sq/FFT_SIZE)+1e-10f);
+            shared_signal_db = 10.0f*log10f((sq/FFT_SIZE)+1e-10f) - 20.0f*log10f(shared_agc_gain);
             
             memcpy(real, local_ts, sizeof(local_ts)); memset(imag, 0, sizeof(imag));
             fft.apply_window(real); fft.compute(real, imag); fft.calc_magnitude(real, imag, mag);
@@ -229,8 +347,8 @@ void core1_main() {
             shared_snr_db = pk - avg_noise; 
             
             float shift = shifts[shared_shift_idx];
-            int m_bin = (int)((shared_target_freq - shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
-            int s_bin = (int)((shared_target_freq + shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
+            int m_bin = (int)((shared_actual_freq - shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
+            int s_bin = (int)((shared_actual_freq + shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
             int search_r = 12; 
             
             float best_m_mag = -100.0f, best_s_mag = -100.0f;
@@ -251,11 +369,14 @@ void core1_main() {
             else if (sq_strong) shared_squelch_open = true;
             else if (sq_weak) shared_squelch_open = false;
             
-            if (shared_squelch_open && ((best_m_mag - best_s_mag) > 2.0f || (best_s_mag - best_m_mag) > 2.0f)) {
-                float found_m_f = best_m_bin * SAMPLE_RATE / (float)FFT_SIZE;
-                float found_s_f = best_s_bin * SAMPLE_RATE / (float)FFT_SIZE;
-                float implied_center = (best_m_mag > best_s_mag) ? (found_m_f + shift/2.0f) : (found_s_f - shift/2.0f);
-                shared_actual_freq = shared_actual_freq * 0.9f + implied_center * 0.1f;
+            if (shared_squelch_open) {
+                if ((best_m_mag - best_s_mag) > 2.0f || (best_s_mag - best_m_mag) > 2.0f) {
+                    float found_m_f = best_m_bin * SAMPLE_RATE / (float)FFT_SIZE;
+                    float found_s_f = best_s_bin * SAMPLE_RATE / (float)FFT_SIZE;
+                    float implied_center = (best_m_mag > best_s_mag) ? (found_m_f + shift/2.0f) : (found_s_f - shift/2.0f);
+                    implied_center = std::clamp(implied_center, shared_target_freq - 100.0f, shared_target_freq + 100.0f);
+                    shared_actual_freq = shared_actual_freq * 0.8f + implied_center * 0.2f;
+                }
             } else {
                 shared_actual_freq = shared_actual_freq * 0.98f + shared_target_freq * 0.02f;
             }
@@ -283,9 +404,11 @@ void core1_main() {
             int s_x = tune_x + half_shift;
             
             marker_spr.fillSprite(PAL_BG);
-            marker_spr.drawFastHLine(0, 13, 480, PAL_GRID); 
-            marker_spr.fillTriangle(m_x, 13, m_x - 5, 5, m_x + 5, 5, 0x00FFFFU);
-            marker_spr.fillTriangle(s_x, 13, s_x - 5, 5, s_x + 5, 5, 0xFFFF00U);
+            if (display_mode != 2) {
+                marker_spr.drawFastHLine(0, 13, 480, PAL_GRID); 
+                marker_spr.fillTriangle(m_x, 13, m_x - 5, 5, m_x + 5, 5, 0x00FFFFU);
+                marker_spr.fillTriangle(s_x, 13, s_x - 5, 5, s_x + 5, 5, 0xFFFF00U);
+            }
             ili9488_push_colors(0, UI_Y_MARKER, 480, UI_MARKER_H, (uint16_t*)marker_spr.getBuffer());
 
             if (display_mode == 0) { 
@@ -324,48 +447,105 @@ void core1_main() {
                 spectrum.drawFastVLine(cx, 0, 64, PAL_GRID); 
                 
                 for (int x = 0; x < 480; x++) {
-                    float m = local_mag_m[x] * 1000.0f; 
-                    float s = local_mag_s[x] * 1000.0f;
-                    int dx = (int)(m - s);
-                    int dy = (int)(m + s);
-                    int px = cx + dx;
-                    int py = 64 - dy; 
-                    spectrum.fillCircle(std::clamp(px, 0, 479), std::clamp(py, 0, 63), 1, PAL_WAVE);
+                    float m = sqrtf(local_mag_m[x]) * 60.0f; 
+                    float s = sqrtf(local_mag_s[x]) * 60.0f;
+                    float phase = x * 0.4f;
+                    int px = cx + (int)(m * sinf(phase) + s * 0.05f * cosf(phase));
+                    int py = cy + (int)(s * cosf(phase) + m * 0.05f * sinf(phase));
+                    spectrum.drawPixel(std::clamp(px, 0, 479), std::clamp(py, 0, 63), PAL_WAVE);
                 }
                 ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
             }
         }
         
+        static uint32_t touch_ignore_until = 0;
         if (loop_start - last_touch > 50000) {
             uint16_t tx, ty; static bool was_touched = false;
             bool is_touched = tft.getTouch(&tx, &ty);
-            if (is_touched) {
+            if (is_touched && time_us_32() > touch_ignore_until) {
                 if (ty >= UI_Y_MARKER && ty <= (UI_Y_DSP + UI_DSP_ZONE_H)) {
-                    shared_target_freq = (bin_start + (tx / 480.0f) * (bin_end - bin_start)) * (SAMPLE_RATE / (float)FFT_SIZE);
+                    flag_settings_change(); shared_target_freq = (bin_start + (tx / 480.0f) * (bin_end - bin_start)) * (SAMPLE_RATE / (float)FFT_SIZE);
+                    shared_actual_freq = shared_target_freq; // SNAP INSTANTLY
                 }
                 else if (ty > UI_Y_BOTTOM && !was_touched) {
                     int btn_idx = tx / 80;
-                    if (!menu_mode) {
-                        if (btn_idx == 0) { shared_baud_idx = (shared_baud_idx + 1) % 3; }
-                        else if (btn_idx == 1) { shared_shift_idx = (shared_shift_idx + 1) % 5; }
-                        else if (btn_idx == 2) { shared_rtty_inv = !shared_rtty_inv; }
-                        else if (btn_idx == 3) { shared_stop_idx = (shared_stop_idx + 1) % 3; }
-                        else if (btn_idx == 4) { ui.clearRTTY(); shared_clear_dsp = true; }
-                        else if (btn_idx == 5) { menu_mode = true; } 
-                    } else {
-                        if (btn_idx == 0) { display_mode = (display_mode + 1) % 3; spectrum.fillSprite(PAL_BG); }
-                        else if (btn_idx == 1) { exp_scale = !exp_scale; }
-                        else if (btn_idx == 2) { ui_noise_floor -= 5.0f; auto_scale = false; }
-                        else if (btn_idx == 3) { ui_noise_floor += 5.0f; auto_scale = false; }
-                        else if (btn_idx == 4) { auto_scale = !auto_scale; }
-                        else if (btn_idx == 5) { menu_mode = false; show_palette = false; ui.drawRTTY(); } 
-                    }
-                    ui.drawBottomBar(auto_scale, exp_scale, menu_mode, display_mode, shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_rtty_inv);
+                    if (btn_idx == 0) { flag_settings_change(); shared_baud_idx = (shared_baud_idx + 1) % 3; }
+                    else if (btn_idx == 1) { flag_settings_change(); shared_shift_idx = (shared_shift_idx + 1) % 5; }
+                    else if (btn_idx == 2) { flag_settings_change(); shared_rtty_inv = !shared_rtty_inv; }
+                    else if (btn_idx == 3) { flag_settings_change(); shared_stop_idx = (shared_stop_idx + 1) % 3; }
+                    else if (btn_idx == 4) { ui.clearRTTY(); shared_clear_dsp = true; }
+                    else if (btn_idx == 5) { 
+                        if (show_palette && !menu_mode) {
+                            show_palette = false;
+                            ui.drawRTTY();
+                        } else {
+                            menu_mode = !menu_mode; 
+                            if(menu_mode) show_palette = false; else ui.drawRTTY(); 
+                        }
+                    } 
+                    
+                    if (!menu_mode) reset_confirm_mode = false;
+                    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_rtty_inv, menu_mode);
+                    if (menu_mode) ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, show_palette, "SAVE");
+                    touch_ignore_until = time_us_32() + 300000;
                 }
-                else if (ty >= UI_Y_TEXT && ty < UI_Y_BOTTOM && !was_touched) {
-                    show_palette = !show_palette;
-                    if (show_palette) ui.drawInfo(shared_adc_v);
-                    else ui.drawRTTY();
+                else if (ty >= UI_Y_TEXT && ty < UI_Y_BOTTOM) {
+                    if (reset_confirm_mode && !was_touched) {
+                        int local_y = ty - UI_Y_TEXT;
+                        if (local_y >= 100 && local_y <= 140) {
+                            if (tx >= 280 && tx <= 400) { // YES
+                                multicore_lockout_start_blocking();
+                                uint32_t ints = save_and_disable_interrupts();
+                                flash_range_erase(CAL_FLASH_OFFSET, FLASH_SECTOR_SIZE);
+                                flash_range_erase(SETTINGS_FLASH_OFFSET, FLASH_SECTOR_SIZE);
+                                restore_interrupts(ints);
+                                multicore_lockout_end_blocking();
+                                watchdog_enable(1, 1);
+                                while(1);
+                            } else { // NO
+                                reset_confirm_mode = false;
+                                ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, show_palette, "SAVE");
+                            }
+                        } else {
+                            reset_confirm_mode = false;
+                            ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, show_palette, "SAVE");
+                        }
+                        touch_ignore_until = time_us_32() + 300000;
+                    } else if (menu_mode && !was_touched) {
+                        int col = tx / (480/4);
+                        int row = (ty - UI_Y_TEXT) / (160/3);
+                        int btn = row * 4 + col;
+                        const char* save_text = "SAVE";
+                        if (btn == 0) { flag_settings_change(); display_mode = (display_mode + 1) % 3; spectrum.fillSprite(PAL_BG); }
+                        else if (btn == 1) { flag_settings_change(); exp_scale = !exp_scale; }
+                        else if (btn == 2) { flag_settings_change(); auto_scale = !auto_scale; }
+                        else if (btn == 3) { show_palette = !show_palette; }
+                        else if (btn == 4) { flag_settings_change(); tuning_lpf_k -= 0.05f; if(tuning_lpf_k < 0.5f) tuning_lpf_k = 0.5f; }
+                        else if (btn == 6) { flag_settings_change(); tuning_lpf_k += 0.05f; if(tuning_lpf_k > 1.5f) tuning_lpf_k = 1.5f; }
+                        else if (btn == 7) { 
+                            settings_need_save = true; 
+                            settings_last_change = time_us_32() - 15000000;
+                            save_text = "SAVED!";
+                            saved_text_timer = time_us_32();
+                        }
+                        else if (btn == 8) { flag_settings_change(); tuning_sq_snr -= 1.0f; }
+                        else if (btn == 10) { flag_settings_change(); tuning_sq_snr += 1.0f; }
+                        else if (btn == 11) { reset_confirm_mode = true; ui.drawResetConfirm(); }
+                        
+                        if (menu_mode && !reset_confirm_mode) ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, show_palette, save_text);
+                        touch_ignore_until = time_us_32() + 300000;
+                    } else if (!menu_mode) {
+                        if (tx > 440) {
+                            int local_y = ty - UI_Y_TEXT;
+                            if (local_y < 30) ui.scrollRTTY(1);
+                            else if (local_y > 130) ui.scrollRTTY(-1);
+                            else ui.scrollToY(local_y - 30, 100);
+                        } else if (!was_touched && show_palette) {
+                            show_palette = false;
+                            ui.drawRTTY();
+                            touch_ignore_until = time_us_32() + 300000;
+                        }
+                    }
                 }
             }
             was_touched = is_touched; last_touch = loop_start;
@@ -377,11 +557,39 @@ void core1_main() {
             shared_core1_load = (c1_total_work * 100.0f) / (loop_start - c1_last_measure);
             c1_total_work = 0; c1_last_measure = loop_start;
         }
+        
+        if (settings_need_save && (loop_start - settings_last_change > 15000000)) {
+            AppSettings s;
+            s.magic = 0xDEADBEEF;
+            s.baud_idx = shared_baud_idx;
+            s.shift_idx = shared_shift_idx;
+            s.stop_idx = shared_stop_idx;
+            s.rtty_inv = shared_rtty_inv;
+            s.display_mode = display_mode;
+            s.exp_scale = exp_scale;
+            s.auto_scale = auto_scale;
+            s.filter_k = tuning_lpf_k;
+            s.sq_snr = tuning_sq_snr;
+            s.target_freq = shared_target_freq;
+            
+            uint8_t page_buf[FLASH_PAGE_SIZE] = {0};
+            memcpy(page_buf, &s, sizeof(AppSettings));
+            
+            multicore_lockout_start_blocking();
+            uint32_t ints = save_and_disable_interrupts();
+            flash_range_erase(SETTINGS_FLASH_OFFSET, FLASH_SECTOR_SIZE);
+            flash_range_program(SETTINGS_FLASH_OFFSET, page_buf, FLASH_PAGE_SIZE);
+            restore_interrupts(ints);
+            multicore_lockout_end_blocking();
+            
+            settings_need_save = false;
+        }
         tight_loop_contents();
     }
 }
 
 void core0_dsp_loop() {
+    multicore_lockout_victim_init();
     for(int i=0; i<1024; i++) {
         sin_table[i] = sinf(2.0f * (float)M_PI * i / 1024.0f);
         cos_table[i] = cosf(2.0f * (float)M_PI * i / 1024.0f);
@@ -395,6 +603,9 @@ void core0_dsp_loop() {
     Biquad lp_mi, lp_mq, lp_si, lp_sq;
     float current_baud = -1.0f;
     float atc_mark_env = 0.01f, atc_space_env = 0.01f;
+    
+    agc_t agc;
+    agc_init(&agc, SAMPLE_RATE);
     
     // Diagnostics
     float diag_adc_min = 4096.0f, diag_adc_max = 0.0f;
@@ -436,7 +647,15 @@ void core0_dsp_loop() {
         float v = (rv/4095.0f)*3.3f; shared_adc_v=v; float s = (rv-2048.0f)/2048.0f;
         dc = dc*0.99f + s*0.01f; s -= dc; fb[fi]=s; float f_out=0.0f; int bi=fi;
         for(int i=0; i<63; i++) { f_out += fir_coeffs[i]*fb[bi]; bi--; if(bi<0) bi=62; }
-        fi=(fi+1)%63; if(wi<480) { tw[wi] = f_out*1.65f+1.65f; } ts[sc++]=f_out*2.0f;
+        fi=(fi+1)%63; 
+        
+        float agc_out = agc_process(&agc, f_out);
+        shared_agc_gain = agc.gain;
+        
+        if(wi<480) { tw[wi] = agc_out*1.65f+1.65f; } 
+        ts[sc++]=agc_out*2.0f;
+        
+        f_out = agc_out;
         
         float baud = bauds[shared_baud_idx];
         static float current_k = -1.0f;
@@ -607,6 +826,36 @@ void core0_dsp_loop() {
 
 int main() {
     vreg_set_voltage(VREG_VOLTAGE_1_30); sleep_ms(10); set_sys_clock_khz(300000, true);
+    
+    gpio_init(ENC_SW);
+    gpio_set_dir(ENC_SW, GPIO_IN);
+    gpio_pull_up(ENC_SW);
+    sleep_ms(10);
+    shared_force_cal = (gpio_get(ENC_SW) == 0); // Active low when pressed
+    
+    // Hardware Hard Reset (Hold for 3 seconds)
+    if (shared_force_cal) {
+        gpio_init(PICO_DEFAULT_LED_PIN);
+        gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+        for(int i=0; i<15; i++) {
+            gpio_put(PICO_DEFAULT_LED_PIN, i%2);
+            sleep_ms(200);
+            if (gpio_get(ENC_SW) != 0) { shared_force_cal = false; break; }
+        }
+        if (shared_force_cal) {
+            // WIPE IT ALL
+            multicore_lockout_start_blocking();
+            uint32_t ints = save_and_disable_interrupts();
+            flash_range_erase(CAL_FLASH_OFFSET, FLASH_SECTOR_SIZE);
+            flash_range_erase(SETTINGS_FLASH_OFFSET, FLASH_SECTOR_SIZE);
+            restore_interrupts(ints);
+            multicore_lockout_end_blocking();
+            
+            // Flash LED rapidly to confirm
+            for(int i=0; i<20; i++) { gpio_put(PICO_DEFAULT_LED_PIN, i%2); sleep_ms(50); }
+        }
+    }
+    
     stdio_init_all(); sleep_ms(2000);
     multicore_launch_core1(core1_main); core0_dsp_loop();
     return 0;
