@@ -37,7 +37,7 @@ You can now test this decoder with real over-the-air signals using a WebSDR (lik
 2.  Tune to a known RTTY frequency (e.g., German Weather Service DWD on `10100.8 kHz`).
 3.  Set the WebSDR modulation to **USB** (Upper Sideband).
     *   *Note: DWD transmits in F1B/LSB. If you tune in USB, the Mark frequency will be higher than the Space frequency. You must press the `INV` button on the Pico's screen to swap them, OR tune the WebSDR to LSB and leave the Pico in Normal mode.*
-4.  Connect your PC's headphone output to the Pico's ADC input (GPIO 26) using an audio cable. 
+4.  Connect your PC's headphone output using the audio adapter (read about it below) to the Pico's ADC input (GPIO 26) using an audio cable. 
     *   *Ensure your audio level is correct. Watch the top-left `SIG` meter on the screen; it should peak around `-15 dB` to `-5 dB` without triggering the red clipping indicator.*
 
 ### Tuning on the Pico
