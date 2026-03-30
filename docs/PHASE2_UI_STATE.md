@@ -17,7 +17,7 @@
    * **> -30 dB (High):** Displays Blue.
    * **ADC Clipping (< 50 or > 4045 raw):** Displays Red to alert the user of hardware overload.
 
-## Action Items for Next Phase (Phase 3)
+## Action Items for Next Phase (Phase 3 - RTTY DSP)
 * Implement the Goertzel algorithm or a fast I/Q demodulator locked onto the `tune_x` coordinates from the UI marker.
 * Calculate mark/space amplitudes and apply a comparator to generate a raw bitstream.
 * Feed the bitstream into a Baudot state machine for decoding text directly onto the text zone sprite.
