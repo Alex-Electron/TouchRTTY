@@ -48,6 +48,22 @@ You can now test this decoder with real over-the-air signals using a WebSDR (lik
 4.  The `RTTY: WAIT` indicator should turn green and say `RTTY: SYNC`.
 5.  Text will begin printing on the screen!
 
+## 🔌 Hardware Audio Input Adapter
+To safely feed audio from a PC, radio, or WebSDR into the RP2350's ADC (Analog-to-Digital Converter), a simple DC-biasing circuit is required. The Pico's ADC reads voltages between **0V and 3.3V**, so an AC audio signal centered around 0V will clip and potentially damage the pin if negative voltages are applied.
+
+**Required Circuit:**
+
+![Hardware Audio Adapter Schematic](docs/images/adc_input_adapter.png)
+
+1. **R1 (Input Level):** A 10kΩ potentiometer to adjust the audio volume from your source.
+2. **C1 (DC Blocking):** A 4.7µF capacitor to block any DC offset from the PC or radio.
+3. **R2 (Bias Voltage):** A 10kΩ trimpot connected between 3.3V (Pin 36) and AGND to pull the ADC's resting voltage to exactly **1.65V** (the center of the ADC's range).
+4. **R3 + C2 (Low-Pass Filter):** A 1kΩ resistor and 47nF capacitor forming a simple RC low-pass filter. This suppresses high-frequency RF noise and anti-aliases the signal before it hits the ADC.
+
+*Important:* For the cleanest reception with the lowest noise floor, connect all ground lines of this circuit to the Pico's **AGND (Analog Ground, Pin 33)** rather than a regular digital ground.
+
+*Connect the biased output to **GPIO 26 (Pin 31)**.*
+
 ## 🛠️ USB Serial Diagnostics (Tuning Mode)
 
 By connecting the Pico via USB to a PC terminal (9600 baud), you gain access to the raw DSP telemetry every 500ms:
