@@ -52,9 +52,13 @@ You can now test this decoder with real over-the-air signals using a WebSDR (lik
 To safely feed audio from a PC, radio, or WebSDR into the RP2350's ADC (Analog-to-Digital Converter), a simple DC-biasing circuit is required. The Pico's ADC reads voltages between **0V and 3.3V**, so an AC audio signal centered around 0V will clip and potentially damage the pin if negative voltages are applied.
 
 **Required Circuit:**
-1. **DC Blocking Capacitor:** Connect a 1µF to 10µF capacitor in series with the incoming audio signal to block any DC offset from the source.
-2. **Voltage Divider (Bias):** Connect two identical resistors (e.g., 10kΩ or 100kΩ) to the ADC pin—one to 3.3V (Pin 36) and one to GND. This pulls the ADC's resting voltage to exactly **1.65V** (the center of the ADC's range).
-3. **Low-Pass Filter (Optional but Recommended):** Add a small capacitor (e.g., 10nF to 100nF) between the ADC pin and GND to form a simple RC low-pass filter with the divider resistors. This suppresses high-frequency RF noise and anti-aliases the signal before it hits the 10kHz ADC.
+
+![Hardware Audio Adapter Schematic](docs/images/adc_input_adapter.png)
+
+1. **R1 (Input Level):** A 10kΩ potentiometer to adjust the audio volume from your source.
+2. **C1 (DC Blocking):** A 4.7µF capacitor to block any DC offset from the PC or radio.
+3. **R2 (Bias Voltage):** A 10kΩ trimpot connected between 3.3V (Pin 36) and GND to pull the ADC's resting voltage to exactly **1.65V** (the center of the ADC's range).
+4. **R3 + C2 (Low-Pass Filter):** A 1kΩ resistor and 47nF capacitor forming a simple RC low-pass filter. This suppresses high-frequency RF noise and anti-aliases the signal before it hits the 10kHz ADC.
 
 *Connect the biased output to **GPIO 26 (Pin 31)**.*
 
