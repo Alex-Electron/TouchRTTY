@@ -1,6 +1,11 @@
 # TouchRTTY (RP2350)
 **Professional-grade Radioteletype (RTTY) Decoder for Raspberry Pi Pico 2**
 
+<p align="center">
+  <img src="docs/images/device_view_1.jpg" width="48%" />
+  <img src="docs/images/device_view_2.jpg" width="48%" />
+</p>
+
 This project implements a high-performance, software-defined radio (SDR) style RTTY decoder on the dual-core RP2350 microcontroller. It utilizes advanced digital signal processing (DSP) techniques derived from professional modems like **fldigi** and the theoretical work of Kok Chen (W7AY), achieving highly stable reception even under severe selective fading and noise.
 
 ## 🚀 Key Features (Phase 3 Complete)
@@ -47,6 +52,41 @@ You can now test this decoder with real over-the-air signals using a WebSDR (lik
 3.  Tap the Waterfall to place the yellow/cyan markers over the two visible peaks.
 4.  The `RTTY: WAIT` indicator should turn green and say `RTTY: SYNC`.
 5.  Text will begin printing on the screen!
+
+## 🔌 Hardware Wiring Guide
+
+The project utilizes the Raspberry Pi Pico 2 (RP2350) and a 3.5" ILI9488 TFT Display with an XPT2046 touch controller. Below is the required pinout mapping.
+
+### Display (ILI9488) - SPI0
+| Display Pin | Pico 2 Pin | GPIO | Function |
+| :--- | :--- | :--- | :--- |
+| **VCC** | 3V3(OUT) | Pin 36 | 3.3V Power |
+| **GND** | GND | Pin 38 | Ground |
+| **CS**  | GP17 | Pin 22 | Chip Select |
+| **RESET**| GP21 | Pin 27 | Hardware Reset |
+| **DC/RS**| GP20 | Pin 26 | Data/Command |
+| **SDI (MOSI)**| GP19 | Pin 25 | SPI TX |
+| **SCK** | GP18 | Pin 24 | SPI Clock |
+| **LED** | 3V3(OUT) | Pin 36 | Backlight Power |
+
+*(Note: SDO/MISO on the display is intentionally left disconnected as we only transmit data to the screen using high-speed DMA).*
+
+### Touch Controller (XPT2046) - SPI1
+| Touch Pin | Pico 2 Pin | GPIO | Function |
+| :--- | :--- | :--- | :--- |
+| **T_CLK** | GP10 | Pin 14 | SPI Clock |
+| **T_CS**  | GP15 | Pin 20 | Touch Chip Select |
+| **T_DIN** | GP11 | Pin 15 | SPI TX (MOSI) |
+| **T_DO**  | GP12 | Pin 16 | SPI RX (MISO) |
+| **T_IRQ** | GP14 | Pin 19 | Interrupt (Boot Calibration) |
+
+### System & Audio
+| Component | Pico 2 Pin | GPIO | Function |
+| :--- | :--- | :--- | :--- |
+| **Audio Adapter** | GP26 | Pin 31 | ADC0 (Biased Audio Input) |
+| **Audio Ground** | AGND | Pin 33 | Analog Ground (Noise Isolation) |
+| **Encoder / Reset** | GP4 | Pin 6 | Push Button to GND (UI / Hard Reset) |
+| **SD Card CS** | GP13 | Pin 17 | Reserved for Phase 5 (SD Logging) |
 
 ## 🔌 Hardware Audio Input Adapter
 To safely feed audio from a PC, radio, or WebSDR into the RP2350's ADC (Analog-to-Digital Converter), a simple DC-biasing circuit is required. The Pico's ADC reads voltages between **0V and 3.3V**, so an AC audio signal centered around 0V will clip and potentially damage the pin if negative voltages are applied.
