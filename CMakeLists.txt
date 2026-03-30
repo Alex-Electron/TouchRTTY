@@ -40,7 +40,7 @@ add_subdirectory(lib/LovyanGFX)
 add_subdirectory(lib/no-OS-FatFS-SD-SPI-RPi-Pico/FatFs_SPI)
 
 add_executable(rtty_decoder
-    main.cpp
+    src/main.cpp
     src/display/ili9341_test.c
 )
 
@@ -48,6 +48,7 @@ pico_generate_pio_header(rtty_decoder ${CMAKE_CURRENT_LIST_DIR}/src/display/ili9
 
 target_include_directories(rtty_decoder PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/lib/lgfx_lite
+    ${CMAKE_CURRENT_LIST_DIR}/src
 )
 
 # Set global UART baud rate to 9600
@@ -68,7 +69,6 @@ target_link_libraries(rtty_decoder
     pico_multicore
     pico_float
     LovyanGFX
-    pico_fatfs_sd
 )
 
 pico_enable_stdio_usb(rtty_decoder 1)
