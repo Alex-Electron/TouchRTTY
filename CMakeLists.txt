@@ -32,31 +32,31 @@ endif()
 set(PICO_BOARD pico2 CACHE STRING "Board type")
 include(pico_sdk_import.cmake)
 
-project(rtty_decoder C CXX ASM)
+project(TouchRTTY C CXX ASM)
 pico_sdk_init()
 
 # Re-add LovyanGFX
 add_subdirectory(lib/LovyanGFX)
 add_subdirectory(lib/no-OS-FatFS-SD-SPI-RPi-Pico/FatFs_SPI)
 
-add_executable(rtty_decoder
+add_executable(TouchRTTY
     src/main.cpp
     src/display/ili9341_test.c
 )
 
-pico_generate_pio_header(rtty_decoder ${CMAKE_CURRENT_LIST_DIR}/src/display/ili9488_spi.pio)
+pico_generate_pio_header(TouchRTTY ${CMAKE_CURRENT_LIST_DIR}/src/display/ili9488_spi.pio)
 
-target_include_directories(rtty_decoder PRIVATE
+target_include_directories(TouchRTTY PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/lib/lgfx_lite
     ${CMAKE_CURRENT_LIST_DIR}/src
 )
 
 # Set global UART baud rate to 9600
-target_compile_definitions(rtty_decoder PRIVATE 
+target_compile_definitions(TouchRTTY PRIVATE 
     PICO_STDIO_UART_BAUD_RATE=9600
 )
 
-target_link_libraries(rtty_decoder
+target_link_libraries(TouchRTTY
     pico_stdlib
     hardware_adc
     hardware_dma
@@ -71,6 +71,6 @@ target_link_libraries(rtty_decoder
     LovyanGFX
 )
 
-pico_enable_stdio_usb(rtty_decoder 1)
-pico_enable_stdio_uart(rtty_decoder 1) # Enable UART output as well
-pico_add_extra_outputs(rtty_decoder)
+pico_enable_stdio_usb(TouchRTTY 1)
+pico_enable_stdio_uart(TouchRTTY 1) # Enable UART output as well
+pico_add_extra_outputs(TouchRTTY)
