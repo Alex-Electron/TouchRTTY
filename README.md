@@ -58,33 +58,32 @@ You can now test this decoder with real over-the-air signals using a WebSDR (lik
 The project utilizes the Raspberry Pi Pico 2 (RP2350) and a 3.5" ILI9488 TFT Display with an XPT2046 touch controller. Below is the required pinout mapping.
 
 ### Display (ILI9488) - SPI0
-| Display Pin | Pico 2 Pin | GPIO | Function |
+| Display Pin | Pico GPIO | Physical Pin | Function |
 | :--- | :--- | :--- | :--- |
-| **VCC** | 3V3(OUT) | Pin 36 | 3.3V Power |
-| **GND** | GND | Pin 38 | Ground |
-| **CS**  | GP17 | Pin 22 | Chip Select |
+| **VCC** | - | Pin 36 | 3.3V Power (3V3_OUT) |
+| **GND** | - | Pin 38 | Ground (GND) |
+| **CS**  | GP17 | Pin 22 | LCD Chip Select |
 | **RESET**| GP21 | Pin 27 | Hardware Reset |
-| **DC/RS**| GP20 | Pin 26 | Data/Command |
-| **SDI (MOSI)**| GP19 | Pin 25 | SPI TX |
-| **SCK** | GP18 | Pin 24 | SPI Clock |
-| **LED** | 3V3(OUT) | Pin 36 | Backlight Power |
-
-*(Note: SDO/MISO on the display is intentionally left disconnected as we only transmit data to the screen using high-speed DMA).*
+| **DC/RS**| GP20 | Pin 26 | Data / Command |
+| **SDI (MOSI)**| GP19 | Pin 25 | SPI Data In |
+| **SCK** | GP18 | Pin 24 | SPI Clock (60 MHz) |
+| **SDO (MISO)**| GP16 | Pin 21 | *Leave disconnected* (Prevents bus noise) |
+| **LED** | - | Pin 36 | Backlight Power (3V3_OUT) |
 
 ### Touch Controller (XPT2046) - SPI1
-| Touch Pin | Pico 2 Pin | GPIO | Function |
+| Touch Pin | Pico GPIO | Physical Pin | Function |
 | :--- | :--- | :--- | :--- |
-| **T_CLK** | GP10 | Pin 14 | SPI Clock |
+| **T_CLK** | GP10 | Pin 14 | SPI Clock (2.5 MHz) |
 | **T_CS**  | GP15 | Pin 20 | Touch Chip Select |
 | **T_DIN** | GP11 | Pin 15 | SPI TX (MOSI) |
 | **T_DO**  | GP12 | Pin 16 | SPI RX (MISO) |
 | **T_IRQ** | GP14 | Pin 19 | Interrupt (Boot Calibration) |
 
 ### System & Audio
-| Component | Pico 2 Pin | GPIO | Function |
+| Component | Pico GPIO | Physical Pin | Function |
 | :--- | :--- | :--- | :--- |
 | **Audio Adapter** | GP26 | Pin 31 | ADC0 (Biased Audio Input) |
-| **Audio Ground** | AGND | Pin 33 | Analog Ground (Noise Isolation) |
+| **Audio Ground** | - | Pin 33 | Analog Ground (AGND) |
 | **Encoder / Reset** | GP4 | Pin 6 | Push Button to GND (UI / Hard Reset) |
 | **SD Card CS** | GP13 | Pin 17 | Reserved for Phase 5 (SD Logging) |
 
