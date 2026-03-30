@@ -1,6 +1,11 @@
 # TouchRTTY (RP2350)
 **Professional-grade Radioteletype (RTTY) Decoder for Raspberry Pi Pico 2**
 
+<p align="center">
+  <img src="docs/images/device_view_1.jpg" width="48%" />
+  <img src="docs/images/device_view_2.jpg" width="48%" />
+</p>
+
 This project implements a high-performance, software-defined radio (SDR) style RTTY decoder on the dual-core RP2350 microcontroller. It utilizes advanced digital signal processing (DSP) techniques derived from professional modems like **fldigi** and the theoretical work of Kok Chen (W7AY), achieving highly stable reception even under severe selective fading and noise.
 
 ## 🚀 Key Features (Phase 3 Complete)
