@@ -49,8 +49,8 @@ public:
 
         {
             auto cfg = _touch_instance.config();
-            cfg.x_min      = 300;
-            cfg.x_max      = 3900;
+            cfg.x_min      = 3900;
+            cfg.x_max      = 300;
             cfg.y_min      = 300;
             cfg.y_max      = 3900;
             cfg.pin_int    = 14;

@@ -128,6 +128,7 @@ volatile float tuning_dpll_alpha = 0.035f;
 volatile float tuning_lpf_k = 0.75f;
 volatile float tuning_sq_snr = 4.0f;
 volatile float shared_agc_gain = 1.0f;
+volatile bool shared_agc_enabled = true;
 
 void handle_serial_commands() {
     static char cmd_buf[64];
