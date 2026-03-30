@@ -37,7 +37,6 @@ pico_sdk_init()
 
 # Re-add LovyanGFX
 add_subdirectory(lib/LovyanGFX)
-add_subdirectory(lib/no-OS-FatFS-SD-SPI-RPi-Pico/FatFs_SPI)
 
 add_executable(TouchRTTY
     src/main.cpp
