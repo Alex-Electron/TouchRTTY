@@ -57,8 +57,10 @@ To safely feed audio from a PC, radio, or WebSDR into the RP2350's ADC (Analog-t
 
 1. **R1 (Input Level):** A 10kΩ potentiometer to adjust the audio volume from your source.
 2. **C1 (DC Blocking):** A 4.7µF capacitor to block any DC offset from the PC or radio.
-3. **R2 (Bias Voltage):** A 10kΩ trimpot connected between 3.3V (Pin 36) and GND to pull the ADC's resting voltage to exactly **1.65V** (the center of the ADC's range).
-4. **R3 + C2 (Low-Pass Filter):** A 1kΩ resistor and 47nF capacitor forming a simple RC low-pass filter. This suppresses high-frequency RF noise and anti-aliases the signal before it hits the 10kHz ADC.
+3. **R2 (Bias Voltage):** A 10kΩ trimpot connected between 3.3V (Pin 36) and AGND to pull the ADC's resting voltage to exactly **1.65V** (the center of the ADC's range).
+4. **R3 + C2 (Low-Pass Filter):** A 1kΩ resistor and 47nF capacitor forming a simple RC low-pass filter. This suppresses high-frequency RF noise and anti-aliases the signal before it hits the ADC.
+
+*Important:* For the cleanest reception with the lowest noise floor, connect all ground lines of this circuit to the Pico's **AGND (Analog Ground, Pin 33)** rather than a regular digital ground.
 
 *Connect the biased output to **GPIO 26 (Pin 31)**.*
 
