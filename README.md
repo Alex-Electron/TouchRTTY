@@ -79,13 +79,31 @@ The project utilizes the Raspberry Pi Pico 2 (RP2350) and a 3.5" ILI9488 TFT Dis
 | **T_DO**  | GP12 | Pin 16 | SPI RX (MISO) |
 | **T_IRQ** | GP14 | Pin 19 | Interrupt (Boot Calibration) |
 
-### System & Audio
+### Audio Input
 | Component | Pico GPIO | Physical Pin | Function |
 | :--- | :--- | :--- | :--- |
-| **Audio Adapter** | GP26 | Pin 31 | ADC0 (Biased Audio Input) |
+| **Audio Signal** | GP26 | Pin 31 | ADC0 (Biased Audio Input) |
 | **Audio Ground** | - | Pin 33 | Analog Ground (AGND) |
-| **Encoder / Reset** | GP4 | Pin 6 | Push Button to GND (UI / Hard Reset) |
-| **SD Card CS** | GP13 | Pin 17 | Reserved for Phase 5 (SD Logging) |
+
+### Rotary Encoder (Future UI Expansion)
+*Currently, only the push-button (SW) is implemented to serve as a Hard Reset and UI interaction. Full rotary tuning (A/B pins) will be added in future phases.*
+| Encoder Pin | Pico GPIO | Physical Pin | Function |
+| :--- | :--- | :--- | :--- |
+| **SW (Switch)** | GP4 | Pin 6 | Push Button to GND (Hold on boot to Factory Reset) |
+| **CLK / A** | *TBD* | - | *Reserved for future use* |
+| **DT / B**  | *TBD* | - | *Reserved for future use* |
+| **GND** | - | Any GND | Ground |
+
+### SD Card Module - SPI1 (Phase 5 Logging)
+*The SD Card shares the **SPI1 bus** with the Touch Controller, but requires its own dedicated Chip Select (CS) pin.*
+| SD Card Pin | Pico GPIO | Physical Pin | Function |
+| :--- | :--- | :--- | :--- |
+| **MOSI / CMD** | GP11 | Pin 15 | SPI1 TX (Shared with Touch T_DIN) |
+| **MISO / D0**  | GP12 | Pin 16 | SPI1 RX (Shared with Touch T_DO) |
+| **SCK / CLK**  | GP10 | Pin 14 | SPI1 Clock (Shared with Touch T_CLK) |
+| **CS / DAT3**  | GP13 | Pin 17 | Dedicated SD Chip Select |
+| **VCC** | - | Pin 36 or 40 | 3.3V or 5V (Depends on your SD module) |
+| **GND** | - | Any GND | Ground |
 
 ## 🔌 Hardware Audio Input Adapter
 To safely feed audio from a PC, radio, or WebSDR into the RP2350's ADC (Analog-to-Digital Converter), a simple DC-biasing circuit is required. The Pico's ADC reads voltages between **0V and 3.3V**, so an AC audio signal centered around 0V will clip and potentially damage the pin if negative voltages are applied.
