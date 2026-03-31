@@ -126,7 +126,7 @@ volatile bool shared_clear_dsp = false;
 // Tuning Globals
 volatile float tuning_dpll_alpha = 0.035f;
 volatile float tuning_lpf_k = 0.75f;
-volatile float tuning_sq_snr = 4.0f;
+volatile float tuning_sq_snr = 6.0f;
 volatile float shared_agc_gain = 1.0f;
 volatile bool shared_agc_enabled = true;
 
@@ -832,7 +832,14 @@ int main() {
     gpio_set_dir(ENC_SW, GPIO_IN);
     gpio_pull_up(ENC_SW);
     sleep_ms(10);
-    shared_force_cal = (gpio_get(ENC_SW) == 0); // Active low when pressed
+    
+    // 100ms Debounce for Factory Reset check
+    bool pressed = true;
+    for(int i=0; i<10; i++) {
+        if (gpio_get(ENC_SW) != 0) { pressed = false; break; }
+        sleep_ms(10);
+    }
+    shared_force_cal = pressed;
     
     // Hardware Hard Reset (Hold for 3 seconds)
     if (shared_force_cal) {
