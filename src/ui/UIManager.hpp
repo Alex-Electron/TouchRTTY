@@ -61,18 +61,20 @@ public:
         bool is_nl = (c == '\n');
         bool is_cr = (c == '\r');
 
-        // Debug output to Serial (only if enabled via Diagnostic Screen)
-        if (shared_serial_diag && (c < 32 || c > 126)) printf("[0x%02X]", (uint8_t)c);
+        // Debug HEX output to Serial (even if technical diag is OFF, show non-printables)
+        if (!shared_serial_diag && (c < 32 || c > 126) && c != '\n' && c != '\r') printf("[0x%02X]", (uint8_t)c);
+        // If technical diag is ON, addRTTYChar doesn't print to serial (handled in main.cpp)
 
         if (is_nl || is_cr) {
-            if ((is_nl && last_c == '\r') || (is_cr && last_c == '\n')) {
-                // Already handled CRLF
-            } else {
+            // Smart newline: only add if current line is NOT empty
+            // This collapses CR CR LF sequences into a single newline
+            if (!rtty_lines.back().empty()) {
                 rtty_lines.push_back("");
                 if (scroll_offset > 0) scroll_offset++;
             }
         } else {
             rtty_lines.back() += c;
+            // Use dynamic line width for auto-wrap
             if ((int)rtty_lines.back().length() >= shared_line_width) {
                 rtty_lines.push_back("");
                 if (scroll_offset > 0) scroll_offset++;
@@ -273,19 +275,28 @@ public:
         _spr_text.fillTriangle(nx, meter_y+6, nx-5, meter_y+14, nx+5, meter_y+14, nc);    
 
         _spr_text.setTextDatum(middle_center);
+        
+        // Serial Diag Button (Left)
         uint32_t s_bg = serial_diag_on ? 0x004400U : 0x440000U;
         uint32_t s_brd = serial_diag_on ? 0x00FF00U : 0xFF0000U;
-        _spr_text.fillRoundRect(5, 118, 180, 36, 6, s_bg);
-        _spr_text.drawRoundRect(5, 118, 180, 36, 6, s_brd);
-        _spr_text.drawString(serial_diag_on ? "SER DIAG: ON" : "SER DIAG: OFF", 90, 136);
+        _spr_text.fillRoundRect(5, 118, 150, 36, 6, s_bg);
+        _spr_text.drawRoundRect(5, 118, 150, 36, 6, s_brd);
+        _spr_text.drawString(serial_diag_on ? "DIAG: ON" : "DIAG: OFF", 80, 136);
 
+        // Width Minus Button
+        _spr_text.fillRoundRect(160, 118, 80, 36, 6, 0x333333U);
+        _spr_text.drawRoundRect(160, 118, 80, 36, 6, 0x777777U);
+        _spr_text.drawString("W -", 200, 136);
+
+        // Width Plus Button
+        _spr_text.fillRoundRect(245, 118, 80, 36, 6, 0x333333U);
+        _spr_text.drawRoundRect(245, 118, 80, 36, 6, 0x777777U);
+        _spr_text.drawString("W +", 285, 136);
+
+        // Width Value Display
         char wbuf[32]; snprintf(wbuf, 32, "WIDTH: %d", line_width);
-        _spr_text.fillRoundRect(195, 118, 140, 36, 6, 0x333333U);
-        _spr_text.drawRoundRect(195, 118, 140, 36, 6, 0x777777U);
-        _spr_text.drawString("-", 210, 136); _spr_text.drawString(wbuf, 265, 136); _spr_text.drawString("+", 320, 136);
-        
-        _spr_text.setTextColor(0x777777U);
-        _spr_text.drawString("EXIT VIA MENU BTN", 410, 136);
+        _spr_text.setTextColor(0x00FFFFU);
+        _spr_text.drawString(wbuf, 385, 136);
 
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }
