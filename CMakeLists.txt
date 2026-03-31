@@ -14,21 +14,6 @@ endif()
 # ====================================================================================
 cmake_minimum_required(VERSION 3.13)
 
-set(sdkVersion 2.2.0)
-set(toolchainVersion 14_2_Rel1)
-set(picotoolVersion 2.2.0-a4)
-
-if(WIN32)
-    set(USERHOME $ENV{USERPROFILE})
-else()
-    set(USERHOME $ENV{HOME})
-endif()
-
-set(picoVscode ${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
-if (EXISTS ${picoVscode})
-    include(${picoVscode})
-endif()
-
 set(PICO_BOARD pico2 CACHE STRING "Board type")
 include(pico_sdk_import.cmake)
 
@@ -50,9 +35,16 @@ target_include_directories(TouchRTTY PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src
 )
 
-# Set global UART baud rate to 9600
+# Optimization Flags for DSP performance on RP2350 (Cortex-M33)
+target_compile_options(TouchRTTY PRIVATE
+    -O3
+    -ffast-math
+    -funroll-loops
+)
+
+# Set global UART baud rate to 115200
 target_compile_definitions(TouchRTTY PRIVATE 
-    PICO_STDIO_UART_BAUD_RATE=9600
+    PICO_STDIO_UART_BAUD_RATE=115200
 )
 
 target_link_libraries(TouchRTTY
@@ -65,11 +57,13 @@ target_link_libraries(TouchRTTY
     hardware_clocks
     hardware_timer
     hardware_uart
+    hardware_interp
+    hardware_flash
     pico_multicore
     pico_float
     LovyanGFX
 )
 
 pico_enable_stdio_usb(TouchRTTY 1)
-pico_enable_stdio_uart(TouchRTTY 1) # Enable UART output as well
+pico_enable_stdio_uart(TouchRTTY 0) # Disable UART stdio to save cycles (use USB)
 pico_add_extra_outputs(TouchRTTY)

@@ -442,8 +442,24 @@ void core1_main() {
                 spectrum.drawFastVLine(s_x, 0, UI_DSP_ZONE_H, 0xFFFF00U);
                 ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
             } else { 
-                spectrum.fillSprite(PAL_BG);
+                // Lissajous SCOPE with Phosphor Decay effect
+                uint16_t* buf_ptr = (uint16_t*)spectrum.getBuffer();
+                for (int i = 0; i < 480 * 64; i++) {
+                    uint16_t px = buf_ptr[i];
+                    if (px != 0) {
+                        // Fast RGB565 fade (approx 0.85x)
+                        uint16_t r = (px >> 11) & 0x1F;
+                        uint16_t g = (px >> 5) & 0x3F;
+                        uint16_t b = px & 0x1F;
+                        r = (r * 27) >> 5;
+                        g = (g * 27) >> 5;
+                        b = (b * 27) >> 5;
+                        buf_ptr[i] = (r << 11) | (g << 5) | b;
+                    }
+                }
+                
                 int cx = 240, cy = 32;
+                // Subtle grid
                 spectrum.drawFastHLine(0, cy, 480, PAL_GRID); 
                 spectrum.drawFastVLine(cx, 0, 64, PAL_GRID); 
                 
