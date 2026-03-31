@@ -46,12 +46,14 @@ struct AppSettings {
     bool serial_diag;
     int line_width;
     bool afc_on;
+    int font_mode;
 };
 
 volatile bool settings_need_save = false;
 volatile uint32_t settings_last_change = 0;
-volatile int shared_line_width = 60; // Default to 60 to avoid scrollbar overlap
-volatile bool shared_afc_on = true;  // Default to AFC ON
+volatile int shared_line_width = 60; 
+volatile bool shared_afc_on = true;  
+volatile int shared_font_mode = 0; // 0: Font2, 1: Font0 x2
 
 void flag_settings_change() {
     settings_need_save = true;
@@ -268,8 +270,9 @@ void core1_main() {
         shared_target_freq = loaded_set.target_freq;
         shared_actual_freq = shared_target_freq;
         shared_serial_diag = loaded_set.serial_diag; 
-        shared_line_width = (loaded_set.line_width >= 30 && loaded_set.line_width <= 75) ? loaded_set.line_width : 60;
+        shared_line_width = (loaded_set.line_width >= 30 && loaded_set.line_width <= 80) ? loaded_set.line_width : 60;
         shared_afc_on = loaded_set.afc_on;
+        shared_font_mode = loaded_set.font_mode;
     }
     
     const float bauds[] = {45.45f, 50.0f, 75.0f};
@@ -344,7 +347,7 @@ void core1_main() {
             bool is_clipping = shared_adc_clipping; shared_adc_clipping = false; 
             
             if (diag_screen_active) {
-                ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width);
+                ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width, shared_font_mode);
             }
             
             ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open, shared_agc_gain, shared_agc_enabled);
@@ -578,6 +581,7 @@ void core1_main() {
                            s.serial_diag = shared_serial_diag;
                            s.line_width = shared_line_width;
                            s.afc_on = shared_afc_on;
+                           s.font_mode = shared_font_mode; // New
 
                            uint8_t page_buf[FLASH_PAGE_SIZE] = {0};
                            memcpy(page_buf, &s, sizeof(AppSettings));
@@ -601,19 +605,24 @@ void core1_main() {
                         } else if (diag_screen_active && !was_touched) {
                             // Diagnostics screen touch handling
                             int local_y = ty - UI_Y_TEXT;
-                            if (local_y > 111) { // Clicked on buttons area
-                                if (tx < 160) { // SERIAL DIAG toggle
+                            if (local_y > 111) { 
+                                if (tx < 108) { // SERIAL DIAG
                                     shared_serial_diag = !shared_serial_diag;
-                                    ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width);
-                                } else if (tx >= 165 && tx < 270) { // WIDTH -
+                                } else if (tx >= 110 && tx < 212) { // FONT toggle
+                                    shared_font_mode = (shared_font_mode + 1) % 2;
+                                    flag_settings_change();
+                                } else if (tx >= 215 && tx < 288) { // WIDTH -
                                     flag_settings_change();
                                     shared_line_width -= 2; if(shared_line_width < 30) shared_line_width = 30;
-                                    ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width);
-                                } else if (tx >= 275 && tx < 380) { // WIDTH +
+                                } else if (tx >= 290 && tx < 362) { // WIDTH +
                                     flag_settings_change();
-                                    shared_line_width += 2; if(shared_line_width > 75) shared_line_width = 75;
-                                    ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width);
+                                    shared_line_width += 2; if(shared_line_width > 80) shared_line_width = 80;
+                                } else if (tx >= 365 && tx < 438) { // RST
+                                    reset_confirm_mode = true;
+                                    diag_screen_active = false;
+                                    ui.drawResetConfirm();
                                 }
+                                if (!reset_confirm_mode) ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width, shared_font_mode);
                                 touch_ignore_until = time_us_32() + 300000;
                             }
                         }

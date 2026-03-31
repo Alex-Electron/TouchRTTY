@@ -28,6 +28,7 @@ static constexpr uint32_t PAL_TEXT = 0xFFFFFFU; // White
 
 extern volatile bool shared_serial_diag;
 extern volatile int  shared_line_width;
+extern volatile int  shared_font_mode;
 
 class UIManager {
 private:
@@ -42,6 +43,14 @@ private:
     std::vector<std::string> rtty_lines;
     int scroll_offset = 0;
     bool figures_mode = false;
+
+    // Simple Button helper to avoid hardcoding coords everywhere
+    struct Btn {
+        int x, y, w, h;
+        bool contains(int tx, int ty) {
+            return (tx >= x && tx < x + w && ty >= y && ty < y + h);
+        }
+    };
 
 public:
     UIManager(lgfx::LGFX_Device* tft) : _tft(tft), _spr_top(tft), _spr_text(tft), _spr_bottom(tft) {}
@@ -93,7 +102,7 @@ public:
 
     void scrollRTTY(int dir) {
         scroll_offset += dir;
-        int max_lines_on_screen = 160 / 18;
+        int max_lines_on_screen = 160 / (shared_font_mode == 1 ? 16 : 18);
         int max_scroll = (int)rtty_lines.size() - max_lines_on_screen;
         if (max_scroll < 0) max_scroll = 0;
         if (scroll_offset > max_scroll) scroll_offset = max_scroll;
@@ -102,7 +111,7 @@ public:
     }
 
     void scrollToY(int y, int track_h) {
-        int max_lines = 160 / 18;
+        int max_lines = 160 / (shared_font_mode == 1 ? 16 : 18);
         int total_lines = (int)rtty_lines.size();
         if (total_lines <= max_lines) return;
         int max_scroll = total_lines - max_lines;
@@ -118,7 +127,7 @@ public:
         _spr_text.fillSprite(COLOR_BG);
         _spr_text.drawFastHLine(0, 0, 480, COLOR_GRID);
         _spr_text.setFont(&fonts::Font2); _spr_text.setTextDatum(middle_center);
-        _spr_text.setTextColor(0xFFFFFFU);
+        _spr_text.setTextColor(0xFFFFFFU, COLOR_BG);
         _spr_text.drawString("FACTORY RESET?", 240, 40);
         _spr_text.drawString("All settings will be lost.", 240, 60);
         _spr_text.fillRoundRect(80, 100, 120, 40, 6, 0x333333U);
@@ -140,16 +149,30 @@ public:
         _spr_text.fillSprite(COLOR_BG);
         _spr_text.drawFastHLine(0, 0, 480, COLOR_GRID);
         _spr_text.setTextColor(0x00FF00U, COLOR_BG); 
-        _spr_text.setFont(&fonts::Font2);
+        
+        int line_h = 18;
+        if (shared_font_mode == 1) {
+            _spr_text.setFont(&fonts::Font0);
+            _spr_text.setTextSize(1.0, 2.0); // 6px width, 16px height
+            line_h = 16;
+        } else {
+            _spr_text.setFont(&fonts::Font2);
+            _spr_text.setTextSize(1.0, 1.0); // 8px width, 16px height
+            line_h = 18;
+        }
+        
         _spr_text.setTextDatum(top_left);
-        int max_lines_on_screen = 160 / 18; 
+        int max_lines_on_screen = 160 / line_h; 
         int start_line = (int)rtty_lines.size() - max_lines_on_screen - scroll_offset;
         if (start_line < 0) start_line = 0;
+
         int y = 5;
         for (size_t i = start_line; i < rtty_lines.size() && y < 155; i++) {
             _spr_text.drawString(rtty_lines[i].c_str(), 5, y);
-            y += 18;
+            y += line_h;
         }
+        
+        _spr_text.setTextSize(1.0, 1.0); // Reset
         _spr_text.fillRect(440, 0, 40, 160, 0x111111U); 
         _spr_text.drawRect(440, 0, 40, 30, COLOR_GRID);
         _spr_text.fillTriangle(460, 5, 450, 20, 470, 20, COLOR_TEXT);
@@ -180,10 +203,11 @@ public:
             auto_scale ? "AUTO: ON" : "AUTO: OFF",
             diag_label,
             "BW -", buf_fl, "BW +", save_text,
-            "SQ -", buf_sq, "SQ +", "RESET"
+            "SQ -", buf_sq, "SQ +", "" // RESET removed from here
         };
         _spr_text.setFont(&fonts::Font2); _spr_text.setTextDatum(middle_center);
         for (int i = 0; i < 12; i++) {
+            if (strlen(labels[i]) == 0) continue;
             int x = (i % 4) * bw; int y = (i / 4) * bh;
             uint32_t bg = 0x333333U, brd = 0x777777U;
             if (i == 2 && auto_scale) { bg = 0x006600U; brd = 0x00FF00U; }
@@ -192,7 +216,7 @@ public:
             if (i == 7) { bg = 0x000066U; brd = 0x0000FFU; }
             _spr_text.fillRoundRect(x + 4, y + 4, bw - 8, bh - 8, 6, bg);
             _spr_text.drawRoundRect(x + 4, y + 4, bw - 8, bh - 8, 6, brd);
-            if (i == 5 || i == 9) _spr_text.setTextColor(0x00FFFFU); else _spr_text.setTextColor(0xFFFFFFU);
+            if (i == 5 || i == 9) _spr_text.setTextColor(0x00FFFFU, bg); else _spr_text.setTextColor(0xFFFFFFU, bg);
             _spr_text.drawString(labels[i], x + (bw / 2), y + (bh / 2));
         }
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
@@ -219,7 +243,7 @@ public:
             if (i == 6 && menu_mode) { bg = 0x006600U; brd = 0x00FF00U; }
             _spr_bottom.fillRoundRect(x + 2, 2, btn_w - 4, UI_BOTTOM_BAR_H - 4, 6, bg);   
             _spr_bottom.drawRoundRect(x + 2, 2, btn_w - 4, UI_BOTTOM_BAR_H - 4, 6, brd);  
-            _spr_bottom.setTextColor(0xFFFFFFU);
+            _spr_bottom.setTextColor(0xFFFFFFU, bg);
             _spr_bottom.drawString(labels_main[i], x + (btn_w / 2), (UI_BOTTOM_BAR_H / 2));
         }
         ili9488_push_colors(0, UI_Y_BOTTOM, 480, 48, (uint16_t*)_spr_bottom.getBuffer()); 
@@ -253,7 +277,7 @@ public:
         ili9488_push_colors(0, UI_Y_TOP, 480, UI_TOP_BAR_H, (uint16_t*)_spr_top.getBuffer());
     }
 
-    void drawDiagScreen(float adc_v, bool serial_diag_on, int line_width) {
+    void drawDiagScreen(float adc_v, bool serial_diag_on, int line_width, int font_mode) {
         _spr_text.fillSprite(COLOR_BG);
         _spr_text.drawFastHLine(0, 111, 480, COLOR_GRID);
         _spr_text.setTextDatum(top_left); _spr_text.setFont(&fonts::Font2);
@@ -275,23 +299,42 @@ public:
 
         _spr_text.setTextDatum(middle_center);
         
+        // 1. SERIAL DIAG (5..105)
         uint32_t s_bg = serial_diag_on ? 0x004400U : 0x440000U;
-        uint32_t s_brd = serial_diag_on ? 0x00FF00U : 0xFF0000U;
-        _spr_text.fillRoundRect(5, 118, 150, 36, 6, s_bg);
-        _spr_text.drawRoundRect(5, 118, 150, 36, 6, s_brd);
-        _spr_text.drawString(serial_diag_on ? "DIAG: ON" : "DIAG: OFF", 80, 136);
+        _spr_text.fillRoundRect(5, 118, 100, 36, 6, s_bg);
+        _spr_text.drawRoundRect(5, 118, 100, 36, 6, serial_diag_on ? 0x00FF00U : 0xFF0000U);
+        _spr_text.setTextColor(0xFFFFFFU, s_bg);
+        _spr_text.drawString(serial_diag_on ? "SER:ON" : "SER:OFF", 55, 136);
 
-        _spr_text.fillRoundRect(165, 118, 100, 36, 6, 0x333333U);
-        _spr_text.drawRoundRect(165, 118, 100, 36, 6, 0x777777U);
-        _spr_text.drawString("WIDTH -", 215, 136);
+        // 2. FONT TOGGLE (110..210)
+        uint32_t f_bg = (font_mode == 1) ? 0x444400U : 0x333333U;
+        _spr_text.fillRoundRect(110, 118, 100, 36, 6, f_bg);
+        _spr_text.drawRoundRect(110, 118, 100, 36, 6, 0x777777U);
+        _spr_text.setTextColor(0xFFFFFFU, f_bg);
+        _spr_text.drawString(font_mode == 1 ? "NARW" : "NORM", 160, 136);
 
-        _spr_text.fillRoundRect(275, 118, 100, 36, 6, 0x333333U);
-        _spr_text.drawRoundRect(275, 118, 100, 36, 6, 0x777777U);
-        _spr_text.drawString("WIDTH +", 325, 136);
+        // 3. WIDTH MINUS (215..285)
+        _spr_text.fillRoundRect(215, 118, 70, 36, 6, 0x333333U);
+        _spr_text.drawRoundRect(215, 118, 70, 36, 6, 0x777777U);
+        _spr_text.setTextColor(0xFFFFFFU, 0x333333U);
+        _spr_text.drawString("W-", 250, 136);
 
-        char wbuf[16]; snprintf(wbuf, 16, "W:%d", line_width);
-        _spr_text.setTextColor(0x00FFFFU);
-        _spr_text.drawString(wbuf, 425, 136);
+        // 4. WIDTH PLUS (290..360)
+        _spr_text.fillRoundRect(290, 118, 70, 36, 6, 0x333333U);
+        _spr_text.drawRoundRect(290, 118, 70, 36, 6, 0x777777U);
+        _spr_text.setTextColor(0xFFFFFFU, 0x333333U);
+        _spr_text.drawString("W+", 325, 136);
+
+        // 5. RST (365..435) - New small reset button
+        _spr_text.fillRoundRect(365, 118, 70, 36, 6, 0x440000U);
+        _spr_text.drawRoundRect(365, 118, 70, 36, 6, 0xFF0000U);
+        _spr_text.setTextColor(0xFFFFFFU, 0x440000U);
+        _spr_text.drawString("RST", 400, 136);
+
+        // 6. Value Display (Right)
+        char wbuf[16]; snprintf(wbuf, 16, "%d", line_width);
+        _spr_text.setTextColor(0x00FFFFU, COLOR_BG);
+        _spr_text.drawString(wbuf, 455, 136);
 
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }
