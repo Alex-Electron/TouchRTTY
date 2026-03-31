@@ -53,26 +53,38 @@ public:
 
     void addRTTYChar(char c, bool update_screen = true) {
         if (rtty_lines.empty()) rtty_lines.push_back("");
+
+        static char last_c = 0;
         bool is_nl = (c == '\n');
         bool is_cr = (c == '\r');
-        
-        if (is_nl) {
-            rtty_lines.push_back("");
-            if (scroll_offset > 0) scroll_offset++;
-        } else if (!is_cr) {
+
+        // Debug output to Serial
+        if (c < 32 || c > 126) printf("[0x%02X]", (uint8_t)c);
+
+        if (is_nl || is_cr) {
+            // Handle CR, LF, CRLF, LFCR as a single newline
+            if ((is_nl && last_c == '\r') || (is_cr && last_c == '\n')) {
+                // Already handled by the previous char
+            } else {
+                rtty_lines.push_back("");
+                if (scroll_offset > 0) scroll_offset++;
+            }
+        } else {
             rtty_lines.back() += c;
-            if (rtty_lines.back().length() >= 45) {
+            // Increased from 45 to 62 to use full screen width (approx 7px per char in Font2)
+            if (rtty_lines.back().length() >= 62) {
                 rtty_lines.push_back("");
                 if (scroll_offset > 0) scroll_offset++;
             }
         }
+        last_c = c;
+
         if (rtty_lines.size() > 200) {
             rtty_lines.erase(rtty_lines.begin());
             if (scroll_offset > 0) scroll_offset--;
         }
         if (update_screen && scroll_offset == 0) drawRTTY();
     }
-    
     void scrollRTTY(int dir) {
         scroll_offset += dir;
         int max_lines_on_screen = 160 / 18;
