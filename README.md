@@ -16,7 +16,7 @@ This project implements a high-performance, software-defined radio (SDR) style R
 *   **RP2350 Dual-Core Optimization:**
     *   **Core 0 (DSP Engine):** Dedicated strictly to hard-real-time audio processing at exactly 10,000 Hz using RP2350's floating-point unit (FPU).
     *   **Core 1 (UI & Rendering):** Handles the 3.5" ILI9488 TFT touch display via 60MHz PIO DMA, rendering a 30+ FPS Waterfall, Spectrum, and Lissajous (XY) tuning scope without interrupting the DSP.
-*   **Professional DSP Pipeline:**
+*   **Professional DSP Pipeline (Build 172):**
     *   **63-Tap FIR Bandpass Filter:** Pre-filters the 10kHz ADC stream.
     *   **Quadrature (I/Q) Demodulator:** Baseband mixing with hardware-generated sine/cosine tables, followed by Biquad Low-Pass Filters (Extended Raised Cosine). Eliminates Inter-Symbol Interference (ISI).
     *   **Automatic Threshold Correction (ATC):** Fast-attack, slow-release (FASR) envelope detectors independently track Mark and Space fading, dynamically adjusting the decision threshold.
@@ -25,11 +25,13 @@ This project implements a high-performance, software-defined radio (SDR) style R
     *   **Strict Squelch:** Intelligent noise-floor and SNR tracking ensures the decoder remains totally silent until a valid RTTY signal (SNR > 4dB) is present.
 *   **Hardware Compatibility:**
     *   Optimized for the **ILI9488** display quirk (Mode 11: 16-bit Endian Swapped, BGR out), rendering pure, artifact-free colors via native RGB565 manipulation.
-*   **Supported Modes:**
-    *   Speeds: 45.45, 50, 75 Baud
-    *   Shifts: 170, 200, 425, 450 (DWD SYNOP), 850 Hz
-    *   Stop Bits: 1.0, 1.5, 2.0
-    *   Polarity: Normal / Inverted (LSB standard: Mark is lower frequency)
+
+## 📅 Development Roadmap
+
+*   **PHASE 4:** SD-Card Integration (exFAT) & Data Logging.
+*   **PHASE 5:** CW (Morse Code) Decoder & APF Filter.
+*   **PHASE 6:** FT8 / FT4 Mode Implementation.
+*   **PHASE 7:** WEFAX Decoder (HF Weather Fax).
 
 ## 📡 WebSDR / Real-World Testing Guide
 
@@ -70,7 +72,7 @@ The project utilizes the Raspberry Pi Pico 2 (RP2350) and a 3.5" ILI9488 TFT Dis
 | **DC/RS**| GP20 | Pin 26 | Data / Command |
 | **SDI (MOSI)**| GP19 | Pin 25 | SPI Data In |
 | **SCK** | GP18 | Pin 24 | SPI Clock (60 MHz) |
-| **SDO (MISO)**| GP16 | Pin 21 | *Leave disconnected* (Prevents bus noise) |
+| **SDO (MISO)**| GP16 | Pin 21 | Define in code, physically disconnect to reduce bus noise |
 | **LED** | - | Pin 36 | Backlight Power (3V3_OUT) |
 
 ### Touch Controller (XPT2046) - SPI1

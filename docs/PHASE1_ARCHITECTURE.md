@@ -30,7 +30,7 @@ While the display is driven by our custom engine, we retained the `LovyanGFX` li
 | **SPI0 (Display)**| | |
 | SCK          | 18          | 60MHz PIO Clock |
 | MOSI         | 19          | 60MHz PIO Data Out |
-| MISO         | 16           | **DISCONNECTED** (Prevents bus noise) |
+| SDO (MISO)  | 16          | Physically disconnect to reduce bus noise (Define in code for driver stability) |
 | CS           | 17          | LCD Chip Select |
 | DC           | 20          | Data/Command |
 | RST          | 21          | Hardware Reset |
