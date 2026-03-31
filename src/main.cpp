@@ -43,6 +43,7 @@ struct AppSettings {
     float filter_k;
     float sq_snr;
     float target_freq;
+    bool serial_diag;
 };
 
 volatile bool settings_need_save = false;
@@ -129,6 +130,7 @@ volatile float tuning_lpf_k = 0.75f;
 volatile float tuning_sq_snr = 6.0f;
 volatile float shared_agc_gain = 1.0f;
 volatile bool shared_agc_enabled = true;
+volatile bool shared_serial_diag = false; // Toggle via Diagnostic Screen
 
 void handle_serial_commands() {
     static char cmd_buf[64];
@@ -242,8 +244,8 @@ void core1_main() {
     
     bool auto_scale = true, exp_scale = true;
     bool menu_mode = false;
+    bool diag_screen_active = false;
     int display_mode = 0;
-    bool show_palette = false;
     bool reset_confirm_mode = false;
     uint32_t saved_text_timer = 0;
     
@@ -261,6 +263,7 @@ void core1_main() {
         tuning_sq_snr = loaded_set.sq_snr;
         shared_target_freq = loaded_set.target_freq;
         shared_actual_freq = shared_target_freq;
+        shared_serial_diag = loaded_set.serial_diag; // Load serial diag preference
     }
     
     const float bauds[] = {45.45f, 50.0f, 75.0f};
@@ -291,7 +294,7 @@ void core1_main() {
 
         if (rtty_char_ready) {
             char c = rtty_new_char;
-            ui.addRTTYChar(c, !show_palette && !menu_mode);
+            ui.addRTTYChar(c, !diag_screen_active && !menu_mode);
             rtty_char_ready = false;
             printf("%c", c);
         }
@@ -300,9 +303,9 @@ void core1_main() {
         if (shared_figs_flag) { shared_figs_flag = false; printf("[FIGS]"); }
         if (shared_ltrs_flag) { shared_ltrs_flag = false; printf("[LTRS]"); }
 
-        if (shared_diag_ready) {
+        if (shared_diag_ready && shared_serial_diag) {
             shared_diag_ready = false;
-            printf("\n--- TUNING DIAGNOSTICS (B156) ---\n");
+            printf("\n--- TUNING DIAGNOSTICS (B%d) ---\n", BUILD_NUMBER);
             printf("Step 1 (ADC & AGC): V=%.2fV (Range: %.0f-%.0f) AGC_Gain=%.2fx\n", shared_adc_v, shared_diag_adc_min, shared_diag_adc_max, shared_agc_gain);
             printf("Step 2 (ATC Level): Mark_Env=%.4f Space_Env=%.4f\n", shared_atc_m, shared_atc_s);
             printf("Step 3 (FFT Peaks): SNR=%.1f dB, Signal=%.1f dB\n", shared_snr_db, shared_signal_db);
@@ -310,6 +313,8 @@ void core1_main() {
             float b = bauds[shared_baud_idx];
             printf("Params: Baud=%.2f ALPHA=%.4f K=%.2f SQ=%.1f\n", b, tuning_dpll_alpha, tuning_lpf_k, tuning_sq_snr);
             printf("---------------------------------\n");
+        } else if (shared_diag_ready) {
+            shared_diag_ready = false; // Reset anyway if serial diag is off
         }
 
         float bin_idx = shared_actual_freq / (SAMPLE_RATE / (float)FFT_SIZE);
@@ -322,8 +327,8 @@ void core1_main() {
             float s_freq = shared_actual_freq + shifts[shared_shift_idx]/2.0f;
             bool is_clipping = shared_adc_clipping; shared_adc_clipping = false; 
             
-            if (show_palette) {
-                ui.drawInfo(shared_adc_v);
+            if (diag_screen_active) {
+                ui.drawDiagScreen(shared_adc_v, shared_serial_diag);
             }
             
             ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open, shared_agc_gain, shared_agc_enabled);
@@ -536,22 +541,58 @@ void core1_main() {
                         if (btn == 0) { flag_settings_change(); display_mode = (display_mode + 1) % 3; spectrum.fillSprite(PAL_BG); }
                         else if (btn == 1) { flag_settings_change(); exp_scale = !exp_scale; }
                         else if (btn == 2) { flag_settings_change(); auto_scale = !auto_scale; }
-                        else if (btn == 3) { show_palette = !show_palette; }
+                        else if (btn == 3) { diag_screen_active = true; menu_mode = false; } // Enter sub-menu
                         else if (btn == 4) { flag_settings_change(); tuning_lpf_k -= 0.05f; if(tuning_lpf_k < 0.5f) tuning_lpf_k = 0.5f; }
                         else if (btn == 6) { flag_settings_change(); tuning_lpf_k += 0.05f; if(tuning_lpf_k > 1.5f) tuning_lpf_k = 1.5f; }
-                        else if (btn == 7) { 
-                            settings_need_save = true; 
-                            settings_last_change = time_us_32() - 15000000;
-                            save_text = "SAVED!";
-                            saved_text_timer = time_us_32();
+                        else if (btn == 7) {
+                           AppSettings s;
+                           s.magic = 0xDEADBEEF;
+                           s.baud_idx = shared_baud_idx;
+                           s.shift_idx = shared_shift_idx;
+                           s.stop_idx = shared_stop_idx;
+                           s.rtty_inv = shared_rtty_inv;
+                           s.display_mode = display_mode;
+                           s.exp_scale = exp_scale;
+                           s.auto_scale = auto_scale;
+                           s.filter_k = tuning_lpf_k;
+                           s.sq_snr = tuning_sq_snr;
+                           s.target_freq = shared_target_freq;
+                           s.serial_diag = shared_serial_diag; // Save this too!
+
+                           uint8_t page_buf[FLASH_PAGE_SIZE] = {0};
+                           memcpy(page_buf, &s, sizeof(AppSettings));
+                           multicore_lockout_start_blocking();
+                           uint32_t ints = save_and_disable_interrupts();
+                           flash_range_erase(SETTINGS_FLASH_OFFSET, FLASH_SECTOR_SIZE);
+                           flash_range_program(SETTINGS_FLASH_OFFSET, page_buf, FLASH_PAGE_SIZE);
+                           restore_interrupts(ints);
+                           multicore_lockout_end_blocking();
+
+                           save_text = "SAVED!";
+                           saved_text_timer = time_us_32();
+                           settings_need_save = false;
                         }
                         else if (btn == 8) { flag_settings_change(); tuning_sq_snr -= 1.0f; }
                         else if (btn == 10) { flag_settings_change(); tuning_sq_snr += 1.0f; }
                         else if (btn == 11) { reset_confirm_mode = true; ui.drawResetConfirm(); }
-                        
-                        if (menu_mode && !reset_confirm_mode) ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, show_palette, save_text);
+
+                        if (menu_mode && !reset_confirm_mode) ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, "DIAG", save_text);
                         touch_ignore_until = time_us_32() + 300000;
-                    } else if (!menu_mode) {
+                        } else if (diag_screen_active && !was_touched) {
+                        // Diagnostics screen touch handling
+                        int local_y = ty - UI_Y_TEXT;
+                        if (local_y > 111) { // Clicked on buttons area
+                            if (tx < 240) { // SERIAL DIAG toggle
+                                shared_serial_diag = !shared_serial_diag;
+                                ui.drawDiagScreen(shared_adc_v, shared_serial_diag);
+                            } else { // BACK button
+                                diag_screen_active = false;
+                                ui.drawRTTY();
+                            }
+                            touch_ignore_until = time_us_32() + 300000;
+                        }
+                        } else if (!menu_mode && !diag_screen_active) {
+
                         if (tx > 440) {
                             int local_y = ty - UI_Y_TEXT;
                             if (local_y < 30) ui.scrollRTTY(1);

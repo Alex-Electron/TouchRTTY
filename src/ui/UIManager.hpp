@@ -26,6 +26,8 @@ static constexpr uint32_t PAL_TEXT = 0xFFFFFFU; // White
 #define UI_Y_TEXT      (UI_Y_DSP + UI_DSP_ZONE_H)
 #define UI_Y_BOTTOM    (UI_Y_TEXT + UI_TEXT_ZONE_H)
 
+extern volatile bool shared_serial_diag;
+
 class UIManager {
 private:
     lgfx::LGFX_Device* _tft;
@@ -58,8 +60,8 @@ public:
         bool is_nl = (c == '\n');
         bool is_cr = (c == '\r');
 
-        // Debug output to Serial
-        if (c < 32 || c > 126) printf("[0x%02X]", (uint8_t)c);
+        // Debug output to Serial (only if enabled via Diagnostic Screen)
+        if (shared_serial_diag && (c < 32 || c > 126)) printf("[0x%02X]", (uint8_t)c);
 
         if (is_nl || is_cr) {
             // Handle CR, LF, CRLF, LFCR as a single newline
@@ -182,7 +184,7 @@ public:
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }
 
-    void drawMenu(bool auto_scale, bool exp_scale, int display_mode, float filter_k, float sq_snr, bool diag_mode, const char* save_text) {
+    void drawMenu(bool auto_scale, bool exp_scale, int display_mode, float filter_k, float sq_snr, const char* diag_label, const char* save_text) {
         _spr_text.fillSprite(COLOR_BG);
         _spr_text.drawFastHLine(0, 0, 480, COLOR_GRID);
         
@@ -197,7 +199,7 @@ public:
             display_mode == 0 ? "DISP: WF" : (display_mode == 1 ? "DISP: SPEC" : "DISP: SCOPE"),
             exp_scale ? "SCALE: EXP" : "SCALE: LIN",
             auto_scale ? "AUTO: ON" : "AUTO: OFF",
-            diag_mode ? "DIAG: ON" : "DIAG: OFF",
+            diag_label,
 
             "BW -", buf_fl, "BW +", save_text,
             "SQ -", buf_sq, "SQ +", "RESET"
@@ -210,7 +212,7 @@ public:
             int y = (i / 4) * bh;
             uint32_t bg = 0x333333U, brd = 0x777777U;
             if (i == 2 && auto_scale) { bg = 0x006600U; brd = 0x00FF00U; }
-            if (i == 3 && diag_mode) { bg = 0x006600U; brd = 0x00FF00U; }
+            if (i == 3) { bg = 0x442200U; brd = 0xAA5500U; } // Diag button
             if (i == 5 || i == 9) { bg = 0x111111U; brd = 0x333333U; } 
             if (i == 7) { bg = 0x000066U; brd = 0x0000FFU; } // SAVE button
 
@@ -303,13 +305,13 @@ public:
         ili9488_push_colors(0, UI_Y_TOP, 480, UI_TOP_BAR_H, (uint16_t*)_spr_top.getBuffer());
     }
 
-    void drawInfo(float adc_v) {
+    void drawDiagScreen(float adc_v, bool serial_diag_on) {
         _spr_text.fillSprite(COLOR_BG);
         _spr_text.drawFastHLine(0, 111, 480, COLOR_GRID);
 
         _spr_text.setTextDatum(top_left); _spr_text.setFont(&fonts::Font2);
         _spr_text.setTextColor(0x00FF00U, COLOR_BG);
-        _spr_text.drawString("DIAGNOSTIC MODE", 5, 5);
+        _spr_text.drawString("DIAGNOSTICS & SETUP", 5, 5);
         _spr_text.setTextColor(0xFFFFFFU, COLOR_BG);
         _spr_text.drawString("Hardware: 16-bit Swapped, BGR out", 5, 25);
 
@@ -317,22 +319,11 @@ public:
         _spr_text.setTextDatum(middle_center);
 
         _spr_text.fillRect(start_x, start_y, sq_w, sq_h, 0x0000FFU);
-        _spr_text.setTextColor(0xFFFFFFU, 0x0000FFU); _spr_text.drawString("RED", start_x+20, start_y+15);
-
         _spr_text.fillRect(start_x+42, start_y, sq_w, sq_h, 0x00FF00U);
-        _spr_text.setTextColor(0x000000U, 0x00FF00U); _spr_text.drawString("GRN", start_x+42+20, start_y+15);
-
         _spr_text.fillRect(start_x+84, start_y, sq_w, sq_h, 0xFF0000U);
-        _spr_text.setTextColor(0xFFFFFFU, 0xFF0000U); _spr_text.drawString("BLU", start_x+84+20, start_y+15);
-
         _spr_text.fillRect(start_x+126, start_y, sq_w, sq_h, 0x00FFFFU);
-        _spr_text.setTextColor(0x000000U, 0x00FFFFU); _spr_text.drawString("YEL", start_x+126+20, start_y+15);
-        
         _spr_text.fillRect(start_x+168, start_y, sq_w, sq_h, 0xFFFF00U);
-        _spr_text.setTextColor(0x000000U, 0xFFFF00U); _spr_text.drawString("CYN", start_x+168+20, start_y+15);
-
         _spr_text.fillRect(start_x+210, start_y, sq_w, sq_h, 0xFF00FFU);
-        _spr_text.setTextColor(0xFFFFFFU, 0xFF00FFU); _spr_text.drawString("MAG", start_x+210+20, start_y+15);
 
         // Zero Bias Meter
         int meter_w = 100, meter_x = 110, meter_y = 70;
@@ -352,6 +343,21 @@ public:
         uint32_t nc = (abs(err) < 0.05f) ? 0x00FF00U : 0x0000FFU;
         _spr_text.fillTriangle(nx, meter_y+6, nx-5, meter_y-2, nx+5, meter_y-2, nc);      
         _spr_text.fillTriangle(nx, meter_y+6, nx-5, meter_y+14, nx+5, meter_y+14, nc);    
+
+        // Buttons at the bottom
+        _spr_text.setTextDatum(middle_center);
+        // Serial Diag Toggle
+        uint32_t s_bg = serial_diag_on ? 0x004400U : 0x440000U;
+        uint32_t s_brd = serial_diag_on ? 0x00FF00U : 0xFF0000U;
+        _spr_text.fillRoundRect(10, 118, 220, 36, 6, s_bg);
+        _spr_text.drawRoundRect(10, 118, 220, 36, 6, s_brd);
+        _spr_text.setTextColor(0xFFFFFFU);
+        _spr_text.drawString(serial_diag_on ? "SERIAL DIAG: ON" : "SERIAL DIAG: OFF", 120, 136);
+
+        // BACK Button
+        _spr_text.fillRoundRect(250, 118, 220, 36, 6, 0x333333U);
+        _spr_text.drawRoundRect(250, 118, 220, 36, 6, 0x777777U);
+        _spr_text.drawString("BACK", 360, 136);
 
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }
