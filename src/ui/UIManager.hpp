@@ -61,26 +61,22 @@ public:
         bool is_nl = (c == '\n');
         bool is_cr = (c == '\r');
 
-        // HEX Debug: show non-printable chars in serial if technical diag is OFF
         if (!shared_serial_diag && (c < 32 || c > 126) && !is_nl && !is_cr) {
             printf("[0x%02X]", (uint8_t)c);
         }
 
         if (is_cr) {
-            // Collapse CR CR sequences, but allow newlines
             if (last_c != '\r') {
                 rtty_lines.push_back("");
                 if (scroll_offset > 0) scroll_offset++;
             }
         } else if (is_nl) {
-            // Ignore LF if immediately following CR (standard CR LF pair)
             if (last_c != '\r') {
                 rtty_lines.push_back("");
                 if (scroll_offset > 0) scroll_offset++;
             }
         } else {
             rtty_lines.back() += c;
-            // Auto-wrap based on user preference
             if ((int)rtty_lines.back().length() >= shared_line_width) {
                 rtty_lines.push_back("");
                 if (scroll_offset > 0) scroll_offset++;
@@ -202,23 +198,25 @@ public:
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }
 
-    void drawBottomBar(int baud_idx, int shift_idx, float stop_bits, bool inv, bool menu_mode) {
+    void drawBottomBar(int baud_idx, int shift_idx, float stop_bits, bool inv, bool afc_on, bool menu_mode) {
         _spr_bottom.fillSprite(COLOR_BG);
         const int bauds[] = {45, 50, 75};
         const int shifts[] = {170, 200, 425, 450, 850};
-        char labels_main[6][16];
+        char labels_main[7][16];
         snprintf(labels_main[0], 16, "B %d", bauds[baud_idx]);
         snprintf(labels_main[1], 16, "S %d", shifts[shift_idx]);
         snprintf(labels_main[2], 16, inv ? "INV" : "NORM");
-        snprintf(labels_main[3], 16, "ST %.1f", stop_bits);
-        snprintf(labels_main[4], 16, "CLEAR");
-        snprintf(labels_main[5], 16, "MENU");
-        int btn_w = 480 / 6; _spr_bottom.setFont(&fonts::Font2); _spr_bottom.setTextDatum(middle_center);
-        for (int i = 0; i < 6; i++) {
+        snprintf(labels_main[3], 16, afc_on ? "AFC:ON" : "AFC:OFF");
+        snprintf(labels_main[4], 16, "ST %.1f", stop_bits);
+        snprintf(labels_main[5], 16, "CLEAR");
+        snprintf(labels_main[6], 16, "MENU");
+        int btn_w = 480 / 7; _spr_bottom.setFont(&fonts::Font2); _spr_bottom.setTextDatum(middle_center);
+        for (int i = 0; i < 7; i++) {
             int x = i * btn_w;
             uint32_t bg = 0x333333U, brd = 0x777777U;
             if (i == 2 && inv) { bg = 0x660000U; brd = 0xFF0000U; }
-            if (i == 5 && menu_mode) { bg = 0x006600U; brd = 0x00FF00U; }
+            if (i == 3 && afc_on) { bg = 0x004400U; brd = 0x00FF00U; }
+            if (i == 6 && menu_mode) { bg = 0x006600U; brd = 0x00FF00U; }
             _spr_bottom.fillRoundRect(x + 2, 2, btn_w - 4, UI_BOTTOM_BAR_H - 4, 6, bg);   
             _spr_bottom.drawRoundRect(x + 2, 2, btn_w - 4, UI_BOTTOM_BAR_H - 4, 6, brd);  
             _spr_bottom.setTextColor(0xFFFFFFU);
@@ -264,11 +262,6 @@ public:
         _spr_text.setTextColor(0xFFFFFFU, COLOR_BG);
         _spr_text.drawString("Hardware: RP2350, 16-bit DMA", 5, 25);
         
-        int sq_w = 40, sq_h = 20, start_x = 220, start_y = 65;
-        _spr_text.fillRect(start_x, start_y, sq_w, sq_h, 0x0000FFU);
-        _spr_text.fillRect(start_x+42, start_y, sq_w, sq_h, 0x00FF00U);
-        _spr_text.fillRect(start_x+84, start_y, sq_w, sq_h, 0xFF0000U);
-
         int meter_w = 100, meter_x = 110, meter_y = 70;
         _spr_text.setTextDatum(middle_right); _spr_text.setTextColor(0xFFFFFFU, COLOR_BG);
         _spr_text.drawString("ZERO BIAS", meter_x - 5, meter_y + 6);
@@ -282,27 +275,21 @@ public:
 
         _spr_text.setTextDatum(middle_center);
         
-        // Buttons at Y=118..154
-        // 1. SERIAL DIAG Toggle (Left)
         uint32_t s_bg = serial_diag_on ? 0x004400U : 0x440000U;
         uint32_t s_brd = serial_diag_on ? 0x00FF00U : 0xFF0000U;
         _spr_text.fillRoundRect(5, 118, 150, 36, 6, s_bg);
         _spr_text.drawRoundRect(5, 118, 150, 36, 6, s_brd);
-        _spr_text.setTextColor(0xFFFFFFU);
         _spr_text.drawString(serial_diag_on ? "DIAG: ON" : "DIAG: OFF", 80, 136);
 
-        // 2. WIDTH MINUS (Center-Left)
         _spr_text.fillRoundRect(165, 118, 100, 36, 6, 0x333333U);
         _spr_text.drawRoundRect(165, 118, 100, 36, 6, 0x777777U);
         _spr_text.drawString("WIDTH -", 215, 136);
 
-        // 3. WIDTH PLUS (Center-Right)
         _spr_text.fillRoundRect(275, 118, 100, 36, 6, 0x333333U);
         _spr_text.drawRoundRect(275, 118, 100, 36, 6, 0x777777U);
         _spr_text.drawString("WIDTH +", 325, 136);
 
-        // 4. Value Display (Right)
-        char wbuf[16]; snprintf(wbuf, 16, "W: %d", line_width);
+        char wbuf[16]; snprintf(wbuf, 16, "W:%d", line_width);
         _spr_text.setTextColor(0x00FFFFU);
         _spr_text.drawString(wbuf, 425, 136);
 

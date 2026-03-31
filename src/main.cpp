@@ -45,11 +45,13 @@ struct AppSettings {
     float target_freq;
     bool serial_diag;
     int line_width;
+    bool afc_on;
 };
 
 volatile bool settings_need_save = false;
 volatile uint32_t settings_last_change = 0;
 volatile int shared_line_width = 60; // Default to 60 to avoid scrollbar overlap
+volatile bool shared_afc_on = true;  // Default to AFC ON
 
 void flag_settings_change() {
     settings_need_save = true;
@@ -267,13 +269,14 @@ void core1_main() {
         shared_actual_freq = shared_target_freq;
         shared_serial_diag = loaded_set.serial_diag; 
         shared_line_width = (loaded_set.line_width >= 30 && loaded_set.line_width <= 75) ? loaded_set.line_width : 60;
+        shared_afc_on = loaded_set.afc_on;
     }
     
     const float bauds[] = {45.45f, 50.0f, 75.0f};
     const float shifts[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
     const float stop_bits[] = {1.0f, 1.5f, 2.0f};
     
-    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_rtty_inv, menu_mode);
+    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_rtty_inv, shared_afc_on, menu_mode);
 
     LGFX_Sprite spectrum(&tft); spectrum.setColorDepth(16); spectrum.createSprite(480, UI_DSP_ZONE_H);
     LGFX_Sprite marker_spr(&tft); marker_spr.setColorDepth(16); marker_spr.createSprite(480, UI_MARKER_H);
@@ -388,7 +391,7 @@ void core1_main() {
             else if (sq_strong) shared_squelch_open = true;
             else if (sq_weak) shared_squelch_open = false;
             
-            if (shared_squelch_open) {
+            if (shared_squelch_open && shared_afc_on) {
                 if ((best_m_mag - best_s_mag) > 2.0f || (best_s_mag - best_m_mag) > 2.0f) {
                     float found_m_f = best_m_bin * SAMPLE_RATE / (float)FFT_SIZE;
                     float found_s_f = best_s_bin * SAMPLE_RATE / (float)FFT_SIZE;
@@ -396,6 +399,8 @@ void core1_main() {
                     implied_center = std::clamp(implied_center, shared_target_freq - 100.0f, shared_target_freq + 100.0f);
                     shared_actual_freq = shared_actual_freq * 0.8f + implied_center * 0.2f;
                 }
+            } else if (!shared_afc_on && shared_squelch_open) {
+                // Keep current frequency if AFC is OFF but squelch is open
             } else {
                 shared_actual_freq = shared_actual_freq * 0.98f + shared_target_freq * 0.02f;
             }
@@ -503,13 +508,14 @@ void core1_main() {
                     shared_actual_freq = shared_target_freq; // SNAP INSTANTLY
                 }
                 else if (ty > UI_Y_BOTTOM && !was_touched) {
-                    int btn_idx = tx / 80;
+                    int btn_idx = tx / 68; // 480 / 7 approx 68
                     if (btn_idx == 0) { flag_settings_change(); shared_baud_idx = (shared_baud_idx + 1) % 3; }
                     else if (btn_idx == 1) { flag_settings_change(); shared_shift_idx = (shared_shift_idx + 1) % 5; }
                     else if (btn_idx == 2) { flag_settings_change(); shared_rtty_inv = !shared_rtty_inv; }
-                    else if (btn_idx == 3) { flag_settings_change(); shared_stop_idx = (shared_stop_idx + 1) % 3; }
-                    else if (btn_idx == 4) { ui.clearRTTY(); shared_clear_dsp = true; }
-                    else if (btn_idx == 5) { 
+                    else if (btn_idx == 3) { flag_settings_change(); shared_afc_on = !shared_afc_on; }
+                    else if (btn_idx == 4) { flag_settings_change(); shared_stop_idx = (shared_stop_idx + 1) % 3; }
+                    else if (btn_idx == 5) { ui.clearRTTY(); shared_clear_dsp = true; }
+                    else if (btn_idx >= 6) { 
                         if (diag_screen_active && !menu_mode) {
                             diag_screen_active = false;
                             ui.drawRTTY();
@@ -519,7 +525,7 @@ void core1_main() {
                         }                    } 
                     
                     if (!menu_mode) reset_confirm_mode = false;
-                    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_rtty_inv, menu_mode);
+                    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_rtty_inv, shared_afc_on, menu_mode);
                     if (menu_mode) ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, "DIAG", "SAVE");
                     touch_ignore_until = time_us_32() + 300000;
                 }
@@ -570,10 +576,10 @@ void core1_main() {
                            s.sq_snr = tuning_sq_snr;
                            s.target_freq = shared_target_freq;
                            s.serial_diag = shared_serial_diag;
-                           s.line_width = shared_line_width; // Persist line width
+                           s.line_width = shared_line_width;
+                           s.afc_on = shared_afc_on;
 
                            uint8_t page_buf[FLASH_PAGE_SIZE] = {0};
-
                            memcpy(page_buf, &s, sizeof(AppSettings));
                            multicore_lockout_start_blocking();
                            uint32_t ints = save_and_disable_interrupts();
