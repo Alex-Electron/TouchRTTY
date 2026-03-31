@@ -1,4 +1,4 @@
-#include "ili9341_test.h"
+#include "ili9488_driver.h"
 #include "ili9488_spi.pio.h"
 #include "pico/time.h"
 #include <stdlib.h>
@@ -30,7 +30,7 @@ static void ili9488_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y
     write_command(0x2C); 
 }
 
-void ili9341_init(void) {
+void ili9488_init(void) {
     gpio_set_function(PIN_CS, GPIO_FUNC_SIO); gpio_set_dir(PIN_CS, GPIO_OUT); gpio_put(PIN_CS, 1);
     gpio_set_function(PIN_DC, GPIO_FUNC_SIO); gpio_set_dir(PIN_DC, GPIO_OUT); gpio_put(PIN_DC, 1);
     gpio_set_function(PIN_RST, GPIO_FUNC_SIO); gpio_set_dir(PIN_RST, GPIO_OUT); gpio_put(PIN_RST, 1);
@@ -189,7 +189,7 @@ void ili9488_push_waterfall(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint
     gpio_put(PIN_CS, 1);
 }
 
-void ili9341_fill_screen(uint16_t color) {
+void ili9488_fill_screen(uint16_t color) {
     ili9488_draw_rect(0, 0, 480, 320, color);
 }
 void ili9488_draw_hline(uint16_t x, uint16_t y, uint16_t w, uint16_t color) {

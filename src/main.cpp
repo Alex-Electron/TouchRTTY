@@ -15,7 +15,7 @@
 #include "hardware/sync.h"
 #include "hardware/watchdog.h"
 #include "LGFX_Config.hpp"
-#include "display/ili9341_test.h"
+#include "display/ili9488_driver.h"
 #include "dsp/fft.hpp"
 #include "dsp/biquad.hpp"
 #include "dsp/dpll_framer.hpp"
@@ -237,7 +237,7 @@ void core1_main() {
 
     load_or_calibrate(tft, boot_touch || shared_force_cal);
 
-    ili9341_init();    ili9341_fill_screen(0x0000);
+    ili9488_init();    ili9488_fill_screen(0x0000);
     UIManager ui(&tft); ui.init();
     
     bool auto_scale = true, exp_scale = true;

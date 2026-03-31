@@ -2,7 +2,7 @@
 #define UI_MANAGER_HPP
 
 #include <LovyanGFX.hpp>
-#include "../display/ili9341_test.h"
+#include "../display/ili9488_driver.h"
 #include "../version.h"
 #include <string>
 #include <vector>

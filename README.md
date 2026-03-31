@@ -146,6 +146,10 @@ You can send commands via the terminal to adjust the DSP on the fly:
 *   `SQ 6.0` - Adjust Squelch SNR threshold (default 4.0).
 *   `CLEAR` - Hard reset the DSP state, AFC, and DPLL phase.
 
+## 📜 Release History
+
+*   **[v1.72](https://github.com/Alex-Electron/TouchRTTY/releases/tag/v1.72)** (2026-03-31): **Phase 3 Final.** Professional DSP demodulator stability, build 172, ili9488 driver refactoring.
+
 ## 🏗️ Build Instructions
 Compiled via the standard Raspberry Pi Pico SDK (v2.2.0+) and CMake.
 

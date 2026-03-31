@@ -40,7 +40,7 @@ add_subdirectory(lib/LovyanGFX)
 
 add_executable(TouchRTTY
     src/main.cpp
-    src/display/ili9341_test.c
+    src/display/ili9488_driver.c
 )
 
 pico_generate_pio_header(TouchRTTY ${CMAKE_CURRENT_LIST_DIR}/src/display/ili9488_spi.pio)
