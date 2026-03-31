@@ -497,18 +497,17 @@ void core1_main() {
                     else if (btn_idx == 3) { flag_settings_change(); shared_stop_idx = (shared_stop_idx + 1) % 3; }
                     else if (btn_idx == 4) { ui.clearRTTY(); shared_clear_dsp = true; }
                     else if (btn_idx == 5) { 
-                        if (show_palette && !menu_mode) {
-                            show_palette = false;
+                        if (diag_screen_active && !menu_mode) {
+                            diag_screen_active = false;
                             ui.drawRTTY();
                         } else {
-                            menu_mode = !menu_mode; 
-                            if(menu_mode) show_palette = false; else ui.drawRTTY(); 
-                        }
-                    } 
+                            menu_mode = !menu_mode;
+                            if(menu_mode) diag_screen_active = false; else ui.drawRTTY();
+                        }                    } 
                     
                     if (!menu_mode) reset_confirm_mode = false;
                     ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_rtty_inv, menu_mode);
-                    if (menu_mode) ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, show_palette, "SAVE");
+                    if (menu_mode) ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, "DIAG", "SAVE");
                     touch_ignore_until = time_us_32() + 300000;
                 }
                 else if (ty >= UI_Y_TEXT && ty < UI_Y_BOTTOM) {
@@ -526,11 +525,11 @@ void core1_main() {
                                 while(1);
                             } else { // NO
                                 reset_confirm_mode = false;
-                                ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, show_palette, "SAVE");
+                                ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, "DIAG", "SAVE");
                             }
                         } else {
                             reset_confirm_mode = false;
-                            ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, show_palette, "SAVE");
+                            ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, "DIAG", "SAVE");
                         }
                         touch_ignore_until = time_us_32() + 300000;
                     } else if (menu_mode && !was_touched) {
@@ -598,8 +597,8 @@ void core1_main() {
                             if (local_y < 30) ui.scrollRTTY(1);
                             else if (local_y > 130) ui.scrollRTTY(-1);
                             else ui.scrollToY(local_y - 30, 100);
-                        } else if (!was_touched && show_palette) {
-                            show_palette = false;
+                        } else if (!was_touched && diag_screen_active) {
+                            diag_screen_active = false;
                             ui.drawRTTY();
                             touch_ignore_until = time_us_32() + 300000;
                         }
