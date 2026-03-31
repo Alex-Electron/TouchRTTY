@@ -61,20 +61,26 @@ public:
         bool is_nl = (c == '\n');
         bool is_cr = (c == '\r');
 
-        // Debug HEX output to Serial (even if technical diag is OFF, show non-printables)
-        if (!shared_serial_diag && (c < 32 || c > 126) && c != '\n' && c != '\r') printf("[0x%02X]", (uint8_t)c);
-        // If technical diag is ON, addRTTYChar doesn't print to serial (handled in main.cpp)
+        // HEX Debug: show non-printable chars in serial if technical diag is OFF
+        if (!shared_serial_diag && (c < 32 || c > 126) && !is_nl && !is_cr) {
+            printf("[0x%02X]", (uint8_t)c);
+        }
 
-        if (is_nl || is_cr) {
-            // Smart newline: only add if current line is NOT empty
-            // This collapses CR CR LF sequences into a single newline
-            if (!rtty_lines.back().empty()) {
+        if (is_cr) {
+            // Collapse CR CR sequences, but allow newlines
+            if (last_c != '\r') {
+                rtty_lines.push_back("");
+                if (scroll_offset > 0) scroll_offset++;
+            }
+        } else if (is_nl) {
+            // Ignore LF if immediately following CR (standard CR LF pair)
+            if (last_c != '\r') {
                 rtty_lines.push_back("");
                 if (scroll_offset > 0) scroll_offset++;
             }
         } else {
             rtty_lines.back() += c;
-            // Use dynamic line width for auto-wrap
+            // Auto-wrap based on user preference
             if ((int)rtty_lines.back().length() >= shared_line_width) {
                 rtty_lines.push_back("");
                 if (scroll_offset > 0) scroll_offset++;
@@ -276,27 +282,29 @@ public:
 
         _spr_text.setTextDatum(middle_center);
         
-        // Serial Diag Button (Left)
+        // Buttons at Y=118..154
+        // 1. SERIAL DIAG Toggle (Left)
         uint32_t s_bg = serial_diag_on ? 0x004400U : 0x440000U;
         uint32_t s_brd = serial_diag_on ? 0x00FF00U : 0xFF0000U;
         _spr_text.fillRoundRect(5, 118, 150, 36, 6, s_bg);
         _spr_text.drawRoundRect(5, 118, 150, 36, 6, s_brd);
+        _spr_text.setTextColor(0xFFFFFFU);
         _spr_text.drawString(serial_diag_on ? "DIAG: ON" : "DIAG: OFF", 80, 136);
 
-        // Width Minus Button
-        _spr_text.fillRoundRect(160, 118, 80, 36, 6, 0x333333U);
-        _spr_text.drawRoundRect(160, 118, 80, 36, 6, 0x777777U);
-        _spr_text.drawString("W -", 200, 136);
+        // 2. WIDTH MINUS (Center-Left)
+        _spr_text.fillRoundRect(165, 118, 100, 36, 6, 0x333333U);
+        _spr_text.drawRoundRect(165, 118, 100, 36, 6, 0x777777U);
+        _spr_text.drawString("WIDTH -", 215, 136);
 
-        // Width Plus Button
-        _spr_text.fillRoundRect(245, 118, 80, 36, 6, 0x333333U);
-        _spr_text.drawRoundRect(245, 118, 80, 36, 6, 0x777777U);
-        _spr_text.drawString("W +", 285, 136);
+        // 3. WIDTH PLUS (Center-Right)
+        _spr_text.fillRoundRect(275, 118, 100, 36, 6, 0x333333U);
+        _spr_text.drawRoundRect(275, 118, 100, 36, 6, 0x777777U);
+        _spr_text.drawString("WIDTH +", 325, 136);
 
-        // Width Value Display
-        char wbuf[32]; snprintf(wbuf, 32, "WIDTH: %d", line_width);
+        // 4. Value Display (Right)
+        char wbuf[16]; snprintf(wbuf, 16, "W: %d", line_width);
         _spr_text.setTextColor(0x00FFFFU);
-        _spr_text.drawString(wbuf, 385, 136);
+        _spr_text.drawString(wbuf, 425, 136);
 
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }

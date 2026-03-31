@@ -596,14 +596,14 @@ void core1_main() {
                             // Diagnostics screen touch handling
                             int local_y = ty - UI_Y_TEXT;
                             if (local_y > 111) { // Clicked on buttons area
-                                if (tx < 155) { // SERIAL DIAG toggle
+                                if (tx < 160) { // SERIAL DIAG toggle
                                     shared_serial_diag = !shared_serial_diag;
                                     ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width);
-                                } else if (tx >= 160 && tx < 240) { // WIDTH -
+                                } else if (tx >= 165 && tx < 270) { // WIDTH -
                                     flag_settings_change();
                                     shared_line_width -= 2; if(shared_line_width < 30) shared_line_width = 30;
                                     ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width);
-                                } else if (tx >= 245 && tx < 325) { // WIDTH +
+                                } else if (tx >= 275 && tx < 380) { // WIDTH +
                                     flag_settings_change();
                                     shared_line_width += 2; if(shared_line_width > 75) shared_line_width = 75;
                                     ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width);
@@ -611,6 +611,7 @@ void core1_main() {
                                 touch_ignore_until = time_us_32() + 300000;
                             }
                         }
+
  else if (!menu_mode && !diag_screen_active) {
 
                         if (tx > 440) {
