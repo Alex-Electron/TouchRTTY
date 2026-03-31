@@ -1,17 +1,20 @@
-# TouchRTTY (RP2350)
-**Professional-grade Radioteletype (RTTY) Decoder for Raspberry Pi Pico 2**
+# TouchRTTY (RP2350 / Raspberry Pi Pico 2)
+**Professional-grade Radioteletype (RTTY) Decoder exclusively for the RP2350 microcontroller.**
 
 <p align="center">
   <img src="docs/images/device_view_1.jpg" width="48%" />
   <img src="docs/images/device_view_2.jpg" width="48%" />
 </p>
 
-This project implements a high-performance, software-defined radio (SDR) style RTTY decoder on the dual-core RP2350 microcontroller. It utilizes advanced digital signal processing (DSP) techniques derived from professional modems like **fldigi** and the theoretical work of Kok Chen (W7AY), achieving highly stable reception even under severe selective fading and noise.
+This project implements a high-performance, software-defined radio (SDR) style RTTY decoder on the **dual-core RP2350 (ARM Cortex-M33)**. It utilizes the advanced DSP capabilities of the RP2350 to achieve highly stable reception even under severe selective fading and noise.
+
+> [!IMPORTANT]
+> **Hardware Requirement:** This project is specifically designed for the **Raspberry Pi Pico 2 (RP2350)**. It will NOT run on the original RP2040 due to higher memory and DSP requirements.
 
 ## 🚀 Key Features (Phase 3 Complete)
 
-*   **Dual-Core Architecture:**
-    *   **Core 0 (DSP Engine):** Dedicated strictly to hard-real-time audio processing at exactly 10,000 Hz.
+*   **RP2350 Dual-Core Optimization:**
+    *   **Core 0 (DSP Engine):** Dedicated strictly to hard-real-time audio processing at exactly 10,000 Hz using RP2350's floating-point unit (FPU).
     *   **Core 1 (UI & Rendering):** Handles the 3.5" ILI9488 TFT touch display via 60MHz PIO DMA, rendering a 30+ FPS Waterfall, Spectrum, and Lissajous (XY) tuning scope without interrupting the DSP.
 *   **Professional DSP Pipeline:**
     *   **63-Tap FIR Bandpass Filter:** Pre-filters the 10kHz ADC stream.
