@@ -44,14 +44,6 @@ private:
     int scroll_offset = 0;
     bool figures_mode = false;
 
-    // Simple Button helper to avoid hardcoding coords everywhere
-    struct Btn {
-        int x, y, w, h;
-        bool contains(int tx, int ty) {
-            return (tx >= x && tx < x + w && ty >= y && ty < y + h);
-        }
-    };
-
 public:
     UIManager(lgfx::LGFX_Device* tft) : _tft(tft), _spr_top(tft), _spr_text(tft), _spr_bottom(tft) {}
 
@@ -132,10 +124,10 @@ public:
         _spr_text.drawString("All settings will be lost.", 240, 60);
         _spr_text.fillRoundRect(80, 100, 120, 40, 6, 0x333333U);
         _spr_text.drawRoundRect(80, 100, 120, 40, 6, 0x777777U);
-        _spr_text.drawString("NO", 140, 120);
+        _spr_text.setTextColor(0xFFFFFFU, 0x333333U); _spr_text.drawString("NO", 140, 120);
         _spr_text.fillRoundRect(280, 100, 120, 40, 6, 0x660000U);
         _spr_text.drawRoundRect(280, 100, 120, 40, 6, 0xFF0000U);
-        _spr_text.drawString("YES", 340, 120);
+        _spr_text.setTextColor(0xFFFFFFU, 0x660000U); _spr_text.drawString("YES", 340, 120);
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }
 
@@ -152,26 +144,20 @@ public:
         
         int line_h = 18;
         if (shared_font_mode == 1) {
-            _spr_text.setFont(&fonts::Font0);
-            _spr_text.setTextSize(1.0, 2.0); // 6px width, 16px height
-            line_h = 16;
+            _spr_text.setFont(&fonts::Font0); _spr_text.setTextSize(1.0, 2.0); line_h = 16;
         } else {
-            _spr_text.setFont(&fonts::Font2);
-            _spr_text.setTextSize(1.0, 1.0); // 8px width, 16px height
-            line_h = 18;
+            _spr_text.setFont(&fonts::Font2); _spr_text.setTextSize(1.0, 1.0); line_h = 18;
         }
         
         _spr_text.setTextDatum(top_left);
         int max_lines_on_screen = 160 / line_h; 
         int start_line = (int)rtty_lines.size() - max_lines_on_screen - scroll_offset;
         if (start_line < 0) start_line = 0;
-
         int y = 5;
         for (size_t i = start_line; i < rtty_lines.size() && y < 155; i++) {
             _spr_text.drawString(rtty_lines[i].c_str(), 5, y);
             y += line_h;
         }
-        
         _spr_text.setTextSize(1.0, 1.0); // Reset
         _spr_text.fillRect(440, 0, 40, 160, 0x111111U); 
         _spr_text.drawRect(440, 0, 40, 30, COLOR_GRID);
@@ -203,7 +189,7 @@ public:
             auto_scale ? "AUTO: ON" : "AUTO: OFF",
             diag_label,
             "BW -", buf_fl, "BW +", save_text,
-            "SQ -", buf_sq, "SQ +", "" // RESET removed from here
+            "SQ -", buf_sq, "SQ +", "" 
         };
         _spr_text.setFont(&fonts::Font2); _spr_text.setTextDatum(middle_center);
         for (int i = 0; i < 12; i++) {
@@ -283,9 +269,14 @@ public:
         _spr_text.setTextDatum(top_left); _spr_text.setFont(&fonts::Font2);
         _spr_text.setTextColor(0x00FF00U, COLOR_BG);
         _spr_text.drawString("DIAGNOSTICS & SETUP", 5, 5);
-        _spr_text.setTextColor(0xFFFFFFU, COLOR_BG);
-        _spr_text.drawString("Hardware: RP2350, 16-bit DMA", 5, 25);
         
+        // Rainbow Palette КОЖЗГСФ (K: Red, O: Orange, J: Yellow, Z: Green, G: Cyan, S: Blue, F: Violet)
+        uint32_t colors[] = {0xFF0000U, 0xFFA500U, 0xFFFF00U, 0x00FF00U, 0x00FFFFU, 0x0000FFU, 0x8B00FFU};
+        int pw = 440 / 7;
+        for (int i = 0; i < 7; i++) {
+            _spr_text.fillRect(5 + i * pw, 25, pw - 2, 15, colors[i]);
+        }
+
         int meter_w = 100, meter_x = 110, meter_y = 70;
         _spr_text.setTextDatum(middle_right); _spr_text.setTextColor(0xFFFFFFU, COLOR_BG);
         _spr_text.drawString("ZERO BIAS", meter_x - 5, meter_y + 6);
@@ -293,49 +284,32 @@ public:
         _spr_text.drawFastVLine(meter_x+(meter_w/2), meter_y, 12, COLOR_TEXT);
         float err = adc_v - 1.65f; float norm_err = std::clamp(err / 0.5f, -1.0f, 1.0f);
         int nx = meter_x + (meter_w/2) + (int)(norm_err * (meter_w/2));
-        uint32_t nc = (abs(err) < 0.05f) ? 0x00FF00U : 0x0000FFU;
+        uint32_t nc = (fabsf(err) < 0.05f) ? 0x00FF00U : 0x0000FFU;
         _spr_text.fillTriangle(nx, meter_y+6, nx-5, meter_y-2, nx+5, meter_y-2, nc);      
         _spr_text.fillTriangle(nx, meter_y+6, nx-5, meter_y+14, nx+5, meter_y+14, nc);    
 
         _spr_text.setTextDatum(middle_center);
+        int bw = 480 / 6;
+        const char* l_diag = serial_diag_on ? "DIAG:ON" : "DIAG:OFF";
+        const char* l_font = (font_mode == 1) ? "NARW" : "NORM";
         
-        // 1. SERIAL DIAG (5..105)
-        uint32_t s_bg = serial_diag_on ? 0x004400U : 0x440000U;
-        _spr_text.fillRoundRect(5, 118, 100, 36, 6, s_bg);
-        _spr_text.drawRoundRect(5, 118, 100, 36, 6, serial_diag_on ? 0x00FF00U : 0xFF0000U);
-        _spr_text.setTextColor(0xFFFFFFU, s_bg);
-        _spr_text.drawString(serial_diag_on ? "SER:ON" : "SER:OFF", 55, 136);
-
-        // 2. FONT TOGGLE (110..210)
-        uint32_t f_bg = (font_mode == 1) ? 0x444400U : 0x333333U;
-        _spr_text.fillRoundRect(110, 118, 100, 36, 6, f_bg);
-        _spr_text.drawRoundRect(110, 118, 100, 36, 6, 0x777777U);
-        _spr_text.setTextColor(0xFFFFFFU, f_bg);
-        _spr_text.drawString(font_mode == 1 ? "NARW" : "NORM", 160, 136);
-
-        // 3. WIDTH MINUS (215..285)
-        _spr_text.fillRoundRect(215, 118, 70, 36, 6, 0x333333U);
-        _spr_text.drawRoundRect(215, 118, 70, 36, 6, 0x777777U);
-        _spr_text.setTextColor(0xFFFFFFU, 0x333333U);
-        _spr_text.drawString("W-", 250, 136);
-
-        // 4. WIDTH PLUS (290..360)
-        _spr_text.fillRoundRect(290, 118, 70, 36, 6, 0x333333U);
-        _spr_text.drawRoundRect(290, 118, 70, 36, 6, 0x777777U);
-        _spr_text.setTextColor(0xFFFFFFU, 0x333333U);
-        _spr_text.drawString("W+", 325, 136);
-
-        // 5. RST (365..435) - New small reset button
-        _spr_text.fillRoundRect(365, 118, 70, 36, 6, 0x440000U);
-        _spr_text.drawRoundRect(365, 118, 70, 36, 6, 0xFF0000U);
-        _spr_text.setTextColor(0xFFFFFFU, 0x440000U);
-        _spr_text.drawString("RST", 400, 136);
-
-        // 6. Value Display (Right)
-        char wbuf[16]; snprintf(wbuf, 16, "%d", line_width);
-        _spr_text.setTextColor(0x00FFFFU, COLOR_BG);
-        _spr_text.drawString(wbuf, 455, 136);
-
+        uint32_t bgs[] = { (serial_diag_on ? 0x004400U : 0x440000U), 0x333333U, 0x333333U, 0x111111U, 0x333333U, 0x440000U };
+        uint32_t brds[] = { (serial_diag_on ? 0x00FF00U : 0xFF0000U), 0x777777U, 0x777777U, 0x333333U, 0x777777U, 0xFF0000U };
+        const char* labels[] = { l_diag, l_font, "W -", "", "W +", "RST" };
+        
+        for (int i = 0; i < 6; i++) {
+            int x = i * bw;
+            _spr_text.fillRoundRect(x + 2, 118, bw - 4, 36, 6, bgs[i]);
+            _spr_text.drawRoundRect(x + 2, 118, bw - 4, 36, 6, brds[i]);
+            _spr_text.setTextColor(0xFFFFFFU, bgs[i]);
+            if (i == 3) {
+                char wbuf[16]; snprintf(wbuf, 16, "%d", line_width);
+                _spr_text.setTextColor(0x00FFFFU, bgs[i]);
+                _spr_text.drawString(wbuf, x + bw/2, 136);
+            } else {
+                _spr_text.drawString(labels[i], x + bw/2, 136);
+            }
+        }
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }
 };

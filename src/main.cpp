@@ -603,21 +603,25 @@ void core1_main() {
                         if (menu_mode && !reset_confirm_mode) ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, "DIAG", save_text);
                         touch_ignore_until = time_us_32() + 300000;
                         } else if (diag_screen_active && !was_touched) {
-                            // Diagnostics screen touch handling
+                            // Diagnostics screen touch handling (6 buttons, 80px each)
                             int local_y = ty - UI_Y_TEXT;
                             if (local_y > 111) { 
-                                if (tx < 108) { // SERIAL DIAG
+                                int b_idx = tx / 80;
+                                if (b_idx == 0) { // DIAG toggle
                                     shared_serial_diag = !shared_serial_diag;
-                                } else if (tx >= 110 && tx < 212) { // FONT toggle
+                                } else if (b_idx == 1) { // FONT toggle
                                     shared_font_mode = (shared_font_mode + 1) % 2;
                                     flag_settings_change();
-                                } else if (tx >= 215 && tx < 288) { // WIDTH -
+                                } else if (b_idx == 2) { // WIDTH -
                                     flag_settings_change();
                                     shared_line_width -= 2; if(shared_line_width < 30) shared_line_width = 30;
-                                } else if (tx >= 290 && tx < 362) { // WIDTH +
+                                } else if (b_idx == 3) { // WIDTH Reset
                                     flag_settings_change();
-                                    shared_line_width += 2; if(shared_line_width > 80) shared_line_width = 80;
-                                } else if (tx >= 365 && tx < 438) { // RST
+                                    shared_line_width = 60;
+                                } else if (b_idx == 4) { // WIDTH +
+                                    flag_settings_change();
+                                    shared_line_width += 2; if(shared_line_width > 85) shared_line_width = 85;
+                                } else if (b_idx == 5) { // RST
                                     reset_confirm_mode = true;
                                     diag_screen_active = false;
                                     ui.drawResetConfirm();
