@@ -16,12 +16,13 @@
 - [ ] **SIO INTERP Colormap:** Мгновенное преобразование `float -> RGB565`.
 - [ ] **Ping-Pong DMA Buffers:** Двойная буферизация для SPI.
 
-## 3. Оптимизация под архитектуру RP2350 (Cortex-M33) (NEW!)
+## 3. Оптимизация под архитектуру RP2350 (Cortex-M33)
 **Цели:**
-- [ ] **Strict Float Policy:** Добавление суффикса `f` ко всем дробным константам для исключения эмуляции `double`.
-- [ ] **Memory Bus Optimization:** Использование `__time_critical_func` для переноса горячих DSP функций в RAM.
-- [ ] **Bus Contention Control:** Разнос буферов АЦП и экрана по разным банкам SRAM.
-- [ ] **SIO Hardware Divider:** Оптимизация делений через аппаратный блок SIO.
+- [ ] **Strict Float Policy:** Тотальный аудит кода. Замена всех double-констант (3.14) на float (3.14f) и функций sin/cos на sinf/cosf.
+- [ ] **DMA-Driven Processing:** Переход с adc_read() на ADC DMA с использованием __wfe() для разгрузки шины памяти.
+- [ ] **Memory Barriers:** Внедрение __dmb() для гарантированной целостности данных при межъядерном обмене.
+- [ ] **Vectorized DSP (CMSIS-DSP):** Замена скалярных циклов FIR и Biquad на векторные функции arm_fir_f32 и arm_biquad_f32.
+
 
 ## 4. Оптимизация UI и Интерфейса (Roadmap Item #3)
 **Цели:**
