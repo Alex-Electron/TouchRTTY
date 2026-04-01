@@ -94,7 +94,7 @@ public:
 
     void scrollRTTY(int dir) {
         scroll_offset += dir;
-        int line_h = (shared_font_mode == 1) ? 14 : 18;
+        int line_h = (shared_font_mode == 1) ? 12 : 18;
         int max_lines_on_screen = 160 / line_h;
         int max_scroll = (int)rtty_lines.size() - max_lines_on_screen;
         if (max_scroll < 0) max_scroll = 0;
@@ -104,7 +104,7 @@ public:
     }
 
     void scrollToY(int y, int track_h) {
-        int line_h = (shared_font_mode == 1) ? 14 : 18;
+        int line_h = (shared_font_mode == 1) ? 12 : 18;
         int max_lines = 160 / line_h;
         int total_lines = (int)rtty_lines.size();
         if (total_lines <= max_lines) return;
@@ -147,8 +147,8 @@ public:
         int line_h = 18;
         if (shared_font_mode == 1) {
             _spr_text.setFont(&fonts::Font0); 
-            _spr_text.setTextSize(1.0, 1.5); // Narrower height (6x12 px)
-            line_h = 14;
+            _spr_text.setTextSize(1.0, 1.25); // Better proportion (6x10 px)
+            line_h = 12;
         } else {
             _spr_text.setFont(&fonts::Font2); 
             _spr_text.setTextSize(1.0, 1.0); // Standard (8x16 px)
@@ -165,7 +165,7 @@ public:
             _spr_text.drawString(rtty_lines[i].c_str(), 5, y);
             y += line_h;
         }
-        _spr_text.setTextSize(1.0, 1.0); // Reset scale
+        _spr_text.setTextSize(1.0, 1.0); // Reset
         _spr_text.fillRect(440, 0, 40, 160, 0x111111U); 
         _spr_text.drawRect(440, 0, 40, 30, COLOR_GRID);
         _spr_text.fillTriangle(460, 5, 450, 20, 470, 20, COLOR_TEXT);
@@ -302,14 +302,14 @@ public:
         
         uint32_t bgs[] = { (serial_diag_on ? 0x004400U : 0x440000U), 0x333333U, 0x333333U, 0x111111U, 0x333333U, 0x440000U };
         uint32_t brds[] = { (serial_diag_on ? 0x00FF00U : 0xFF0000U), 0x777777U, 0x777777U, 0x333333U, 0x777777U, 0xFF0000U };
-        const char* labels[] = { l_diag, l_font, "W -", "", "W +", "RST" };
+        const char* labels[] = { l_diag, l_font, "W-", "", "W+", "RST" };
         
         for (int i = 0; i < 6; i++) {
             int x = i * bw;
             _spr_text.fillRoundRect(x + 2, 118, bw - 4, 36, 6, bgs[i]);
             _spr_text.drawRoundRect(x + 2, 118, bw - 4, 36, 6, brds[i]);
             
-            // Critical fix for text background on buttons
+            // Explicitly set background color to match button to avoid black text shadow
             _spr_text.setTextColor(0xFFFFFFU, bgs[i]); 
             
             if (i == 3) {
