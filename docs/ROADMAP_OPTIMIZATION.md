@@ -40,5 +40,12 @@
 - [ ] Включение `-O3`, `-ffast-math`, `-flto`.
 - [ ] Установка `-mfloat-abi=hard` и `-mfpu=fpv5-sp-d16`.
 
+## 7. SDR и DRM (Phase 8 - Future)
+**Цели:**
+- [ ] **Dual-Channel ADC (I/Q Input):** Переписать драйвер АЦП для одновременного сэмплирования I и Q каналов (например, с выхода Belka-DX 40 kHz).
+- [ ] **Complex FFT & Panorama:** Реализовать широкополосный водопад для визуализации всего спектра ПЧ (40 кГц).
+- [ ] **I2S DAC Audio Output:** Подключить внешний ЦАП (например, PCM5102) для вывода демодулированного звука.
+- [ ] **AAC Audio Decoding:** Интегрировать библиотеку для декодирования аудиостримов DRM (HE-AAC v2 / xHE-AAC). *Кандидаты: FDK AAC (Fixed-point), Helix AAC.*
+
 ---
 *Статус: В разработке (Ветка feature/rtty-dsp-improvements)*
