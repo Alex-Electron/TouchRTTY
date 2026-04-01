@@ -94,7 +94,8 @@ public:
 
     void scrollRTTY(int dir) {
         scroll_offset += dir;
-        int max_lines_on_screen = 160 / (shared_font_mode == 1 ? 16 : 18);
+        int line_h = (shared_font_mode == 1) ? 14 : 18;
+        int max_lines_on_screen = 160 / line_h;
         int max_scroll = (int)rtty_lines.size() - max_lines_on_screen;
         if (max_scroll < 0) max_scroll = 0;
         if (scroll_offset > max_scroll) scroll_offset = max_scroll;
@@ -103,7 +104,8 @@ public:
     }
 
     void scrollToY(int y, int track_h) {
-        int max_lines = 160 / (shared_font_mode == 1 ? 16 : 18);
+        int line_h = (shared_font_mode == 1) ? 14 : 18;
+        int max_lines = 160 / line_h;
         int total_lines = (int)rtty_lines.size();
         if (total_lines <= max_lines) return;
         int max_scroll = total_lines - max_lines;
@@ -144,21 +146,26 @@ public:
         
         int line_h = 18;
         if (shared_font_mode == 1) {
-            _spr_text.setFont(&fonts::Font0); _spr_text.setTextSize(1.0, 2.0); line_h = 16;
+            _spr_text.setFont(&fonts::Font0); 
+            _spr_text.setTextSize(1.0, 1.5); // Narrower height (6x12 px)
+            line_h = 14;
         } else {
-            _spr_text.setFont(&fonts::Font2); _spr_text.setTextSize(1.0, 1.0); line_h = 18;
+            _spr_text.setFont(&fonts::Font2); 
+            _spr_text.setTextSize(1.0, 1.0); // Standard (8x16 px)
+            line_h = 18;
         }
         
         _spr_text.setTextDatum(top_left);
         int max_lines_on_screen = 160 / line_h; 
         int start_line = (int)rtty_lines.size() - max_lines_on_screen - scroll_offset;
         if (start_line < 0) start_line = 0;
+
         int y = 5;
         for (size_t i = start_line; i < rtty_lines.size() && y < 155; i++) {
             _spr_text.drawString(rtty_lines[i].c_str(), 5, y);
             y += line_h;
         }
-        _spr_text.setTextSize(1.0, 1.0); // Reset
+        _spr_text.setTextSize(1.0, 1.0); // Reset scale
         _spr_text.fillRect(440, 0, 40, 160, 0x111111U); 
         _spr_text.drawRect(440, 0, 40, 30, COLOR_GRID);
         _spr_text.fillTriangle(460, 5, 450, 20, 470, 20, COLOR_TEXT);
@@ -270,7 +277,7 @@ public:
         _spr_text.setTextColor(0x00FF00U, COLOR_BG);
         _spr_text.drawString("DIAGNOSTICS & SETUP", 5, 5);
         
-        // Rainbow Palette КОЖЗГСФ (K: Red, O: Orange, J: Yellow, Z: Green, G: Cyan, S: Blue, F: Violet)
+        // Rainbow Palette КОЖЗГСФ
         uint32_t colors[] = {0xFF0000U, 0xFFA500U, 0xFFFF00U, 0x00FF00U, 0x00FFFFU, 0x0000FFU, 0x8B00FFU};
         int pw = 440 / 7;
         for (int i = 0; i < 7; i++) {
@@ -301,7 +308,10 @@ public:
             int x = i * bw;
             _spr_text.fillRoundRect(x + 2, 118, bw - 4, 36, 6, bgs[i]);
             _spr_text.drawRoundRect(x + 2, 118, bw - 4, 36, 6, brds[i]);
-            _spr_text.setTextColor(0xFFFFFFU, bgs[i]);
+            
+            // Critical fix for text background on buttons
+            _spr_text.setTextColor(0xFFFFFFU, bgs[i]); 
+            
             if (i == 3) {
                 char wbuf[16]; snprintf(wbuf, 16, "%d", line_width);
                 _spr_text.setTextColor(0x00FFFFU, bgs[i]);
