@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Build 189] - 2026-04-02
+### Optimized
+- **Hardware FPU Acceleration:** Enforced strict `float` policy across all DSP code (Core 0).
+- **Fast Math Migration:** Replaced all double-precision functions/constants with single-precision `float` variants (`sinf`, `cosf`, `sqrtf`, etc.).
+- **Performance Milestone:** Core 0 load reduced to **~7%** at 10kHz sample rate (Filters + Demodulator + DPLL).
+- **Compilation Flags:** Optimized `-O3`, `-ffast-math`, and `-funroll-loops` verified in CMake.
+
+### Status
+- **Release Candidate 2 (RC2)** - Highly optimized DSP core.
+
 ## [Build 188] - 2026-04-02
 ### Added
 - **Professional Font System:** Finalized dual-font mode (NORM and NARW).

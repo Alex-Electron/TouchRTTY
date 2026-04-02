@@ -689,21 +689,21 @@ void core1_main() {
 void core0_dsp_loop() {
     multicore_lockout_victim_init();
     for(int i=0; i<1024; i++) {
-        sin_table[i] = sinf(2.0f * (float)M_PI * i / 1024.0f);
-        cos_table[i] = cosf(2.0f * (float)M_PI * i / 1024.0f);
+        sin_table[i] = sinf(2.0f * (float)M_PI * (float)i / 1024.0f);
+        cos_table[i] = cosf(2.0f * (float)M_PI * (float)i / 1024.0f);
     }
     
-    static float ts[FFT_SIZE], tw[480], tw_m[480], tw_s[480], fb[63]={0};
+    static float ts[FFT_SIZE], tw[480], tw_m[480], tw_s[480], fb[63]={0.0f};
     int sc=0, wi=0, fi=0; adc_init(); adc_gpio_init(ADC_PIN); adc_select_input(0);
     float dc=0.0f;
     
-    float phase_m = 0, phase_s = 0;
+    float phase_m = 0.0f, phase_s = 0.0f;
     Biquad lp_mi, lp_mq, lp_si, lp_sq;
     float current_baud = -1.0f;
     float atc_mark_env = 0.01f, atc_space_env = 0.01f;
     
     agc_t agc;
-    agc_init(&agc, SAMPLE_RATE);
+    agc_init(&agc, (float)SAMPLE_RATE);
     
     // Diagnostics
     float diag_adc_min = 4096.0f, diag_adc_max = 0.0f;
@@ -738,20 +738,21 @@ void core0_dsp_loop() {
         uint32_t st = time_us_32(); 
         uint16_t rv = adc_read();
         
-        if (rv < diag_adc_min) diag_adc_min = rv;
-        if (rv > diag_adc_max) diag_adc_max = rv;
+        if ((float)rv < diag_adc_min) diag_adc_min = (float)rv;
+        if ((float)rv > diag_adc_max) diag_adc_max = (float)rv;
         
         if(rv<50 || rv>4045) shared_adc_clipping=true;
-        float v = (rv/4095.0f)*3.3f; shared_adc_v=v; float s = (rv-2048.0f)/2048.0f;
-        dc = dc*0.99f + s*0.01f; s -= dc; fb[fi]=s; float f_out=0.0f; int bi=fi;
-        for(int i=0; i<63; i++) { f_out += fir_coeffs[i]*fb[bi]; bi--; if(bi<0) bi=62; }
-        fi=(fi+1)%63; 
+        float v = ((float)rv / 4095.0f) * 3.3f; shared_adc_v=v; 
+        float s = ((float)rv - 2048.0f) / 2048.0f;
+        dc = dc * 0.99f + s * 0.01f; s -= dc; fb[fi]=s; float f_out=0.0f; int bi=fi;
+        for(int i=0; i<63; i++) { f_out += fir_coeffs[i] * fb[bi]; bi--; if(bi<0) bi=62; }
+        fi = (fi + 1) % 63; 
         
         float agc_out = agc_process(&agc, f_out);
         shared_agc_gain = agc.gain;
         
-        if(wi<480) { tw[wi] = agc_out*1.65f+1.65f; } 
-        ts[sc++]=agc_out*2.0f;
+        if(wi<480) { tw[wi] = agc_out * 1.65f + 1.65f; } 
+        ts[sc++] = agc_out * 2.0f;
         
         f_out = agc_out;
         
@@ -763,8 +764,8 @@ void core0_dsp_loop() {
             current_baud = baud;
             current_k = tuning_lpf_k;
             float fc = baud * tuning_lpf_k; 
-            design_lpf(&lp_mi, fc, SAMPLE_RATE); design_lpf(&lp_mq, fc, SAMPLE_RATE);
-            design_lpf(&lp_si, fc, SAMPLE_RATE); design_lpf(&lp_sq, fc, SAMPLE_RATE);
+            design_lpf(&lp_mi, fc, (float)SAMPLE_RATE); design_lpf(&lp_mq, fc, (float)SAMPLE_RATE);
+            design_lpf(&lp_si, fc, (float)SAMPLE_RATE); design_lpf(&lp_sq, fc, (float)SAMPLE_RATE);
         }
         
         float shift = shifts_hz[shared_shift_idx];
@@ -773,8 +774,8 @@ void core0_dsp_loop() {
         
         phase_m += fm * 0.0001f; if(phase_m >= 1.0f) phase_m -= 1.0f;
         phase_s += fs * 0.0001f; if(phase_s >= 1.0f) phase_s -= 1.0f;
-        int idx_m = (int)(phase_m * 1024) % 1024;
-        int idx_s = (int)(phase_s * 1024) % 1024;
+        int idx_m = (int)(phase_m * 1024.0f) & 1023;
+        int idx_s = (int)(phase_s * 1024.0f) & 1023;
         
         float mi = process_biquad(&lp_mi, f_out * cos_table[idx_m]);
         float mq = process_biquad(&lp_mq, f_out * sin_table[idx_m]);
@@ -792,8 +793,8 @@ void core0_dsp_loop() {
         
         float new_m = sqrtf(mark_power + 1e-10f);
         float new_s = sqrtf(space_power + 1e-10f);
-        float atc_fast = expf(-1.0f / (2.0f * (SAMPLE_RATE / baud)));
-        float atc_slow = expf(-1.0f / (16.0f * (SAMPLE_RATE / baud)));
+        float atc_fast = expf(-1.0f / (2.0f * ((float)SAMPLE_RATE / baud)));
+        float atc_slow = expf(-1.0f / (16.0f * ((float)SAMPLE_RATE / baud)));
         
         atc_mark_env = atc_mark_env * (new_m > atc_mark_env ? atc_fast : atc_slow) + new_m * (1.0f - (new_m > atc_mark_env ? atc_fast : atc_slow));
         atc_space_env = atc_space_env * (new_s > atc_space_env ? atc_fast : atc_slow) + new_s * (1.0f - (new_s > atc_space_env ? atc_fast : atc_slow));
@@ -804,9 +805,9 @@ void core0_dsp_loop() {
         float D = m_norm - s_norm;
         D = fmaxf(-1.5f, fminf(1.5f, D));
         if (shared_rtty_inv) D = -D;
-        bool d_sign = (D > 0);
+        bool d_sign = (D > 0.0f);
         
-        float phase_inc = baud / SAMPLE_RATE;
+        float phase_inc = baud / (float)SAMPLE_RATE;
         static float freq_error = 0.0f;
         float dpll_beta = tuning_dpll_alpha * tuning_dpll_alpha / 2.0f;
         
@@ -838,12 +839,12 @@ void core0_dsp_loop() {
             last_d_sign = d_sign;
             
             if (baudot_state > 0) {
-                symbol_phase += phase_inc + freq_error; // Add the accumulated frequency error!
+                symbol_phase += phase_inc + freq_error; 
                 integrate_acc += D; 
                 
                 if (symbol_phase >= 1.0f) {
                     symbol_phase -= 1.0f;
-                    bool bit = (integrate_acc > 0);
+                    bool bit = (integrate_acc > 0.0f);
                     integrate_acc = 0.0f;
                     
                     if (baudot_state == 1) { 
@@ -859,20 +860,19 @@ void core0_dsp_loop() {
                             else if (current_char == 31) { is_figs = false; shared_ltrs_flag = true; }
                             else {
                                 decoded = is_figs ? ita2_figs[current_char] : ita2_ltrs[current_char];
-                                if (decoded == ' ') is_figs = false; // Unshift on space
+                                if (decoded == ' ') is_figs = false; 
                                 if (decoded != '\0') {
                                     rtty_new_char = decoded;
                                     rtty_char_ready = true;
                                 }
                             }
                         } else {
-                            shared_err_flag = true; // Framing error
+                            shared_err_flag = true; 
                         }
                         
-                        // For tight 1.0 stop bits, if we are ALREADY in Space, a new start bit has begun!
                         if (stop_bits_expected <= 1.0f && !d_sign) {
                             baudot_state = 1;
-                            symbol_phase = 0.0f; // Exact start of bit!
+                            symbol_phase = 0.0f; 
                             integrate_acc = D;
                             current_char = 0;
                         } else {
@@ -884,7 +884,6 @@ void core0_dsp_loop() {
         }
         
         if(sc==FFT_SIZE) {
-            // PASS TO CORE 1 AND DO NOT BLOCK HERE
             memcpy((void*)shared_fft_ts, ts, sizeof(ts)); 
             memcpy((void*)shared_adc_waveform, tw, sizeof(tw));
             memcpy((void*)shared_mag_m, tw_m, sizeof(tw_m));
@@ -894,7 +893,7 @@ void core0_dsp_loop() {
             wi=0; memmove(ts, &ts[480], (FFT_SIZE-480)*sizeof(float)); sc=FFT_SIZE-480;
             
             static int diag_timer = 0;
-            if (++diag_timer >= 10) { // Approx 500ms
+            if (++diag_timer >= 10) { 
                 diag_timer = 0;
                 shared_diag_adc_min = diag_adc_min;
                 shared_diag_adc_max = diag_adc_max;
@@ -914,7 +913,7 @@ void core0_dsp_loop() {
         total_work += (work_end - st);
         total_time += 100;
         if (total_time >= 500000) { 
-            shared_core0_load = (total_work * 100.0f) / total_time; 
+            shared_core0_load = (total_work * 100.0f) / (float)total_time; 
             total_work = 0; total_time = 0; 
         }
         next_sample_time += 100;

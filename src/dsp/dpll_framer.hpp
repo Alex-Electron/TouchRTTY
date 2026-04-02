@@ -69,7 +69,7 @@ inline bool dpll_process(dpll_t *p, float disc, float *bit_out) {
     // Решение в конце символа:
     if (p->phase >= 1.0f) {
         p->phase -= 1.0f;
-        *bit_out = (p->integrate_count > 0) ? (p->integrate_acc / p->integrate_count) : disc;
+        *bit_out = (p->integrate_count > 0) ? (p->integrate_acc / (float)p->integrate_count) : disc;
         p->integrate_acc = 0.0f;
         p->integrate_count = 0;
         p->bit_ready = true;
@@ -117,7 +117,7 @@ inline char baudot_framer_push(baudot_framer_t *f, float bit_value) {
                 f->state = FRAME_RECV_DATA;
                 f->shift_reg = 0;
                 f->bit_count = 0;
-                f->stop_acc = 0;
+                f->stop_acc = 0.0f;
                 f->stop_samples = 0;
             }
             break;
@@ -130,7 +130,7 @@ inline char baudot_framer_push(baudot_framer_t *f, float bit_value) {
                 f->stop_acc = bit_value;
                 f->stop_samples = 1;
                 
-                // Fast path for 1.0 stop bits - if the bit was 0, it means it already crashed into the next start bit!
+                // Fast path for 1.0 stop bits
                 if (f->stop_needed == 1) {
                     f->state = FRAME_WAIT_START;
                     if (f->stop_acc < 0.0f) {
@@ -154,7 +154,7 @@ inline char baudot_framer_push(baudot_framer_t *f, float bit_value) {
 
             f->state = FRAME_WAIT_START;
 
-            if (f->stop_acc / f->stop_samples < -0.1f) {
+            if (f->stop_acc / (float)f->stop_samples < -0.1f) {
                 return '?'; // Framing error
             }
 
