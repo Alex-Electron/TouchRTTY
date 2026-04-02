@@ -277,11 +277,36 @@ public:
         _spr_text.setTextColor(0x00FF00U, COLOR_BG);
         _spr_text.drawString("DIAGNOSTICS & SETUP", 5, 5);
         
-        // Rainbow Palette КОЖЗГСФ
-        uint32_t colors[] = {0xFF0000U, 0xFFA500U, 0xFFFF00U, 0x00FF00U, 0x00FFFFU, 0x0000FFU, 0x8B00FFU};
-        int pw = 440 / 7;
-        for (int i = 0; i < 7; i++) {
-            _spr_text.fillRect(5 + i * pw, 25, pw - 2, 15, colors[i]);
+        // Rainbow Gradient (Anchors in BGR for LovyanGFX sprite compatibility)
+        uint32_t anchors[] = {
+            0x0000FFU, // Red
+            0x00A5FFU, // Orange
+            0x00FFFFU, // Yellow
+            0x00FF00U, // Green
+            0xFFFF00U, // Cyan
+            0xFF0000U, // Blue
+            0xFF008BU  // Purple
+        };
+        
+        for (int x = 0; x < 440; x++) {
+            float pos = (float)x / 439.0f * 6.0f;
+            int idx = (int)pos;
+            float t = pos - idx;
+            if (idx >= 6) { idx = 5; t = 1.0f; }
+            
+            uint32_t c1 = anchors[idx];
+            uint32_t c2 = anchors[idx + 1];
+            
+            // Linear interpolation for each channel (BGR order)
+            int r1 = c1 & 0xFF, g1 = (c1 >> 8) & 0xFF, b1 = (c1 >> 16) & 0xFF;
+            int r2 = c2 & 0xFF, g2 = (c2 >> 8) & 0xFF, b2 = (c2 >> 16) & 0xFF;
+            
+            uint8_t r = (uint8_t)(r1 + (r2 - r1) * t);
+            uint8_t g = (uint8_t)(g1 + (g2 - g1) * t);
+            uint8_t b = (uint8_t)(b1 + (b2 - b1) * t);
+            
+            uint32_t color = r | (g << 8) | (b << 16);
+            _spr_text.drawFastVLine(5 + x, 25, 15, color);
         }
 
         int meter_w = 100, meter_x = 110, meter_y = 70;
@@ -300,8 +325,8 @@ public:
         const char* l_diag = serial_diag_on ? "DIAG:ON" : "DIAG:OFF";
         const char* l_font = (font_mode == 1) ? "NARW" : "NORM";
         
-        uint32_t bgs[] = { (serial_diag_on ? 0x004400U : 0x440000U), 0x333333U, 0x333333U, 0x111111U, 0x333333U, 0x440000U };
-        uint32_t brds[] = { (serial_diag_on ? 0x00FF00U : 0xFF0000U), 0x777777U, 0x777777U, 0x333333U, 0x777777U, 0xFF0000U };
+        uint32_t bgs[] = { (serial_diag_on ? 0x004400U : 0x000044U), 0x333333U, 0x333333U, 0x111111U, 0x333333U, 0x000044U };
+        uint32_t brds[] = { (serial_diag_on ? 0x00FF00U : 0x0000FFU), 0x777777U, 0x777777U, 0x333333U, 0x777777U, 0x0000FFU };
         const char* labels[] = { l_diag, l_font, "W-", "", "W+", "RST" };
         
         for (int i = 0; i < 6; i++) {
