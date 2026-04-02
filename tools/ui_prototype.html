@@ -76,7 +76,7 @@
         drawBottomBar();
         
         document.getElementById('mode-text').innerText = state.diag ? "DIAGNOSTICS" : (state.menu ? "MAIN MENU" : "RTTY RX");
-        document.getElementById('font-text').innerText = ["F2:NORM", "MONO", "F0:NARW", "F4:MID"][state.font];
+        document.getElementById('font-text').innerText = ["F2:NORM", "F0:NARW"][state.font];
         document.getElementById('width-text').innerText = state.width;
     }
 
@@ -91,7 +91,7 @@
         ctx.fillStyle = "#0F0"; ctx.fillText(`SNR:${state.snr}dB`, 135, 22);
         ctx.fillText("RTTY: SYNC", 200, 22);
         ctx.textAlign = "right"; ctx.fillStyle = "#0FF";
-        ctx.fillText(`B:187 F:30 C0:15% C1:78%`, 475, 22);
+        ctx.fillText(`B:188 F:30 C0:15% C1:78%`, 475, 22);
     }
 
     function drawMarkers() {
@@ -119,15 +119,15 @@
         ctx.textAlign = "left";
         ctx.textBaseline = "top";
         
-        const fonts = ["16px monospace", "18px 'Courier New'", "10px monospace", "14px sans-serif"];
-        const lineH = [18, 22, 12, 24];
+        const fonts = ["16px monospace", "10px monospace"];
+        const lineH = [17, 10];
         
         ctx.fillStyle = COLORS.RTTY;
         ctx.font = fonts[state.font];
         
         const testStr = "0123456789 DE DDK9 RYRY 0O0O THE QUICK BROWN FOX JUMPS OVER";
         
-        for(let i=0; i<8; i++) {
+        for(let i=0; i<15; i++) {
             ctx.fillText(testStr.substring(0, state.width), 5, Y.TEXT + 5 + i*lineH[state.font]);
         }
 
@@ -161,7 +161,7 @@
         ctx.strokeStyle = "#444"; ctx.strokeRect(110.5, Y.TEXT+68.5, 100, 12);
         ctx.fillStyle = "#0F0"; ctx.fillRect(158, Y.TEXT+62, 4, 24);
 
-        const fontNames = ["F2", "MONO", "F0", "F4"];
+        const fontNames = ["NORM", "NARW"];
         const labels = [state.ser?"DIAG:ON":"DIAG:OFF", fontNames[state.font], "W-", state.width, "W+", "RST"];
         labels.forEach((l, i) => {
             const bg = (i===0 && state.ser)?"#040":(i===5?"#400":"#333");
@@ -212,7 +212,7 @@
             if (ty > Y.TEXT+118 && ty < Y.TEXT+154) {
                 const b = Math.floor(tx / 80);
                 if (b === 0) state.ser = !state.ser;
-                if (b === 1) state.font = (state.font + 1) % 4;
+                if (b === 1) state.font = (state.font + 1) % 2;
                 if (b === 2) state.width -= 2;
                 if (b === 3) state.width = 60;
                 if (b === 4) state.width += 2;

@@ -94,7 +94,7 @@ public:
 
     void scrollRTTY(int dir) {
         scroll_offset += dir;
-        int line_h = (shared_font_mode == 1) ? 12 : 18;
+        int line_h = (shared_font_mode == 1) ? 10 : 17;
         int max_lines_on_screen = 160 / line_h;
         int max_scroll = (int)rtty_lines.size() - max_lines_on_screen;
         if (max_scroll < 0) max_scroll = 0;
@@ -104,7 +104,7 @@ public:
     }
 
     void scrollToY(int y, int track_h) {
-        int line_h = (shared_font_mode == 1) ? 12 : 18;
+        int line_h = (shared_font_mode == 1) ? 10 : 17;
         int max_lines = 160 / line_h;
         int total_lines = (int)rtty_lines.size();
         if (total_lines <= max_lines) return;
@@ -144,15 +144,15 @@ public:
         _spr_text.drawFastHLine(0, 0, 480, COLOR_GRID);
         _spr_text.setTextColor(0x00FF00U, COLOR_BG); 
         
-        int line_h = 18;
+        int line_h = 17;
         if (shared_font_mode == 1) {
             _spr_text.setFont(&fonts::Font0); 
-            _spr_text.setTextSize(1.0, 1.25); // Better proportion (6x10 px)
-            line_h = 12;
+            _spr_text.setTextSize(1.0, 1.0); // Narrow (6x8 px)
+            line_h = 10; // More compact for narrow font
         } else {
             _spr_text.setFont(&fonts::Font2); 
             _spr_text.setTextSize(1.0, 1.0); // Standard (8x16 px)
-            line_h = 18;
+            line_h = 17;
         }
         
         _spr_text.setTextDatum(top_left);
