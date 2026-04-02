@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>TouchRTTY Visual Designer v2.2 (Fix)</title>
+    <style>
+        body { background: #111; color: #eee; font-family: 'Courier New', monospace; display: flex; flex-direction: column; align-items: center; user-select: none; }
+        canvas { 
+            background: #000; 
+            image-rendering: pixelated; 
+            border: 8px solid #222; 
+            border-radius: 4px;
+            box-shadow: 0 30px 60px rgba(0,0,0,0.9);
+            margin: 20px;
+            cursor: pointer;
+        }
+        .debug-panel { background: #1a1a1a; padding: 15px; border-left: 4px solid #0f0; width: 480px; font-size: 13px; box-sizing: border-box; }
+        .key { color: #0f0; }
+        .val { color: #0ff; }
+    </style>
+</head>
+<body>
+
+    <h2 style="color:#0f0">TouchRTTY Visual Designer v2.2</h2>
+    
+    <canvas id="lcd" width="480" height="320"></canvas>
+
+    <div class="debug-panel">
+        <b>System State:</b><br>
+        Mode: <span id="mode-text" class="val">RTTY RX</span> | 
+        Font: <span id="font-text" class="val">F2:NORM</span><br>
+        Width: <span id="width-text" class="val">60</span> chars |
+        Coords: <code id="coords" class="key">X:0 Y:0</code>
+    </div>
+
+<script>
+    const canvas = document.getElementById('lcd');
+    const ctx = canvas.getContext('2d');
+    
+    // --- Layout Sync (Pixel Perfect) ---
+    const Y = { TOP: 0, MARKER: 34, DSP: 48, TEXT: 112, BOT: 272 };
+    const COLORS = {
+        BG: "#000000", GRID: "#444444", TEXT: "#FFFFFF", 
+        RTTY: "#00FF00", PAL_BG: "#330000", PAL_GRID: "#663300"
+    };
+
+    let state = {
+        menu: false, diag: false, rst: false,
+        font: 0, width: 60, afc: true, ser: false,
+        sig: -45, snr: 28, freq: 2125, shift: 170
+    };
+
+    function drawRoundRect(x, y, w, h, r, fill, stroke) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y); ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+        ctx.lineTo(x + w, y + h - r); ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        ctx.lineTo(x + r, y + h); ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
+        if (fill) ctx.fill();
+        if (stroke) ctx.stroke();
+    }
+
+    function draw() {
+        ctx.fillStyle = COLORS.BG; ctx.fillRect(0, 0, 480, 320);
+        drawTopBar();
+        drawMarkers();
+        drawDSP();
+        
+        if (state.rst) drawReset();
+        else if (state.diag) drawDiag();
+        else if (state.menu) drawMenu();
+        else drawRTTY();
+
+        drawBottomBar();
+        
+        document.getElementById('mode-text').innerText = state.diag ? "DIAGNOSTICS" : (state.menu ? "MAIN MENU" : "RTTY RX");
+        document.getElementById('font-text').innerText = ["F2:NORM", "MONO", "F0:NARW", "F4:MID"][state.font];
+        document.getElementById('width-text').innerText = state.width;
+    }
+
+    function drawTopBar() {
+        ctx.strokeStyle = COLORS.GRID; ctx.lineWidth = 1; ctx.strokeRect(0.5, 0.5, 479, 33);
+        ctx.font = "12px monospace"; ctx.textAlign = "left"; ctx.textBaseline = "top";
+        ctx.fillStyle = COLORS.TEXT; ctx.fillText("SIG", 5, 8);
+        ctx.strokeRect(35.5, 1.5, 95, 14);
+        ctx.fillStyle = "#0F0"; ctx.fillRect(36, 2, 65, 13);
+        ctx.fillStyle = "#0FF"; ctx.fillText(`${state.sig}dB`, 135, 8);
+        ctx.fillText(`M:${state.freq - state.shift/2} S:${state.freq + state.shift/2}`, 185, 8);
+        ctx.fillStyle = "#0F0"; ctx.fillText(`SNR:${state.snr}dB`, 135, 22);
+        ctx.fillText("RTTY: SYNC", 200, 22);
+        ctx.textAlign = "right"; ctx.fillStyle = "#0FF";
+        ctx.fillText(`B:187 F:30 C0:15% C1:78%`, 475, 22);
+    }
+
+    function drawMarkers() {
+        ctx.fillStyle = COLORS.PAL_BG; ctx.fillRect(0, Y.MARKER, 480, 14);
+        ctx.strokeStyle = COLORS.PAL_GRID; ctx.strokeRect(0.5, Y.MARKER + 0.5, 479, 13);
+        const cx = 240;
+        ctx.fillStyle = "#0FF"; drawTriangle(cx - 40, Y.MARKER + 13);
+        ctx.fillStyle = "#FF0"; drawTriangle(cx + 40, Y.MARKER + 13);
+    }
+
+    function drawTriangle(x, y) {
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x-5, y-8); ctx.lineTo(x+5, y-8); ctx.fill();
+    }
+
+    function drawDSP() {
+        ctx.fillStyle = "#000033"; ctx.fillRect(0, Y.DSP, 480, 64);
+        for(let i=0; i<50; i++) {
+            ctx.fillStyle = `rgba(0,255,255,${Math.random()*0.2})`;
+            ctx.fillRect(Math.random()*480, Y.DSP + Math.random()*64, 2, 2);
+        }
+    }
+
+    function drawRTTY() {
+        // RESET alignment for text area
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        
+        const fonts = ["16px monospace", "18px 'Courier New'", "10px monospace", "14px sans-serif"];
+        const lineH = [18, 22, 12, 24];
+        
+        ctx.fillStyle = COLORS.RTTY;
+        ctx.font = fonts[state.font];
+        
+        const testStr = "0123456789 DE DDK9 RYRY 0O0O THE QUICK BROWN FOX JUMPS OVER";
+        
+        for(let i=0; i<8; i++) {
+            ctx.fillText(testStr.substring(0, state.width), 5, Y.TEXT + 5 + i*lineH[state.font]);
+        }
+
+        ctx.fillStyle = "#111"; ctx.fillRect(440, Y.TEXT, 40, 160);
+        ctx.strokeStyle = COLORS.GRID; ctx.strokeRect(440.5, Y.TEXT + 0.5, 39, 29); 
+        ctx.strokeRect(440.5, Y.TEXT + 130.5, 39, 29);
+    }
+
+    function drawMenu() {
+        const labels = ["WF", "EXP", "AUTO", "DIAG", "BW-", "0.75", "BW+", "SAVE", "SQ-", "6.0", "SQ+", ""];
+        labels.forEach((l, i) => {
+            if(!l) return;
+            const x = (i%4)*120, y = Math.floor(i/4)*53;
+            ctx.fillStyle = (i===3)?"#420":"#333";
+            ctx.strokeStyle = "#777";
+            drawRoundRect(x+4, Y.TEXT+y+4, 112, 45, 6, true, true);
+            ctx.fillStyle="#FFF"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.font="14px sans-serif";
+            ctx.fillText(l, x+60, Y.TEXT+y+26);
+        });
+    }
+
+    function drawDiag() {
+        ctx.textAlign = "left"; ctx.textBaseline = "top";
+        ctx.fillStyle = "#0F0"; ctx.font = "14px monospace";
+        ctx.fillText("DIAGNOSTICS & SETUP", 10, Y.TEXT+10);
+        
+        const colors = ["#F00", "#FA0", "#FF0", "#0F0", "#0FF", "#00F", "#80F"];
+        colors.forEach((c, i) => { ctx.fillStyle = c; ctx.fillRect(10 + i*65, Y.TEXT+25, 60, 15); });
+        
+        ctx.fillStyle = "#FFF"; ctx.fillText("ZERO BIAS", 10, Y.TEXT+70);
+        ctx.strokeStyle = "#444"; ctx.strokeRect(110.5, Y.TEXT+68.5, 100, 12);
+        ctx.fillStyle = "#0F0"; ctx.fillRect(158, Y.TEXT+62, 4, 24);
+
+        const fontNames = ["F2", "MONO", "F0", "F4"];
+        const labels = [state.ser?"DIAG:ON":"DIAG:OFF", fontNames[state.font], "W-", state.width, "W+", "RST"];
+        labels.forEach((l, i) => {
+            const bg = (i===0 && state.ser)?"#040":(i===5?"#400":"#333");
+            ctx.fillStyle = bg; ctx.strokeStyle = "#777";
+            drawRoundRect(i*80+2, Y.TEXT+118, 76, 36, 6, true, true);
+            ctx.fillStyle = (i===3)?"#0FF":"#FFF"; ctx.textAlign="center"; ctx.textBaseline="middle";
+            ctx.fillText(l, i*80+40, Y.TEXT+136);
+        });
+    }
+
+    function drawReset() {
+        ctx.fillStyle = "rgba(100,0,0,0.95)"; ctx.fillRect(40, Y.TEXT+20, 400, 120);
+        ctx.strokeStyle = "#F00"; ctx.strokeRect(40.5, Y.TEXT+20.5, 399, 119);
+        ctx.fillStyle = "#FFF"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("CONFIRM FACTORY RESET?", 240, Y.TEXT+50);
+        ctx.fillStyle="#333"; drawRoundRect(100, Y.TEXT+80, 80, 35, 6, true, true);
+        ctx.fillStyle="#600"; drawRoundRect(300, Y.TEXT+80, 80, 35, 6, true, true);
+        ctx.fillStyle="#FFF"; ctx.fillText("NO", 140, Y.TEXT+98); ctx.fillText("YES", 340, Y.TEXT+98);
+    }
+
+    function drawBottomBar() {
+        const labels = ["B 50", "S 170", "NORM", state.afc?"AFC:ON":"AFC:OFF", "ST 1.5", "CLR", "MENU"];
+        ctx.textBaseline = "middle"; ctx.textAlign = "center";
+        labels.forEach((l, i) => {
+            const bg = (i===6&&state.menu)?"#060":(i===3&&state.afc?"#040":"#333");
+            const brd = (i===6&&state.menu)?"#0f0":(i===3&&state.afc?"#0f0":"#777");
+            ctx.fillStyle = bg; ctx.strokeStyle = brd;
+            drawRoundRect(i*68+2, Y.BOT+2, 64, 44, 6, true, true);
+            ctx.fillStyle = "#FFF"; ctx.font = "11px sans-serif";
+            ctx.fillText(l, i*68+34, Y.BOT+24);
+        });
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const tx = e.clientX - rect.left, ty = e.clientY - rect.top;
+        document.getElementById('coords').innerText = `X:${Math.round(tx)} Y:${Math.round(ty)}`;
+
+        if (ty > Y.BOT) {
+            const b = Math.floor(tx / 68);
+            if (b === 3) state.afc = !state.afc;
+            if (b === 5) { state.diag = state.menu = false; }
+            if (b === 6) { state.menu = !state.menu; state.diag = false; state.rst = false; }
+        } else if (state.rst) {
+            if (tx > 100 && tx < 180 && ty > Y.TEXT+80) state.rst = false;
+            if (tx > 300 && tx < 380 && ty > Y.TEXT+80) { alert("Reset Initiated"); state.rst = false; state.menu = false; }
+        } else if (state.diag) {
+            if (ty > Y.TEXT+118 && ty < Y.TEXT+154) {
+                const b = Math.floor(tx / 80);
+                if (b === 0) state.ser = !state.ser;
+                if (b === 1) state.font = (state.font + 1) % 4;
+                if (b === 2) state.width -= 2;
+                if (b === 3) state.width = 60;
+                if (b === 4) state.width += 2;
+                if (b === 5) state.rst = true;
+            }
+        } else if (state.menu) {
+            if (ty >= Y.TEXT) {
+                const c = Math.floor(tx/120), r = Math.floor((ty-Y.TEXT)/53);
+                if (r*4+c === 3) { state.diag = true; state.menu = false; }
+            }
+        }
+        draw();
+    });
+
+    setInterval(draw, 300);
+</script>
+</body>
+</html>
