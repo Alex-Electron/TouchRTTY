@@ -47,6 +47,7 @@ struct AppSettings {
     int line_width;
     bool afc_on;
     int font_mode;
+    int inv_mode; // 0: NORM, 1: INV, 2: AUTO
 };
 
 volatile bool settings_need_save = false;
@@ -54,6 +55,7 @@ volatile uint32_t settings_last_change = 0;
 volatile int shared_line_width = 60; 
 volatile bool shared_afc_on = true;  
 volatile int shared_font_mode = 0; // 0: Font2, 1: Font0 x2
+volatile int shared_inv_mode = 0;  // 0: NORM, 1: INV, 2: AUTO
 
 void flag_settings_change() {
     settings_need_save = true;
@@ -283,13 +285,14 @@ void core1_main() {
         shared_line_width = (loaded_set.line_width >= 30 && loaded_set.line_width <= 80) ? loaded_set.line_width : 60;
         shared_afc_on = loaded_set.afc_on;
         shared_font_mode = loaded_set.font_mode;
+        shared_inv_mode = loaded_set.inv_mode;
     }
     
     const float bauds[] = {45.45f, 50.0f, 75.0f};
     const float shifts[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
     const float stop_bits[] = {1.0f, 1.5f, 2.0f};
     
-    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_rtty_inv, shared_afc_on, menu_mode);
+    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_inv_mode, shared_rtty_inv, shared_afc_on, menu_mode);
 
     LGFX_Sprite spectrum(&tft); spectrum.setColorDepth(16); spectrum.createSprite(480, UI_DSP_ZONE_H);
     LGFX_Sprite marker_spr(&tft); marker_spr.setColorDepth(16); marker_spr.createSprite(480, UI_MARKER_H);
@@ -366,6 +369,11 @@ void core1_main() {
             float err_rate = -1.0f;
             if (shared_total_count > 0) err_rate = (shared_err_count * 100.0f) / shared_total_count;
             ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open, shared_agc_gain, shared_agc_enabled, err_rate);
+            
+            // Periodically redraw bottom bar to reflect AUTO-inversion changes
+            if (!menu_mode && !diag_screen_active && !reset_confirm_mode) {
+                ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_inv_mode, shared_rtty_inv, shared_afc_on, menu_mode);
+            }
         }
         
         if (new_data_ready) {
@@ -530,7 +538,13 @@ void core1_main() {
                     int btn_idx = tx / 68; // 480 / 7 approx 68
                     if (btn_idx == 0) { flag_settings_change(); shared_baud_idx = (shared_baud_idx + 1) % 3; }
                     else if (btn_idx == 1) { flag_settings_change(); shared_shift_idx = (shared_shift_idx + 1) % 5; }
-                    else if (btn_idx == 2) { flag_settings_change(); shared_rtty_inv = !shared_rtty_inv; }
+                    else if (btn_idx == 2) { 
+                        flag_settings_change(); 
+                        shared_inv_mode = (shared_inv_mode + 1) % 3;
+                        if (shared_inv_mode == 0) shared_rtty_inv = false;
+                        else if (shared_inv_mode == 1) shared_rtty_inv = true;
+                        // mode 2 (AUTO) keeps current shared_rtty_inv and starts monitoring
+                    }
                     else if (btn_idx == 3) { flag_settings_change(); shared_afc_on = !shared_afc_on; }
                     else if (btn_idx == 4) { flag_settings_change(); shared_stop_idx = (shared_stop_idx + 1) % 3; }
                     else if (btn_idx == 5) { ui.clearRTTY(); shared_clear_dsp = true; }
@@ -544,7 +558,7 @@ void core1_main() {
                         }                    } 
                     
                     if (!menu_mode) reset_confirm_mode = false;
-                    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_rtty_inv, shared_afc_on, menu_mode);
+                    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_inv_mode, shared_rtty_inv, shared_afc_on, menu_mode);
                     if (menu_mode) ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, "DIAG", "SAVE");
                     touch_ignore_until = time_us_32() + 300000;
                 }
@@ -597,7 +611,8 @@ void core1_main() {
                            s.serial_diag = shared_serial_diag;
                            s.line_width = shared_line_width;
                            s.afc_on = shared_afc_on;
-                           s.font_mode = shared_font_mode; // New
+                           s.font_mode = shared_font_mode; 
+                           s.inv_mode = shared_inv_mode; // New
 
                            uint8_t page_buf[FLASH_PAGE_SIZE] = {0};
                            memcpy(page_buf, &s, sizeof(AppSettings));
@@ -703,6 +718,11 @@ void core1_main() {
             s.filter_k = tuning_lpf_k;
             s.sq_snr = tuning_sq_snr;
             s.target_freq = shared_target_freq;
+            s.serial_diag = shared_serial_diag;
+            s.line_width = shared_line_width;
+            s.afc_on = shared_afc_on;
+            s.font_mode = shared_font_mode;
+            s.inv_mode = shared_inv_mode;
             
             uint8_t page_buf[FLASH_PAGE_SIZE] = {0};
             memcpy(page_buf, &s, sizeof(AppSettings));
@@ -929,6 +949,16 @@ void core0_dsp_loop() {
                             shared_err_flag = true; 
                             shared_err_count++;
                             shared_total_count++;
+                        }
+                        
+                        // Auto-Inversion Logic: If SNR is good but errors are high (>40%), flip inversion
+                        if (shared_inv_mode == 2 && shared_snr_db > 8.0f && shared_total_count > 20) {
+                            float err_pct = (shared_err_count * 100.0f) / (float)shared_total_count;
+                            if (err_pct > 40.0f) {
+                                shared_rtty_inv = !shared_rtty_inv;
+                                shared_err_count = 0;
+                                shared_total_count = 0;
+                            }
                         }
                         
                         // Limit the window so error rate responds quickly

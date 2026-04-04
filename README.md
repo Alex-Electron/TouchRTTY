@@ -16,7 +16,8 @@ This project implements a high-performance, software-defined radio (SDR) style R
 *   **RP2350 Dual-Core Optimization:**
     *   **Core 0 (DSP Engine):** Dedicated strictly to hard-real-time audio processing at exactly 10,000 Hz using RP2350's floating-point unit (FPU).
     *   **Core 1 (UI & Rendering):** Handles the 3.5" ILI9488 TFT touch display via 60MHz PIO DMA, rendering a 30+ FPS Waterfall, Spectrum, and Lissajous (XY) tuning scope without interrupting the DSP.
-*   **Professional DSP Pipeline (Build 189 RC3):**
+*   **Professional DSP Pipeline (Build 205):**
+    *   **Hardware-Timed ADC FIFO:** Exact 10kHz sampling via clock dividers eliminates software jitter, providing ultra-stable DPLL synchronization even on weak signals.
     *   **63-Tap FIR Bandpass Filter:** Pre-filters the 10kHz ADC stream.
     *   **Quadrature (I/Q) Demodulator:** Baseband mixing with hardware-generated sine/cosine tables, followed by Biquad Low-Pass Filters (Extended Raised Cosine). Eliminates Inter-Symbol Interference (ISI).
     *   **Automatic Threshold Correction (ATC):** Fast-attack, slow-release (FASR) envelope detectors independently track Mark and Space fading, dynamically adjusting the decision threshold.
@@ -24,6 +25,7 @@ This project implements a high-performance, software-defined radio (SDR) style R
     *   **Automatic Frequency Control (AFC):** 512-point FFT-based peak detection locks onto wandering signals within a ±100Hz window.
     *   **Strict Squelch:** Intelligent noise-floor and SNR tracking ensures the decoder remains totally silent until a valid RTTY signal (SNR > 4dB) is present.
     *   **Error Rate Monitoring:** Real-time framing error percentage tracking via a dynamically scaling window.
+    *   **Intelligent Auto-Inversion:** Automatically detects and corrects USB/LSB phase inversion by monitoring Error Rate vs SNR.
 *   **Hardware Compatibility:**
     *   Optimized for the **ILI9488** display quirk (Mode 11: 16-bit Endian Swapped, BGR out), rendering pure, artifact-free colors via native RGB565 manipulation.
 

@@ -215,14 +215,18 @@ public:
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }
 
-    void drawBottomBar(int baud_idx, int shift_idx, float stop_bits, bool inv, bool afc_on, bool menu_mode) {
+    void drawBottomBar(int baud_idx, int shift_idx, float stop_bits, int inv_mode, bool inv_actual, bool afc_on, bool menu_mode) {
         _spr_bottom.fillSprite(COLOR_BG);
         const int bauds[] = {45, 50, 75};
         const int shifts[] = {170, 200, 425, 450, 850};
         char labels_main[7][16];
         snprintf(labels_main[0], 16, "B %d", bauds[baud_idx]);
         snprintf(labels_main[1], 16, "S %d", shifts[shift_idx]);
-        snprintf(labels_main[2], 16, inv ? "INV" : "NORM");
+        
+        if (inv_mode == 0) snprintf(labels_main[2], 16, "NORM");
+        else if (inv_mode == 1) snprintf(labels_main[2], 16, "INV");
+        else snprintf(labels_main[2], 16, inv_actual ? "A:INV" : "A:NRM");
+
         snprintf(labels_main[3], 16, afc_on ? "AFC:ON" : "AFC:OFF");
         snprintf(labels_main[4], 16, "ST %.1f", stop_bits);
         snprintf(labels_main[5], 16, "CLEAR");
@@ -231,7 +235,7 @@ public:
         for (int i = 0; i < 7; i++) {
             int x = i * btn_w;
             uint32_t bg = 0x333333U, brd = 0x777777U;
-            if (i == 2 && inv) { bg = 0x660000U; brd = 0xFF0000U; }
+            if (i == 2 && inv_actual) { bg = 0x660000U; brd = 0x0000FFU; } // RED in BGR
             if (i == 3 && afc_on) { bg = 0x004400U; brd = 0x00FF00U; }
             if (i == 6 && menu_mode) { bg = 0x006600U; brd = 0x00FF00U; }
             _spr_bottom.fillRoundRect(x + 2, 2, btn_w - 4, UI_BOTTOM_BAR_H - 4, 6, bg);   

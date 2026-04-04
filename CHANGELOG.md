@@ -2,26 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Build 189] - 2026-04-04
+## [Build 205] - 2026-04-04
 ### Added
-- **Error Rate Indicator:** Added real-time error percentage and visual progress bar (yellow/red based on BGR threshold) to the top status bar.
-- **Frequency Popup:** Active frequency details (MARK/SPACE) now appear as a temporary floating popup when dragging the tuning marker, keeping the top bar clean.
-- **Error Rate Window:** Bounded error tracking window (resizes after 50 symbols) for highly responsive signal quality monitoring.
-- **Stacked Status Bars:** Reorganized the top-left UI to vertically stack thin progress bars for SIG, AGC, and ERR for a cleaner layout.
+- **Auto-Inversion (USB/LSB):** New intelligent mode for the INV button (`NORM` -> `INV` -> `AUTO`). In `AUTO` mode, the decoder monitors SNR and Error Rate; if SNR is >8dB and Errors are >40% for 20 symbols, it automatically flips the phase and updates the UI button to `A:INV`.
+- **Error Rate Indicator:** Real-time framing error percentage and a dedicated visual progress bar (SIG/AGC/ERR stack) in the top status bar.
+- **Frequency Popup:** A floating window displays precise MARK/SPACE frequencies when dragging the tuning marker on the waterfall. Auto-hides after 3 seconds.
+- **Rolling Error Window:** Bounded error tracking (50 symbol window) for instantaneous responsiveness to signal quality changes.
+- **Stacked UI Layout:** Reorganized the top-left status zone to vertically stack thin bars for SIG, AGC, and ERR, maximizing screen space for text.
 
 ### Fixed
-- **Factory Reset Deadlock:** Resolved a critical boot loop when pressing the encoder button on startup by removing an incorrect early `multicore_lockout_start_blocking()` call.
-- **Color Format Quirk:** Adjusted status bar warning colors to account for LovyanGFX's BGR byte order with the ILI9488 display driver.
-- **Popup Overwrite Bug:** Prevented incoming RTTY characters from writing to the screen while the Factory Reset confirmation dialog is active.
+- **ADC Sampling Jitter:** Migrated to hardware-timed ADC FIFO (exact 10kHz via clock divider). This completely eliminated software jitter from `time_us_32()` calls, resulting in significantly more stable DPLL phase tracking.
+- **Factory Reset Deadlock:** Resolved a critical boot loop bug when holding the encoder button at startup by removing premature multicore lockout calls.
+- **UI Overwrite Protection:** Blocked incoming RTTY text from rendering to the screen while the "FACTORY RESET?" confirmation dialog is active.
+- **BGR Color Accuracy:** Corrected all UI warning colors (Red/Yellow) to account for LovyanGFX's BGR byte order on the ILI9488 display.
+- **Settings Persistence:** Fixed a bug where `line_width`, `font_mode`, and `inv_mode` were not saved to flash.
 
 ### Optimized
-- **Hardware FPU Acceleration:** Enforced strict `float` policy across all DSP code (Core 0).
-- **Fast Math Migration:** Replaced all double-precision functions/constants with single-precision `float` variants (`sinf`, `cosf`, `sqrtf`, etc.).
-- **Performance Milestone:** Core 0 load reduced to **~7%** at 10kHz sample rate (Filters + Demodulator + DPLL).
-- **Compilation Flags:** Optimized `-O3`, `-ffast-math`, and `-funroll-loops` verified in CMake.
+- **Hardware FPU Acceleration:** Enforced strict `float` policy across the entire Core 0 DSP pipeline.
+- **Core 0 Offloading:** FFT magnitude calculation moved to Core 0, freeing up Core 1 for smoother 18-bit display DMA transfers.
+- **Fast Math:** Replaced all heavy math functions with precomputed caches or single-precision FPU variants (`expf`, `log10f`, `sqrtf`).
 
 ### Status
-- **Release Candidate 3 (RC3)** - Stable release prioritizing robust touch UI handling and precision DSP monitoring.
+- **Stable Base Release.** Merged high-performance Build 205 math with the refined RC3 user interface.
+
+## [Build 189] - 2026-04-04
+### Status
+- **Release Candidate 3 (RC3)** - UI refinement branch.
 
 ## [Build 188] - 2026-04-02
 ### Added
