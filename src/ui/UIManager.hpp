@@ -4,6 +4,8 @@
 #include <LovyanGFX.hpp>
 #include "../display/ili9488_driver.h"
 #include "../version.h"
+#include "../fonts/Spleen8x16.h"
+#include "../fonts/Bitocra7x13.h"
 #include <string>
 #include <vector>
 
@@ -101,12 +103,30 @@ public:
             rtty_lines.erase(rtty_lines.begin());
             if (scroll_offset > 0) scroll_offset--;
         }
-        if (update_screen && scroll_offset == 0) drawRTTY();
+        if (update_screen && scroll_offset == 0) {
+            // Throttle redraws for small font — full redraw is expensive with 16 lines
+            static uint32_t last_redraw_us = 0;
+            uint32_t now_us = time_us_32();
+            bool force = is_nl || is_cr; // Always redraw on newline
+            if (force || (now_us - last_redraw_us >= 80000)) {
+                drawRTTY();
+                last_redraw_us = now_us;
+            }
+        }
+    }
+
+    int getLineHeight() {
+        switch (shared_font_mode) {
+            case 0: return 17; // BIG
+            case 1: return 14; // MED
+            case 2: return 10; // SMALL
+            default: return 7; // TINY
+        }
     }
 
     void scrollRTTY(int dir) {
         scroll_offset += dir;
-        int line_h = (shared_font_mode == 1) ? 10 : 17;
+        int line_h = getLineHeight();
         int max_lines_on_screen = 160 / line_h;
         int max_scroll = (int)rtty_lines.size() - max_lines_on_screen;
         if (max_scroll < 0) max_scroll = 0;
@@ -116,7 +136,7 @@ public:
     }
 
     void scrollToY(int y, int track_h) {
-        int line_h = (shared_font_mode == 1) ? 10 : 17;
+        int line_h = getLineHeight();
         int max_lines = 160 / line_h;
         int total_lines = (int)rtty_lines.size();
         if (total_lines <= max_lines) return;
@@ -157,23 +177,35 @@ public:
         _spr_text.setTextColor(0x00FF00U, COLOR_BG); 
         
         int line_h = 17;
-        if (shared_font_mode == 1) {
-            _spr_text.setFont(&fonts::Font0); 
-            _spr_text.setTextSize(1.0, 1.0); // Narrow (6x8 px)
-            line_h = 10; // More compact for narrow font
-        } else {
-            _spr_text.setFont(&fonts::Font2); 
-            _spr_text.setTextSize(1.0, 1.0); // Standard (8x16 px)
-            line_h = 17;
+        _spr_text.setTextSize(1.0, 1.0);
+        switch (shared_font_mode) {
+            case 0: // BIG: Spleen 8x16
+                _spr_text.setFont((const lgfx::GFXfont*)&Spleen8x16);
+                line_h = 17;
+                break;
+            case 1: // MED: Bitocra 7x13
+                _spr_text.setFont((const lgfx::GFXfont*)&Bitocra7x13);
+                line_h = 14;
+                break;
+            case 2: // SMALL: Font0 6x8
+                _spr_text.setFont(&fonts::Font0);
+                line_h = 10;
+                break;
+            default: // TINY: TomThumb 3x5
+                _spr_text.setFont(&fonts::TomThumb);
+                line_h = 7;
+                break;
         }
         
         _spr_text.setTextDatum(top_left);
-        int max_lines_on_screen = 160 / line_h; 
+        int y_start = 3;
+        int y_limit = 158; // keep 2px margin at bottom
+        int max_lines_on_screen = (y_limit - y_start) / line_h;
         int start_line = (int)rtty_lines.size() - max_lines_on_screen - scroll_offset;
         if (start_line < 0) start_line = 0;
 
-        int y = 5;
-        for (size_t i = start_line; i < rtty_lines.size() && y < 155; i++) {
+        int y = y_start;
+        for (size_t i = start_line; i < rtty_lines.size() && y + line_h <= 160; i++) {
             _spr_text.drawString(rtty_lines[i].c_str(), 5, y);
             y += line_h;
         }
@@ -195,17 +227,17 @@ public:
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }
 
-    void drawMenu(bool auto_scale, bool exp_scale, int display_mode, float filter_k, float sq_snr, const char* diag_label, const char* save_text) {
+    void drawMenu(bool auto_scale, int display_mode, const char* diag_label) {
         _spr_text.fillSprite(COLOR_BG);
         _spr_text.drawFastHLine(0, 0, 480, COLOR_GRID);
         int bw = 480 / 4; int bh = 160 / 3;
         const char* labels[12] = {
             display_mode == 0 ? "DISP: WF" : (display_mode == 1 ? "DISP: SPEC" : "DISP: SCOPE"),
-            exp_scale ? "SCALE: EXP" : "SCALE: LIN",
             auto_scale ? "AUTO: ON" : "AUTO: OFF",
             diag_label,
+            "TUNE",
             "", "", "", "",
-            "", "", "", "TUNE"
+            "", "", "", ""
         };
         _spr_text.setFont(&fonts::Font2); _spr_text.setTextDatum(middle_center);
         for (int i = 0; i < 12; i++) {
@@ -301,7 +333,7 @@ public:
         ili9488_push_colors(0, UI_Y_TOP, 480, UI_TOP_BAR_H, (uint16_t*)_spr_top.getBuffer());
     }
 
-    void drawDiagScreen(float adc_v, bool serial_diag_on, int line_width, int font_mode) {
+    void drawDiagScreen(float adc_v, int font_mode) {
         _spr_text.fillSprite(COLOR_BG);
         _spr_text.drawFastHLine(0, 111, 480, COLOR_GRID);
         _spr_text.setTextDatum(top_left); _spr_text.setFont(&fonts::Font2);
@@ -352,30 +384,21 @@ public:
         _spr_text.fillTriangle(nx, meter_y+6, nx-5, meter_y+14, nx+5, meter_y+14, nc);    
 
         _spr_text.setTextDatum(middle_center);
-        int bw = 480 / 6;
-        const char* l_dump = serial_diag_on ? "DUMP:ON" : "DUMP:OFF";
-        const char* l_font = (font_mode == 1) ? "NARW" : "NORM";
+        const char* font_names[] = {"BIG", "MED", "SML", "TINY"};
+        const char* l_font = (font_mode >= 0 && font_mode < 4) ? font_names[font_mode] : "BIG";
 
-        uint32_t bgs[] = { (serial_diag_on ? 0x004400U : 0x000044U), 0x333333U, 0x333333U, 0x111111U, 0x333333U, 0x000044U };
-        uint32_t brds[] = { (serial_diag_on ? 0x00FF00U : 0x0000FFU), 0x777777U, 0x777777U, 0x333333U, 0x777777U, 0x0000FFU };
-        const char* labels[] = { l_dump, l_font, "W-", "", "W+", "RST" };
-        
-        for (int i = 0; i < 6; i++) {
-            int x = i * bw;
-            _spr_text.fillRoundRect(x + 2, 118, bw - 4, 36, 6, bgs[i]);
-            _spr_text.drawRoundRect(x + 2, 118, bw - 4, 36, 6, brds[i]);
-            
-            // Explicitly set background color to match button to avoid black text shadow
-            _spr_text.setTextColor(0xFFFFFFU, bgs[i]); 
-            
-            if (i == 3) {
-                char wbuf[16]; snprintf(wbuf, 16, "%d", line_width);
-                _spr_text.setTextColor(0x00FFFFU, bgs[i]);
-                _spr_text.drawString(wbuf, x + bw/2, 136);
-            } else {
-                _spr_text.drawString(labels[i], x + bw/2, 136);
-            }
-        }
+        // FONT button (left)
+        _spr_text.fillRoundRect(2, 118, 236, 36, 6, 0x333333U);
+        _spr_text.drawRoundRect(2, 118, 236, 36, 6, 0x777777U);
+        _spr_text.setTextColor(0xFFFFFFU, 0x333333U);
+        char font_label[32]; snprintf(font_label, 32, "FONT: %s", l_font);
+        _spr_text.drawString(font_label, 120, 136);
+
+        // RST button (right)
+        _spr_text.fillRoundRect(242, 118, 236, 36, 6, 0x000044U);
+        _spr_text.drawRoundRect(242, 118, 236, 36, 6, 0x0000FFU);
+        _spr_text.setTextColor(0xFFFFFFU, 0x000044U);
+        _spr_text.drawString("RST", 360, 136);
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }
 
@@ -457,7 +480,7 @@ public:
         spr.drawString("EYE", 2, 2);
     }
 
-    void drawTuningControls(float alpha, float lpf_k, float sq_snr, float err_rate) {
+    void drawTuningControls(float alpha, float lpf_k, float sq_snr, float err_rate, bool saved = false) {
         _spr_text.fillSprite(COLOR_BG);
         _spr_text.drawFastHLine(0, 0, 480, COLOR_GRID);
         _spr_text.setFont(&fonts::Font2); _spr_text.setTextDatum(middle_center);
@@ -542,10 +565,17 @@ public:
         _spr_text.drawRoundRect(4*bw + 2, row1_y, bw - 4, bh, 6, 0x333333U);
 
         // SAVE button
-        _spr_text.fillRoundRect(5*bw + 2, row1_y, bw - 4, bh, 6, 0x000066U);
-        _spr_text.drawRoundRect(5*bw + 2, row1_y, bw - 4, bh, 6, 0x0000FFU);
-        _spr_text.setTextColor(0xFFFFFFU, 0x000066U);
-        _spr_text.drawString("SAVE", 5*bw + bw/2, row1_y + bh/2);
+        if (saved) {
+            _spr_text.fillRoundRect(5*bw + 2, row1_y, bw - 4, bh, 6, 0x006600U);
+            _spr_text.drawRoundRect(5*bw + 2, row1_y, bw - 4, bh, 6, 0x00FF00U);
+            _spr_text.setTextColor(0x00FF00U, 0x006600U);
+            _spr_text.drawString("SAVED!", 5*bw + bw/2, row1_y + bh/2);
+        } else {
+            _spr_text.fillRoundRect(5*bw + 2, row1_y, bw - 4, bh, 6, 0x000066U);
+            _spr_text.drawRoundRect(5*bw + 2, row1_y, bw - 4, bh, 6, 0x0000FFU);
+            _spr_text.setTextColor(0xFFFFFFU, 0x000066U);
+            _spr_text.drawString("SAVE", 5*bw + bw/2, row1_y + bh/2);
+        }
 
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }

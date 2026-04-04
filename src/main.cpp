@@ -47,12 +47,14 @@ struct AppSettings {
     int line_width;
     bool afc_on;
     int font_mode;
+    float dpll_alpha;
 };
 
 volatile bool settings_need_save = false;
 volatile uint32_t settings_last_change = 0;
 volatile int shared_line_width = 60; 
-volatile bool shared_afc_on = true;  
+volatile bool shared_afc_on = true;
+volatile bool shared_exp_scale = true;  
 volatile int shared_font_mode = 0; // 0: Font2, 1: Font0 x2
 
 void flag_settings_change() {
@@ -213,6 +215,8 @@ void handle_serial_commands() {
                 }
                 else if (strcmp(cmd_buf, "AGC ON") == 0)   { shared_agc_enabled = true;  printf(">> AGC ON\n"); }
                 else if (strcmp(cmd_buf, "AGC OFF") == 0)  { shared_agc_enabled = false; printf(">> AGC OFF\n"); }
+                else if (strcmp(cmd_buf, "SCALE EXP") == 0) { shared_exp_scale = true;  printf(">> SCALE EXP\n"); }
+                else if (strcmp(cmd_buf, "SCALE LIN") == 0) { shared_exp_scale = false; printf(">> SCALE LIN\n"); }
                 else if (strcmp(cmd_buf, "HELP") == 0) {
                     printf("\n=== COMMANDS (B%d) ===\n", BUILD_NUMBER);
                     printf("--- Tuning ---\n");
@@ -228,6 +232,7 @@ void handle_serial_commands() {
                     printf("--- Control ---\n");
                     printf("AFC ON|OFF           Auto frequency\n");
                     printf("AGC ON|OFF           Auto gain\n");
+                    printf("SCALE EXP|LIN        Waterfall scale\n");
                     printf("DIAG ON|OFF          Diagnostic stream\n");
                     printf("STATUS               All parameters\n");
                     printf("SAVE                 Save to flash\n");
@@ -321,7 +326,7 @@ void core1_main() {
     ili9488_init();    ili9488_fill_screen(0x0000);
     UIManager ui(&tft); ui.init();
     
-    bool auto_scale = true, exp_scale = true;
+    bool auto_scale = true;
     bool menu_mode = false;
     bool diag_screen_active = false;
     bool tuning_lab_active = false;
@@ -337,7 +342,7 @@ void core1_main() {
         shared_stop_idx = loaded_set.stop_idx;
         shared_rtty_inv = loaded_set.rtty_inv;
         display_mode = loaded_set.display_mode;
-        exp_scale = loaded_set.exp_scale;
+        shared_exp_scale = loaded_set.exp_scale;
         auto_scale = loaded_set.auto_scale;
         tuning_lpf_k = loaded_set.filter_k;
         tuning_sq_snr = loaded_set.sq_snr;
@@ -347,6 +352,8 @@ void core1_main() {
         shared_line_width = (loaded_set.line_width >= 30 && loaded_set.line_width <= 80) ? loaded_set.line_width : 60;
         shared_afc_on = loaded_set.afc_on;
         shared_font_mode = loaded_set.font_mode;
+        if (loaded_set.dpll_alpha >= 0.005f && loaded_set.dpll_alpha <= 0.200f)
+            tuning_dpll_alpha = loaded_set.dpll_alpha;
     }
     
     const float bauds[] = {45.45f, 50.0f, 75.0f};
@@ -382,12 +389,11 @@ void core1_main() {
             s.magic = 0xDEADBEEF;
             s.baud_idx = shared_baud_idx; s.shift_idx = shared_shift_idx;
             s.stop_idx = shared_stop_idx; s.rtty_inv = shared_rtty_inv;
-            s.display_mode = display_mode; s.exp_scale = exp_scale;
+            s.display_mode = display_mode; s.exp_scale = shared_exp_scale;
             s.auto_scale = auto_scale; s.filter_k = tuning_lpf_k;
             s.sq_snr = tuning_sq_snr; s.target_freq = shared_target_freq;
             s.serial_diag = shared_serial_diag; s.line_width = shared_line_width;
-            s.afc_on = shared_afc_on; s.font_mode = shared_font_mode;
-            uint8_t page_buf[FLASH_PAGE_SIZE] = {0};
+            s.afc_on = shared_afc_on; s.font_mode = shared_font_mode; s.dpll_alpha = tuning_dpll_alpha;             uint8_t page_buf[FLASH_PAGE_SIZE] = {0};
             memcpy(page_buf, &s, sizeof(AppSettings));
             multicore_lockout_start_blocking();
             uint32_t ints = save_and_disable_interrupts();
@@ -453,7 +459,7 @@ void core1_main() {
             if (tuning_lab_active) {
                 ui.drawTuningControls(tuning_dpll_alpha, tuning_lpf_k, tuning_sq_snr, shared_err_rate);
             } else if (diag_screen_active) {
-                ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width, shared_font_mode);
+                ui.drawDiagScreen(shared_adc_v, shared_font_mode);
             }
             
             ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open, shared_agc_gain, shared_agc_enabled, shared_err_rate);
@@ -552,7 +558,7 @@ void core1_main() {
                 for (int x = 0; x < 480; x++) {
                     float eb = bin_start + x * bin_per_pixel; int b0 = (int)eb; float db = smooth_mag[b0] * (1.0f-(eb-b0)) + smooth_mag[std::min(b0+1,FFT_SIZE/2-1)] * (eb-b0);
                     float norm = (db + ui_gain - ui_noise_floor) / 50.0f;
-                    norm = std::clamp(norm, 0.0f, 1.0f); if (exp_scale) norm *= norm;
+                    norm = std::clamp(norm, 0.0f, 1.0f); if (shared_exp_scale) norm *= norm;
                     
                     uint8_t r=0, g=0, b=0; // r=visual_B, g=visual_G, b=visual_R
                     if (norm < 0.25f) { r = (uint8_t)(norm * 4.0f * 255.0f); }
@@ -569,7 +575,7 @@ void core1_main() {
                 for (int x = 0; x < 480; x++) {
                     float eb = bin_start + x * bin_per_pixel; int b0 = (int)eb; float db = smooth_mag[b0] * (1.0f-(eb-b0)) + smooth_mag[std::min(b0+1,FFT_SIZE/2-1)] * (eb-b0);
                     float norm = (db + ui_gain - ui_noise_floor) / 50.0f;
-                    norm = std::clamp(norm, 0.0f, 1.0f); if (exp_scale) norm *= norm;
+                    norm = std::clamp(norm, 0.0f, 1.0f); if (shared_exp_scale) norm *= norm;
                     int h = (int)(norm * UI_DSP_ZONE_H); if (h > 0) spectrum.drawFastVLine(x, UI_DSP_ZONE_H - h, h, PAL_PEAK);
                 }
                 spectrum.drawFastVLine(m_x, 0, UI_DSP_ZONE_H, 0x00FFFFU);
@@ -640,7 +646,7 @@ void core1_main() {
                     
                     if (!menu_mode) reset_confirm_mode = false;
                     ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_rtty_inv, shared_afc_on, menu_mode);
-                    if (menu_mode) ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, "DIAG", "");
+                    if (menu_mode) ui.drawMenu(auto_scale, display_mode, "DIAG");
                     touch_ignore_until = time_us_32() + 300000;
                 }
                 else if (ty >= UI_Y_TEXT && ty < UI_Y_BOTTOM) {
@@ -659,7 +665,7 @@ void core1_main() {
                             } else if (tx >= 80 && tx <= 200) { // NO
                                 reset_confirm_mode = false;
                                 diag_screen_active = true;
-                                ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width, shared_font_mode);
+                                ui.drawDiagScreen(shared_adc_v, shared_font_mode);
                             }
                         }
                         // Ignore taps outside YES/NO buttons — keep confirm dialog open
@@ -669,38 +675,27 @@ void core1_main() {
                         int row = (ty - UI_Y_TEXT) / (160/3);
                         int btn = row * 4 + col;
                         if (btn == 0) { flag_settings_change(); display_mode = (display_mode + 1) % 3; spectrum.fillSprite(PAL_BG); }
-                        else if (btn == 1) { flag_settings_change(); exp_scale = !exp_scale; }
-                        else if (btn == 2) { flag_settings_change(); auto_scale = !auto_scale; }
-                        else if (btn == 3) { diag_screen_active = true; menu_mode = false; }
-                        else if (btn == 11) { tuning_lab_active = true; menu_mode = false; }
+                        else if (btn == 1) { flag_settings_change(); auto_scale = !auto_scale; }
+                        else if (btn == 2) { diag_screen_active = true; menu_mode = false; }
+                        else if (btn == 3) { tuning_lab_active = true; menu_mode = false; }
 
-                        if (menu_mode && !reset_confirm_mode) ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, "DIAG", "");
+                        if (menu_mode && !reset_confirm_mode) ui.drawMenu(auto_scale, display_mode, "DIAG");
                         touch_ignore_until = time_us_32() + 300000;
                         } else if (diag_screen_active && !was_touched) {
                             // Diagnostics screen touch handling (6 buttons, 80px each)
                             int local_y = ty - UI_Y_TEXT;
-                            if (local_y > 111) { 
-                                int b_idx = tx / 80;
-                                if (b_idx == 0) { // DIAG toggle
-                                    shared_serial_diag = !shared_serial_diag;
-                                } else if (b_idx == 1) { // FONT toggle
-                                    shared_font_mode = (shared_font_mode + 1) % 2;
+                            if (local_y > 111) {
+                                if (tx < 240) { // FONT toggle: BIG→MED→SMALL→TINY
+                                    shared_font_mode = (shared_font_mode + 1) % 4;
+                                    const int widths[] = {55, 62, 73, 120};
+                                    shared_line_width = widths[shared_font_mode];
                                     flag_settings_change();
-                                } else if (b_idx == 2) { // WIDTH -
-                                    flag_settings_change();
-                                    shared_line_width -= 2; if(shared_line_width < 30) shared_line_width = 30;
-                                } else if (b_idx == 3) { // WIDTH Reset
-                                    flag_settings_change();
-                                    shared_line_width = 60;
-                                } else if (b_idx == 4) { // WIDTH +
-                                    flag_settings_change();
-                                    shared_line_width += 2; if(shared_line_width > 85) shared_line_width = 85;
-                                } else if (b_idx == 5) { // RST
+                                } else { // RST
                                     reset_confirm_mode = true;
                                     diag_screen_active = false;
                                     ui.drawResetConfirm();
                                 }
-                                if (!reset_confirm_mode) ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width, shared_font_mode);
+                                if (!reset_confirm_mode) ui.drawDiagScreen(shared_adc_v, shared_font_mode);
                                 touch_ignore_until = time_us_32() + 300000;
                             }
                         } else if (tuning_lab_active && !was_touched) {
@@ -734,7 +729,7 @@ void core1_main() {
                                     s.stop_idx = shared_stop_idx;
                                     s.rtty_inv = shared_rtty_inv;
                                     s.display_mode = display_mode;
-                                    s.exp_scale = exp_scale;
+                                    s.exp_scale = shared_exp_scale;
                                     s.auto_scale = auto_scale;
                                     s.filter_k = tuning_lpf_k;
                                     s.sq_snr = tuning_sq_snr;
@@ -743,7 +738,8 @@ void core1_main() {
                                     s.line_width = shared_line_width;
                                     s.afc_on = shared_afc_on;
                                     s.font_mode = shared_font_mode;
-
+                                    s.dpll_alpha = tuning_dpll_alpha;
+                                    
                                     uint8_t page_buf[FLASH_PAGE_SIZE] = {0};
                                     memcpy(page_buf, &s, sizeof(AppSettings));
                                     multicore_lockout_start_blocking();
@@ -753,6 +749,10 @@ void core1_main() {
                                     restore_interrupts(ints);
                                     multicore_lockout_end_blocking();
                                     settings_need_save = false;
+                                    // Show SAVED! feedback
+                                    ui.drawTuningControls(tuning_dpll_alpha, tuning_lpf_k, tuning_sq_snr, shared_err_rate, true);
+                                    touch_ignore_until = time_us_32() + 500000;
+                                    continue; // skip normal redraw below
                                 }
                             }
                             ui.drawTuningControls(tuning_dpll_alpha, tuning_lpf_k, tuning_sq_snr, shared_err_rate);
@@ -794,22 +794,29 @@ void core1_main() {
             s.stop_idx = shared_stop_idx;
             s.rtty_inv = shared_rtty_inv;
             s.display_mode = display_mode;
-            s.exp_scale = exp_scale;
+            s.exp_scale = shared_exp_scale;
             s.auto_scale = auto_scale;
             s.filter_k = tuning_lpf_k;
             s.sq_snr = tuning_sq_snr;
             s.target_freq = shared_target_freq;
+            s.serial_diag = shared_serial_diag;
+            s.line_width = shared_line_width;
+            s.afc_on = shared_afc_on;
+            s.font_mode = shared_font_mode;
+            s.dpll_alpha = tuning_dpll_alpha;
             
-            uint8_t page_buf[FLASH_PAGE_SIZE] = {0};
-            memcpy(page_buf, &s, sizeof(AppSettings));
-            
-            multicore_lockout_start_blocking();
-            uint32_t ints = save_and_disable_interrupts();
-            flash_range_erase(SETTINGS_FLASH_OFFSET, FLASH_SECTOR_SIZE);
-            flash_range_program(SETTINGS_FLASH_OFFSET, page_buf, FLASH_PAGE_SIZE);
-            restore_interrupts(ints);
-            multicore_lockout_end_blocking();
-            
+            // Skip write if flash already has identical data
+            if (memcmp(flash_settings_contents, &s, sizeof(AppSettings)) != 0) {
+                uint8_t page_buf[FLASH_PAGE_SIZE] = {0};
+                memcpy(page_buf, &s, sizeof(AppSettings));
+
+                multicore_lockout_start_blocking();
+                uint32_t ints = save_and_disable_interrupts();
+                flash_range_erase(SETTINGS_FLASH_OFFSET, FLASH_SECTOR_SIZE);
+                flash_range_program(SETTINGS_FLASH_OFFSET, page_buf, FLASH_PAGE_SIZE);
+                restore_interrupts(ints);
+                multicore_lockout_end_blocking();
+            }
             settings_need_save = false;
         }
         tight_loop_contents();
@@ -862,7 +869,10 @@ void core0_dsp_loop() {
     uint8_t current_char = 0;
     bool is_figs = false;
     bool last_d_sign = true;
-    
+    uint8_t err_hist[100] = {0};
+    int err_idx = 0, err_sum = 0;
+    float freq_error = 0.0f;
+
     const float shifts_hz[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
     const float bauds[] = {45.45f, 50.0f, 75.0f};
 
@@ -878,10 +888,15 @@ void core0_dsp_loop() {
             baudot_state = 0;
             symbol_phase = 0.0f;
             integrate_acc = 0.0f;
+            freq_error = 0.0f;
             atc_mark_env = 0.01f;
             atc_space_env = 0.01f;
             shared_squelch_open = false;
             last_d_sign = true;
+            // Reset error counter
+            memset(err_hist, 0, sizeof(err_hist));
+            err_idx = 0; err_sum = 0;
+            shared_err_rate = 0.0f;
         }
 
         uint32_t st = time_us_32();
@@ -960,7 +975,7 @@ void core0_dsp_loop() {
         bool d_sign = (D > 0.0f);
         
         float phase_inc = baud / (float)SAMPLE_RATE;
-        static float freq_error = 0.0f;
+        // freq_error declared above, before main loop
         float dpll_beta = tuning_dpll_alpha * tuning_dpll_alpha / 2.0f;
         
         if (!shared_squelch_open) {
@@ -1023,8 +1038,6 @@ void core0_dsp_loop() {
                         baudot_state++;
                     } else if (baudot_state == 7) {
                         // Error rate tracking (100-char sliding window)
-                        static uint8_t err_hist[100] = {0};
-                        static int err_idx = 0, err_sum = 0;
 
                         if (bit) { // Valid stop
                             char decoded = '\0';
