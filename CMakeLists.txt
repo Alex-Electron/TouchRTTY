@@ -36,6 +36,7 @@ target_include_directories(TouchRTTY PRIVATE
 )
 
 # Optimization Flags for DSP performance on RP2350 (Cortex-M33)
+# NOTE: -flto is incompatible with Pico SDK's __wrap_ symbols (printf, snprintf etc.)
 target_compile_options(TouchRTTY PRIVATE
     -O3
     -ffast-math

@@ -26,8 +26,16 @@ This project implements a high-performance, software-defined radio (SDR) style R
 *   **Hardware Compatibility:**
     *   Optimized for the **ILI9488** display quirk (Mode 11: 16-bit Endian Swapped, BGR out), rendering pure, artifact-free colors via native RGB565 manipulation.
 
-## 📅 Development Roadmap
+*   **Professional Font System (Build 188):**
+    *   **Dual-Font Precision:** Exclusively optimized for two high-legibility modes:
+        *   **F2:NORM (Standard):** 8x16 px font with a tight 17px line height for maximum readability.
+        *   **F0:NARW (Narrow):** 6x8 px font with a 10px line height, providing a high-density "professional data" view (up to 16 lines on a 160px text zone).
+    *   **Zero-Scaling Artifacts:** Removed all fractional font scaling to ensure pixel-perfect text rendering without blurring or uneven character spacing.
 
+## 📅 Development Roadmap
+*   **PHASE 3: Optimization (CURRENT)**
+    *   [x] **Build 188:** Stable release with the final UI font system and synchronized web-prototype.
+    *   [ ] **Build 189:** DSP math cleanup (strict float policy) and RAM execution optimization.
 *   **PHASE 4:** SD-Card Integration (exFAT) & Data Logging.
 *   **PHASE 5:** CW (Morse Code) Decoder & APF Filter.
 *   **PHASE 6:** FT8 / FT4 Mode Implementation.

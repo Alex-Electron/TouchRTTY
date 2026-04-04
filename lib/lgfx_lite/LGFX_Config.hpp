@@ -49,18 +49,18 @@ public:
 
         {
             auto cfg = _touch_instance.config();
-            cfg.x_min      = 3900;
-            cfg.x_max      = 300;
-            cfg.y_min      = 300;
-            cfg.y_max      = 3900;
-            cfg.pin_int    = 14;
+            cfg.x_min      = 4000;
+            cfg.x_max      = 100;
+            cfg.y_min      = 100;
+            cfg.y_max      = 4000;
+            cfg.pin_int    = -1; // disable int
             cfg.bus_shared = false;
             cfg.spi_host   = 1;                 
-            cfg.freq       = 2500000;
+            cfg.freq       = 2000000;
             cfg.pin_sclk   = 10;
             cfg.pin_mosi   = 11;
             cfg.pin_miso   = 12;
-            cfg.pin_cs     = 15;
+            cfg.pin_cs     = 22; // CORRECT TOUCH CS
             _touch_instance.config(cfg);
             _panel_instance.setTouch(&_touch_instance);
         }
