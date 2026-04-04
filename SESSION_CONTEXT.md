@@ -1,53 +1,56 @@
 # TouchRTTY: Master Session Context (Save State)
-**Дата последнего обновления:** 2026-04-04
-**Текущая ветка:** `feature/rtty-dsp-improvements`
-**Текущий билд:** 190 (Stable Base: 185)
+**Last updated:** 2026-04-04
+**Branch:** `feat/alex-cl-dev`
+**Current build:** 194
 
-## 1. ТЕКУЩИЙ СТАТУС ПРОЕКТА
-- **Интерфейс:** Оптимизирована система шрифтов (F2:NORM и F0:NARW), удалено дробное масштабирование.
-- **Функции:** Добавлена кнопка **AFC**, реализован **Smart Newline**.
-- **Шрифты:** Оставлены только фавориты — **F2 (Standard)** и **F0 (Narrow)**. Высота NARW = 10px.
-- **Инструменты:** Веб-симулятор `tools/ui_prototype.html` полностью синхронизирован с прошивкой (Build 188).
-- **DSP:** FFT перенесён на Core 0, hardware ADC FIFO, ping-pong DMA для дисплея.
+## 1. PROJECT STATUS
+- **DSP:** Hardware ADC FIFO (10kHz), FIR→AGC→I/Q Demod→ATC→DPLL→Baudot pipeline on Core 0 (~7% load)
+- **UI:** 3 thin bars (SIG/AGC/ERR) in top panel, waterfall/spectrum/Lissajous, Tuning Lab with eye diagram
+- **Tuning Lab:** Eye diagram with phosphor persistence, ALPHA/BW/SQ controls, DUMP:ON/OFF, SAVE
+- **Serial:** 15 commands for full remote control (type HELP), diagnostic stream with [D] prefix
+- **Fonts:** NORM (Font2, 17px) and NARW (Font0, 10px)
 
-## 2. ИНЖЕНЕРНЫЕ ПРАВИЛА (ОБЯЗАТЕЛЬНО К ИСПОЛНЕНИЮ)
-1. **Surgical Edits Only:** Не перезаписывать `main.cpp` целиком.
-2. **Strict Float Policy:** ТОЛЬКО `float` константы (`f`) и функции (`sinf()`, `cosf()`).
-3. **RAM Execution:** DSP-функции с атрибутом `__time_critical_func`.
-4. **Modulo Removal:** Запрещено использовать `%` в горячих циклах Core 0.
-5. **Прошивка через picotool:** `~/.pico-sdk/picotool/2.2.0-a4/picotool/picotool.exe load build/TouchRTTY.uf2 -f && picotool reboot`
+## 2. ENGINEERING RULES
+1. **Surgical Edits Only:** Never overwrite main.cpp entirely.
+2. **Strict Float Policy:** Only `float` constants (`f`) and functions (`sinf`, `cosf`).
+3. **No __wfe() with ADC FIFO:** Use `tight_loop_contents()` — no ADC IRQ configured.
+4. **Flash via picotool:** `picotool load build/TouchRTTY.uf2 -f && picotool reboot`
+5. **-flto incompatible** with Pico SDK `__wrap_` symbols.
 
-## 3. ИСТОРИЯ БИЛДОВ (последние)
-### Build 190 (текущий): Fix FPS drop + optimize DSP
-- **Фикс:** `__wfe()` → `tight_loop_contents()` в ADC wait loop Core 0 (причина FPS 22→14: FIFO overflow из-за отсутствия ADC IRQ для пробуждения __wfe)
-- **Фикс:** Убран drain overflow (`while (adc_fifo_get_level() > 4)`) — выбрасывал сэмплы
-- **Фикс:** `sleep_us(50)` → `tight_loop_contents()` на Core 1 idle
-- **Оптимизация (из Build 189 uncommitted):**
-  - FFT перенесён с Core 1 на Core 0 (освобождает ~500μs/фрейм для будущего DRM)
-  - Hardware ADC FIFO (adc_fifo_setup + adc_run) вместо software busy-wait
-  - Ping-pong double buffering в ili9488_push_colors
-  - fast_log2f() через IEEE 754 bit tricks (~4x быстрее log10f)
-  - AGC: precomputed 1/release (умножение вместо деления)
-  - Кеширование expf() для ATC envelope (10000 вызовов/сек → только при смене baud)
-  - Bitmask phosphor fade для Lissajous (uint32 shift+mask)
-  - Sin/cos lookup table для Lissajous
-  - Комментарий: -flto несовместим с Pico SDK __wrap_ символами
+## 3. BUILD HISTORY (recent)
+### Build 194: Tuning Lab + Serial Commands
+- Tuning Lab screen with eye diagram (phosphor persistence, 240x64)
+- Full serial command system (15 commands)
+- Menu simplified (BW/SQ/SAVE moved to Tuning Lab)
+- Boot recalibration fix (short press = recal, long = factory reset)
+- Reset confirm dialog fix (RTTY chars no longer overwrite it)
 
-### Build 189: Advanced DSP Optimization (committed)
-### Build 188: Hardware-accurate color rendering (committed)
+### Build 191: Error Rate + Reception Fix
+- Error rate indicator (100-char sliding window) in top bar
+- 3 thin bars: SIG, AGC (dB), ERR (%)
+- Fix: reverted FFT to Core 1 (was blocking ADC on Core 0)
+- Fix: __wfe() → tight_loop_contents() for ADC wait
 
-## 4. ПЛАНЫ И ЗАДАЧИ (ROADMAP)
-### Phase 3 (Текущая): Оптимизация
-- [x] **Build 188:** Удалить лишние шрифты, оставить F2 и F0.
-- [x] **Build 189:** Первый этап `f` суффиксов и `__time_critical_func`.
-- [x] **Build 190:** ADC FIFO + FFT на Core 0 + ping-pong DMA + fix FPS.
-- [ ] **Build 191:** Аппаратный скролл ILI9488 (разгрузка Core 1).
+### Build 190: ADC FIFO + Optimizations
+- Hardware ADC FIFO, ping-pong DMA, fast_log2f(), AGC precompute
 
-### Phase 8 (Будущее): SDR и DRM
-- [ ] **Color Fidelity:** Дизеринг для RGB565 градиентов.
-- [ ] **I/Q Input:** Belka-DX (40 кГц IQ) через ADC0/ADC1.
-- [ ] **Audio:** Декодирование HE-AAC v2 через FDK AAC.
-- [ ] **Hardware:** I2S ЦАП (PCM5102).
+### Build 189: Strict Float (committed)
+### Build 188: Hardware-accurate colors (committed)
 
-## 5. ИНСТРУКЦИЯ ДЛЯ НОВОЙ СЕССИИ
-*При старте нового чата загрузи этот файл и скажи: "Проанализируй SESSION_CONTEXT.md, ветку feature/rtty-dsp-improvements и билд 190. Мы готовы продолжать."*
+## 4. ROADMAP
+### Done
+- [x] Eye diagram with DPLL-synchronized phosphor persistence
+- [x] Tuning Lab with parameter controls
+- [x] Serial command system (full remote control)
+- [x] Error rate indicator
+- [x] Hardware ADC FIFO
+- [x] Ping-pong DMA
+
+### Planned
+- [ ] Refactor main.cpp into logical modules (DSP, UI, Baudot, shared state)
+- [ ] Hardware scroll ILI9488 (offload Core 1)
+- [ ] CMSIS-DSP vectorized FIR/Biquad
+- [ ] SD-Card logging (Phase 4)
+
+## 5. NEW SESSION INSTRUCTIONS
+*Load this file and say: "Analyze SESSION_CONTEXT.md, branch feat/alex-cl-dev, build 194. Ready to continue."*

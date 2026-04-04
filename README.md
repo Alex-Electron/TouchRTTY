@@ -11,56 +11,53 @@ This project implements a high-performance, software-defined radio (SDR) style R
 > [!IMPORTANT]
 > **Hardware Requirement:** This project is specifically designed for the **Raspberry Pi Pico 2 (RP2350)**. It will NOT run on the original RP2040 due to higher memory and DSP requirements.
 
-## 🚀 Key Features (Phase 3 Complete)
+## Key Features (Build 194)
 
 *   **RP2350 Dual-Core Optimization:**
-    *   **Core 0 (DSP Engine):** Dedicated strictly to hard-real-time audio processing at exactly 10,000 Hz using RP2350's floating-point unit (FPU).
-    *   **Core 1 (UI & Rendering):** Handles the 3.5" ILI9488 TFT touch display via 60MHz PIO DMA, rendering a 30+ FPS Waterfall, Spectrum, and Lissajous (XY) tuning scope without interrupting the DSP.
-*   **Professional DSP Pipeline (Build 172):**
-    *   **63-Tap FIR Bandpass Filter:** Pre-filters the 10kHz ADC stream.
-    *   **Quadrature (I/Q) Demodulator:** Baseband mixing with hardware-generated sine/cosine tables, followed by Biquad Low-Pass Filters (Extended Raised Cosine). Eliminates Inter-Symbol Interference (ISI).
-    *   **Automatic Threshold Correction (ATC):** Fast-attack, slow-release (FASR) envelope detectors independently track Mark and Space fading, dynamically adjusting the decision threshold.
-    *   **Digital Phase-Locked Loop (DPLL):** A full Proportional-Integral (PI) synchronous loop tracks the zero-crossings of the bitstream, correcting both phase (timing jitter) and frequency error (baud rate mismatch). Allows continuous, gapless reception of 1.0 stop-bit streams without framing errors.
-    *   **Automatic Frequency Control (AFC):** 512-point FFT-based peak detection locks onto wandering signals within a ±100Hz window.
-    *   **Strict Squelch:** Intelligent noise-floor and SNR tracking ensures the decoder remains totally silent until a valid RTTY signal (SNR > 4dB) is present.
-*   **Hardware Compatibility:**
-    *   Optimized for the **ILI9488** display quirk (Mode 11: 16-bit Endian Swapped, BGR out), rendering pure, artifact-free colors via native RGB565 manipulation.
+    *   **Core 0 (DSP Engine):** Dedicated to hard-real-time audio processing at 10,000 Hz via hardware ADC FIFO. Strict `float` policy with FPU acceleration. Core load ~7%.
+    *   **Core 1 (UI & FFT):** Handles 1024-point FFT, ILI9488 TFT display via 60MHz PIO DMA, touch input, and serial commands. ~20 FPS waterfall rendering.
+*   **Professional DSP Pipeline:**
+    *   63-Tap FIR Bandpass Filter
+    *   Quadrature (I/Q) Demodulator with Biquad LPF (Extended Raised Cosine)
+    *   Automatic Threshold Correction (ATC) with FASR envelope detectors
+    *   Digital Phase-Locked Loop (DPLL) with PI controller — continuous reception of 1.0 stop-bit streams
+    *   Automatic Frequency Control (AFC) — FFT-based peak detection, ±100Hz tracking
+    *   Digital AGC with fast attack / slow release
+    *   SNR-based squelch with hysteresis
+*   **Tuning Lab:**
+    *   Eye diagram with phosphor persistence (DPLL-synchronized, zero jitter)
+    *   Real-time parameter adjustment (ALPHA, BW, SQ) via touch or serial commands
+    *   Error rate indicator (100-char sliding window)
+*   **Top Panel:** 3 thin bars — SIG (signal level dB), AGC (gain dB), ERR (error rate %)
+*   **Display Modes:** Waterfall, Spectrum, Lissajous (XY) scope
+*   **ILI9488 Compatibility:** Native Mode 11 (BGR, 16-bit endian swapped) rendering via RGB565
 
-## 📅 Development Roadmap
+## Development Roadmap
 
 *   **PHASE 4:** SD-Card Integration (exFAT) & Data Logging.
 *   **PHASE 5:** CW (Morse Code) Decoder & APF Filter.
 *   **PHASE 6:** FT8 / FT4 Mode Implementation.
 *   **PHASE 7:** WEFAX Decoder (HF Weather Fax).
 
-## 📡 WebSDR / Real-World Testing Guide
+## WebSDR / Real-World Testing Guide
 
-You can now test this decoder with real over-the-air signals using a WebSDR (like the University of Twente WebSDR)!
+You can test this decoder with real over-the-air signals using a WebSDR (like the University of Twente WebSDR).
 
 ### Setup
 1.  Open a WebSDR in your browser.
 2.  Tune to a known RTTY frequency (e.g., German Weather Service DWD on `10100.8 kHz`).
 3.  Set the WebSDR modulation to **USB** (Upper Sideband).
-    *   *Note: DWD transmits in F1B/LSB. If you tune in USB, the Mark frequency will be higher than the Space frequency. You must press the `INV` button on the Pico's screen to swap them, OR tune the WebSDR to LSB and leave the Pico in Normal mode.*
-4.  Connect your PC's headphone output using the audio adapter (read about it below) to the Pico's ADC input (GPIO 26) using an audio cable. 
-    *   *Ensure your audio level is correct. Watch the top-left `SIG` meter on the screen; it should peak around `-15 dB` to `-5 dB` without triggering the red clipping indicator.*
+    *   *Note: DWD transmits in F1B/LSB. If you tune in USB, you must press `INV` on the Pico's screen to swap Mark/Space, OR tune the WebSDR to LSB and leave the Pico in Normal mode.*
+4.  Connect your PC's headphone output using the audio adapter (see below) to the Pico's ADC input (GPIO 26).
+    *   *Ensure your audio level is correct. Watch the `SIG` bar on the screen; it should peak around `-15 dB` to `-5 dB` without triggering clipping.*
 
 ### Tuning on the Pico
-1.  **DWD SYNOP (Weather):** 
-    *   Select **B 50** (50 Baud).
-    *   Select **S 450** (450 Hz Shift).
-    *   Select **ST 1.5** (1.5 Stop bits).
-2.  **Amateur Radio (Ham):**
-    *   Select **B 45** (45.45 Baud).
-    *   Select **S 170** (170 Hz Shift).
-    *   Select **ST 1.5** (1.5 Stop bits).
+1.  **DWD SYNOP (Weather):** B 50, S 450, ST 1.5
+2.  **Amateur Radio (Ham):** B 45, S 170, ST 1.5
 3.  Tap the Waterfall to place the yellow/cyan markers over the two visible peaks.
-4.  The `RTTY: WAIT` indicator should turn green and say `RTTY: SYNC`.
-5.  Text will begin printing on the screen!
+4.  Text will begin printing on the screen when signal is detected.
 
-## 🔌 Hardware Wiring Guide
-
-The project utilizes the Raspberry Pi Pico 2 (RP2350) and a 3.5" ILI9488 TFT Display with an XPT2046 touch controller. Below is the required pinout mapping.
+## Hardware Wiring Guide
 
 ### Display (ILI9488) - SPI0
 | Display Pin | Pico GPIO | Physical Pin | Function |
@@ -90,17 +87,19 @@ The project utilizes the Raspberry Pi Pico 2 (RP2350) and a 3.5" ILI9488 TFT Dis
 | **Audio Signal** | GP26 | Pin 31 | ADC0 (Biased Audio Input) |
 | **Audio Ground** | - | Pin 33 | Analog Ground (AGND) |
 
-### Rotary Encoder (Future UI Expansion)
-*Currently, only the push-button (SW) is implemented to serve as a Hard Reset and UI interaction. Full rotary tuning (A/B pins) will be added in future phases.*
+### Rotary Encoder
 | Encoder Pin | Pico GPIO | Physical Pin | Function |
 | :--- | :--- | :--- | :--- |
-| **SW (Switch)** | GP4 | Pin 6 | Push Button to GND (Hold on boot to Factory Reset) |
+| **SW (Switch)** | GP4 | Pin 6 | Push Button to GND (see Boot Actions below) |
 | **CLK / A** | *TBD* | - | *Reserved for future use* |
 | **DT / B**  | *TBD* | - | *Reserved for future use* |
 | **GND** | - | Any GND | Ground |
 
-### SD Card Module - SPI1 (Phase 5 Logging)
-*The SD Card shares the **SPI1 bus** with the Touch Controller, but requires its own dedicated Chip Select (CS) pin.*
+**Boot Actions (Encoder SW):**
+- **Short press** at boot: Touch screen recalibration only (LED blinks, release when ready)
+- **Hold 3 seconds** at boot: Full factory reset (wipes calibration + all settings) + recalibration
+
+### SD Card Module - SPI1 (Future)
 | SD Card Pin | Pico GPIO | Physical Pin | Function |
 | :--- | :--- | :--- | :--- |
 | **MOSI / CMD** | GP11 | Pin 15 | SPI1 TX (Shared with Touch T_DIN) |
@@ -110,52 +109,61 @@ The project utilizes the Raspberry Pi Pico 2 (RP2350) and a 3.5" ILI9488 TFT Dis
 | **VCC** | - | Pin 36 or 40 | 3.3V or 5V (Depends on your SD module) |
 | **GND** | - | Any GND | Ground |
 
-## 🔌 Hardware Audio Input Adapter
-To safely feed audio from a PC, radio, or WebSDR into the RP2350's ADC (Analog-to-Digital Converter), a simple DC-biasing circuit is required. The Pico's ADC reads voltages between **0V and 3.3V**, so an AC audio signal centered around 0V will clip and potentially damage the pin if negative voltages are applied.
+## Hardware Audio Input Adapter
+To safely feed audio from a PC, radio, or WebSDR into the RP2350's ADC, a DC-biasing circuit is required. The Pico's ADC reads voltages between **0V and 3.3V**.
 
 **Required Circuit:**
 
 ![Hardware Audio Adapter Schematic](docs/images/adc_input_adapter.png)
 
-1. **R1 (Input Level):** A 10kΩ potentiometer to adjust the audio volume from your source.
-2. **C1 (DC Blocking):** A 4.7µF capacitor to block any DC offset from the PC or radio.
-3. **R2 (Bias Voltage):** A 10kΩ trimpot connected between 3.3V (Pin 36) and AGND to pull the ADC's resting voltage to exactly **1.65V** (the center of the ADC's range).
-4. **R3 + C2 (Low-Pass Filter):** A 1kΩ resistor and 47nF capacitor forming a simple RC low-pass filter. This suppresses high-frequency RF noise and anti-aliases the signal before it hits the ADC.
+1. **R1 (Input Level):** 10k potentiometer to adjust audio volume.
+2. **C1 (DC Blocking):** 4.7uF capacitor to block DC offset.
+3. **R2 (Bias Voltage):** 10k trimpot between 3.3V and AGND, set to **1.65V**.
+4. **R3 + C2 (Low-Pass Filter):** 1k + 47nF RC anti-alias filter.
 
-*Important:* For the cleanest reception with the lowest noise floor, connect all ground lines of this circuit to the Pico's **AGND (Analog Ground, Pin 33)** rather than a regular digital ground.
+*Connect all grounds to **AGND (Pin 33)**. Connect output to **GPIO 26 (Pin 31)**.*
 
-*Connect the biased output to **GPIO 26 (Pin 31)**.*
+## USB Serial Interface
 
-## 🛠️ USB Serial Diagnostics (Tuning Mode)
-
-By connecting the Pico via USB to a PC terminal (9600 baud), you gain access to the raw DSP telemetry every 500ms:
+Connect via USB to a terminal. When DIAG mode is OFF, serial outputs decoded RTTY text. When DIAG is ON (via `DIAG ON` command or DUMP button), outputs diagnostic stream every ~500ms:
 
 ```
---- TUNING DIAGNOSTICS ---
-Step 1 (ADC): V=1.94V (Range: 1585-2524)
-Step 2 (ATC Level): Mark_Env=0.0974 Space_Env=0.0894
-Step 3 (FFT Peaks): SNR=67.8 dB, Signal=-10.3 dB
-Step 4 (RTTY Status): Squelch=OPEN DPLL_Phase=0.95
-Params: Baud=45.45 ALPHA=0.0350 K=0.75 SQ=4.0
----------------------------------
+[D] SNR=15.3 SIG=-28.5 ERR=12% SQ=OPEN AGC=+13dB PH=0.45 FE=0.002 M=0.234 S=0.198 A=0.050 K=1.00 SQT=8.0 F=1535 B=45 C0=7% C1=30%
 ```
 
-You can send commands via the terminal to adjust the DSP on the fly:
-*   `ALPHA 0.05` - Adjust DPLL tracking width (default 0.035).
-*   `K 0.6` - Adjust Biquad LPF bandwidth multiplier (default 0.75).
-*   `SQ 6.0` - Adjust Squelch SNR threshold (default 4.0).
-*   `CLEAR` - Hard reset the DSP state, AFC, and DPLL phase.
+### Serial Commands (send with Enter)
 
-## 📜 Release History
+| Command | Description |
+| :--- | :--- |
+| `ALPHA <0.005-0.200>` | DPLL loop bandwidth |
+| `BW <0.3-2.0>` | LPF filter bandwidth (K) |
+| `SQ <dB>` | Squelch SNR threshold |
+| `FREQ <Hz>` | Center frequency |
+| `BAUD <0-2>` | 0=45, 1=50, 2=75 baud |
+| `SHIFT <0-4>` | 170/200/425/450/850 Hz |
+| `STOP <0-2>` | 1.0/1.5/2.0 stop bits |
+| `INV ON\|OFF` | Mark/Space inversion |
+| `AFC ON\|OFF` | Auto frequency control |
+| `AGC ON\|OFF` | Auto gain control |
+| `DIAG ON\|OFF` | Diagnostic stream toggle |
+| `STATUS` | Print all current parameters |
+| `SAVE` | Save settings to flash |
+| `CLEAR` | Reset DSP state |
+| `HELP` | List all commands |
 
-*   **[v1.72](https://github.com/Alex-Electron/TouchRTTY/releases/tag/v1.72)** (2026-03-31): **Phase 3 Final.** Professional DSP demodulator stability, build 172, ili9488 driver refactoring.
+## Release History
 
-## 🏗️ Build Instructions
-Compiled via the standard Raspberry Pi Pico SDK (v2.2.0+) and CMake.
+*   **Build 194** (2026-04-04): Tuning Lab, eye diagram, serial command system, menu restructure.
+*   **Build 191** (2026-04-04): Error rate indicator, 3-bar top panel, reception fix.
+*   **Build 189** (2026-04-02): Hardware FPU acceleration, strict float policy.
+*   **[v1.72](https://github.com/Alex-Electron/TouchRTTY/releases/tag/v1.72)** (2026-03-31): Phase 3 Final. Professional DSP demodulator.
+
+## Build Instructions
+Compiled via the Raspberry Pi Pico SDK (v2.2.0+) and CMake.
 
 ```bash
 mkdir build && cd build
 cmake -G Ninja ..
 ninja
-picotool load TouchRTTY.uf2
+picotool load TouchRTTY.uf2 -f
 ```
