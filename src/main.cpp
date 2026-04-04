@@ -102,6 +102,7 @@ volatile float shared_adc_v = 0.0f;
 volatile float shared_signal_db = -80.0f;
 volatile bool shared_adc_clipping = false;
 volatile float shared_snr_db = 0.0f;
+volatile float shared_err_rate = 0.0f; // Error rate 0-100% over last 100 chars
 volatile float shared_core0_load = 0.0f;
 volatile float shared_core1_load = 0.0f;
 
@@ -129,6 +130,14 @@ volatile int shared_stop_idx = 1;
 volatile bool shared_rtty_inv = false;
 volatile bool shared_squelch_open = false;
 volatile bool shared_clear_dsp = false;
+
+// Eye diagram buffer: 16 overlaid bit periods, up to 256 samples per bit
+#define EYE_TRACES 16
+#define EYE_MAX_SPB 256
+volatile int8_t shared_eye_buf[EYE_TRACES][EYE_MAX_SPB]; // D values scaled to -127..+127
+volatile int shared_eye_spb = 220; // samples per bit (SAMPLE_RATE/baud)
+volatile int shared_eye_idx = 0;   // current trace index (0..EYE_TRACES-1)
+volatile bool shared_eye_ready = false;
 
 // Tuning Globals
 volatile float tuning_dpll_alpha = 0.035f;
@@ -179,28 +188,31 @@ typedef struct {
     float gain;
     float target;
     float attack;
-    float release;
+    float release_inv; // Precomputed 1/release for multiply instead of divide
     float rms;
     float rms_tc;
+    float rms_tc_inv;  // Precomputed (1 - rms_tc)
 } agc_t;
 
 inline void agc_init(agc_t *a, float fs) {
-    a->gain    = 1.0f;
-    a->target  = 0.30f; // Target RMS
-    a->attack  = expf(-1.0f / (0.010f * fs)); // 10ms attack
-    a->release = expf(-1.0f / (0.500f * fs)); // 500ms release
-    a->rms_tc  = expf(-1.0f / (0.050f * fs)); // 50ms RMS window
-    a->rms     = 0.01f;
+    a->gain        = 1.0f;
+    a->target      = 0.30f;
+    a->attack      = expf(-1.0f / (0.010f * fs));
+    float release   = expf(-1.0f / (0.500f * fs));
+    a->release_inv = 1.0f / release; // Precompute reciprocal
+    a->rms_tc      = expf(-1.0f / (0.050f * fs));
+    a->rms_tc_inv  = 1.0f - a->rms_tc;
+    a->rms         = 0.01f;
 }
 
 inline float agc_process(agc_t *a, float x) {
     float out = x * a->gain;
-    a->rms = a->rms * a->rms_tc + out * out * (1.0f - a->rms_tc);
+    a->rms = a->rms * a->rms_tc + out * out * a->rms_tc_inv;
     float rms_now = sqrtf(a->rms + 1e-10f);
     if (rms_now > a->target) {
         a->gain *= a->attack;
     } else {
-        a->gain /= a->release;
+        a->gain *= a->release_inv; // Multiply instead of divide
     }
     a->gain = fmaxf(0.01f, fminf(a->gain, 200.0f));
     return out;
@@ -291,7 +303,7 @@ void core1_main() {
     int16_t tune_x = 240;
     float ui_noise_floor = -60.0f, ui_gain = 0.0f;
     static float smooth_mag[FFT_SIZE / 2] = {0};
-    
+
     static SimpleFFT fft; static float real[FFT_SIZE], imag[FFT_SIZE], mag[FFT_SIZE/2];
 
     uint32_t c1_total_work = 0;
@@ -350,50 +362,49 @@ void core1_main() {
                 ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width, shared_font_mode);
             }
             
-            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open, shared_agc_gain, shared_agc_enabled);
+            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open, shared_agc_gain, shared_agc_enabled, shared_err_rate);
         }
         
         if (new_data_ready) {
-            // ---- PERFORM FFT EXCLUSIVELY ON CORE 1 TO PREVENT CORE 0 TIMING JITTER ----
             memcpy(local_ts, (void*)shared_fft_ts, sizeof(local_ts));
-            memcpy(local_wave, (void*)shared_adc_waveform, sizeof(local_wave)); 
+            memcpy(local_wave, (void*)shared_adc_waveform, sizeof(local_wave));
             memcpy(local_mag_m, (void*)shared_mag_m, sizeof(local_mag_m));
             memcpy(local_mag_s, (void*)shared_mag_s, sizeof(local_mag_s));
             new_data_ready = false;
-            
+
             float sq=0.0f; for(int i=0; i<FFT_SIZE; i++) sq+=local_ts[i]*local_ts[i];
             shared_signal_db = 10.0f*log10f((sq/FFT_SIZE)+1e-10f) - 20.0f*log10f(shared_agc_gain);
-            
+
             memcpy(real, local_ts, sizeof(local_ts)); memset(imag, 0, sizeof(imag));
             fft.apply_window(real); fft.compute(real, imag); fft.calc_magnitude(real, imag, mag);
-            
+
             float pk=-100.0f, sm=0.0f; for(int i=0; i<FFT_SIZE/2; i++) { if(mag[i]>pk) pk=mag[i]; sm+=mag[i]; }
             float avg_noise = sm/(FFT_SIZE/2);
-            shared_snr_db = pk - avg_noise; 
-            
+            shared_snr_db = pk - avg_noise;
+
             float shift = shifts[shared_shift_idx];
             int m_bin = (int)((shared_actual_freq - shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
             int s_bin = (int)((shared_actual_freq + shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
-            int search_r = 12; 
-            
+            int search_r = 12;
+
             float best_m_mag = -100.0f, best_s_mag = -100.0f;
             int best_m_bin = m_bin, best_s_bin = s_bin;
-            
+
             for(int i = m_bin - search_r; i <= m_bin + search_r; i++) {
                 if (i>0 && i<FFT_SIZE/2 && mag[i] > best_m_mag) { best_m_mag = mag[i]; best_m_bin = i; }
             }
             for(int i = s_bin - search_r; i <= s_bin + search_r; i++) {
                 if (i>0 && i<FFT_SIZE/2 && mag[i] > best_s_mag) { best_s_mag = mag[i]; best_s_bin = i; }
             }
-            
+
             // Relaxed squelch with hysteresis for 75 Baud (using dB differences)
             bool sq_strong = ((best_m_mag - avg_noise) > 4.0f || (best_s_mag - avg_noise) > 4.0f) && (shared_snr_db > tuning_sq_snr);
             bool sq_weak = ((best_m_mag - avg_noise) < 1.5f && (best_s_mag - avg_noise) < 1.5f) || (shared_snr_db < tuning_sq_snr - 2.0f);
-            
-            if (shared_signal_db < -65.0f) shared_squelch_open = false; // Hard noise floor
+
+            if (shared_signal_db < -65.0f) shared_squelch_open = false;
             else if (sq_strong) shared_squelch_open = true;
             else if (sq_weak) shared_squelch_open = false;
-            
+
             if (shared_squelch_open && shared_afc_on) {
                 if ((best_m_mag - best_s_mag) > 2.0f || (best_s_mag - best_m_mag) > 2.0f) {
                     float found_m_f = best_m_bin * SAMPLE_RATE / (float)FFT_SIZE;
@@ -407,11 +418,9 @@ void core1_main() {
             } else {
                 shared_actual_freq = shared_actual_freq * 0.98f + shared_target_freq * 0.02f;
             }
-            
-            // --- END FFT/AFC CORE 1 PROCESSING ---
-            
+
             frame_count++;
-            
+
             for (int i = 0; i < FFT_SIZE / 2; i++) smooth_mag[i] = smooth_mag[i] * 0.7f + mag[i] * 0.3f;
             
             if (auto_scale) {
@@ -467,34 +476,32 @@ void core1_main() {
                 spectrum.drawFastVLine(m_x, 0, UI_DSP_ZONE_H, 0x00FFFFU);
                 spectrum.drawFastVLine(s_x, 0, UI_DSP_ZONE_H, 0xFFFF00U);
                 ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
-            } else { 
+            } else {
                 // Lissajous SCOPE with Phosphor Decay effect
-                uint16_t* buf_ptr = (uint16_t*)spectrum.getBuffer();
-                for (int i = 0; i < 480 * 64; i++) {
-                    uint16_t px = buf_ptr[i];
-                    if (px != 0) {
-                        // Fast RGB565 fade (approx 0.85x)
-                        uint16_t r = (px >> 11) & 0x1F;
-                        uint16_t g = (px >> 5) & 0x3F;
-                        uint16_t b = px & 0x1F;
-                        r = (r * 27) >> 5;
-                        g = (g * 27) >> 5;
-                        b = (b * 27) >> 5;
-                        buf_ptr[i] = (r << 11) | (g << 5) | b;
-                    }
+                // Bitmask fade: clear LSBs of each channel, shift right, ~0.84x per frame
+                // RGB565: RRRRR GGGGGG BBBBB — mask preserves top bits after shift
+                uint32_t* buf32 = (uint32_t*)spectrum.getBuffer();
+                const int total_words = (480 * 64) / 2; // 2 pixels per uint32
+                const uint32_t mask = 0xE7BCE7BCU; // keeps top 3R, top 5G, top 3B per pixel
+                for (int i = 0; i < total_words; i++) {
+                    uint32_t v = buf32[i];
+                    if (v != 0) buf32[i] = (v >> 1) & mask;
                 }
-                
+
                 int cx = 240, cy = 32;
-                // Subtle grid
-                spectrum.drawFastHLine(0, cy, 480, PAL_GRID); 
-                spectrum.drawFastVLine(cx, 0, 64, PAL_GRID); 
-                
+                spectrum.drawFastHLine(0, cy, 480, PAL_GRID);
+                spectrum.drawFastVLine(cx, 0, 64, PAL_GRID);
+
+                // Lissajous drawing with table lookup instead of sinf/cosf
                 for (int x = 0; x < 480; x++) {
-                    float m = sqrtf(local_mag_m[x]) * 60.0f; 
+                    float m = sqrtf(local_mag_m[x]) * 60.0f;
                     float s = sqrtf(local_mag_s[x]) * 60.0f;
                     float phase = x * 0.4f;
-                    int px = cx + (int)(m * sinf(phase) + s * 0.05f * cosf(phase));
-                    int py = cy + (int)(s * cosf(phase) + m * 0.05f * sinf(phase));
+                    int tidx = (int)(phase * (1024.0f / (2.0f * (float)M_PI))) & 1023;
+                    float sin_p = sin_table[tidx];
+                    float cos_p = cos_table[tidx];
+                    int px = cx + (int)(m * sin_p + s * 0.05f * cos_p);
+                    int py = cy + (int)(s * cos_p + m * 0.05f * sin_p);
                     spectrum.drawPixel(std::clamp(px, 0, 479), std::clamp(py, 0, 63), PAL_WAVE);
                 }
                 ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
@@ -652,10 +659,13 @@ void core1_main() {
         uint32_t loop_end = time_us_32();
         c1_total_work += (loop_end - loop_start);
         if (loop_start - c1_last_measure >= 500000) {
-            shared_core1_load = (c1_total_work * 100.0f) / (loop_start - c1_last_measure);
+            shared_core1_load = (c1_total_work * 100.0f) / (float)(loop_start - c1_last_measure);
             c1_total_work = 0; c1_last_measure = loop_start;
         }
-        
+
+        // Short yield when idle — reduces AHB bus pressure from Core 1
+        if (!new_data_ready) sleep_us(20);
+
         if (settings_need_save && (loop_start - settings_last_change > 15000000)) {
             AppSettings s;
             s.magic = 0xDEADBEEF;
@@ -694,13 +704,29 @@ void core0_dsp_loop() {
     }
     
     static float ts[FFT_SIZE], tw[480], tw_m[480], tw_s[480], fb[63]={0.0f};
-    int sc=0, wi=0, fi=0; adc_init(); adc_gpio_init(ADC_PIN); adc_select_input(0);
+    int sc=0, wi=0, fi=0;
+
+    // Hardware-paced ADC via FIFO (replaces blocking adc_read)
+    // ADC runs free at exact 10kHz from hardware timer — zero jitter
+    adc_init(); adc_gpio_init(ADC_PIN); adc_select_input(0);
+    adc_fifo_setup(
+        true,   // Write to FIFO
+        false,  // Don't use DMA DREQ (yet — enable for Phase 8 DRM dual-channel)
+        1,      // DREQ threshold (IRQ when 1+ samples ready)
+        false,  // No ERR bit in FIFO
+        false   // Don't shift to 8-bit
+    );
+    // Clock divider: 48MHz / (96 + 4704) = 10,000 Hz exactly
+    adc_set_clkdiv(4704.0f);
+    adc_run(true);  // Start free-running mode
+
     float dc=0.0f;
     
     float phase_m = 0.0f, phase_s = 0.0f;
     Biquad lp_mi, lp_mq, lp_si, lp_sq;
     float current_baud = -1.0f;
     float atc_mark_env = 0.01f, atc_space_env = 0.01f;
+    float cached_atc_fast = 0.0f, cached_atc_slow = 0.0f; // Cached expf() results
     
     agc_t agc;
     agc_init(&agc, (float)SAMPLE_RATE);
@@ -719,10 +745,13 @@ void core0_dsp_loop() {
     
     const float shifts_hz[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
     const float bauds[] = {45.45f, 50.0f, 75.0f};
-    
-    uint32_t next_sample_time = time_us_32();
 
     while(true) {
+        // Wait for hardware-timed ADC sample (FIFO provides exact 10kHz timing)
+        while (adc_fifo_is_empty()) {
+            tight_loop_contents();
+        }
+
         if (shared_clear_dsp) {
             shared_clear_dsp = false;
             shared_actual_freq = shared_target_freq;
@@ -735,8 +764,8 @@ void core0_dsp_loop() {
             last_d_sign = true;
         }
 
-        uint32_t st = time_us_32(); 
-        uint16_t rv = adc_read();
+        uint32_t st = time_us_32();
+        uint16_t rv = adc_fifo_get_blocking(); // Hardware-timed, no software jitter
         
         if ((float)rv < diag_adc_min) diag_adc_min = (float)rv;
         if ((float)rv > diag_adc_max) diag_adc_max = (float)rv;
@@ -763,9 +792,12 @@ void core0_dsp_loop() {
         if (baud != current_baud || tuning_lpf_k != current_k) {
             current_baud = baud;
             current_k = tuning_lpf_k;
-            float fc = baud * tuning_lpf_k; 
+            float fc = baud * tuning_lpf_k;
             design_lpf(&lp_mi, fc, (float)SAMPLE_RATE); design_lpf(&lp_mq, fc, (float)SAMPLE_RATE);
             design_lpf(&lp_si, fc, (float)SAMPLE_RATE); design_lpf(&lp_sq, fc, (float)SAMPLE_RATE);
+            // Cache expf() — was computed 10,000x/sec, now only on baud change
+            cached_atc_fast = expf(-1.0f / (2.0f * ((float)SAMPLE_RATE / baud)));
+            cached_atc_slow = expf(-1.0f / (16.0f * ((float)SAMPLE_RATE / baud)));
         }
         
         float shift = shifts_hz[shared_shift_idx];
@@ -793,11 +825,11 @@ void core0_dsp_loop() {
         
         float new_m = sqrtf(mark_power + 1e-10f);
         float new_s = sqrtf(space_power + 1e-10f);
-        float atc_fast = expf(-1.0f / (2.0f * ((float)SAMPLE_RATE / baud)));
-        float atc_slow = expf(-1.0f / (16.0f * ((float)SAMPLE_RATE / baud)));
-        
-        atc_mark_env = atc_mark_env * (new_m > atc_mark_env ? atc_fast : atc_slow) + new_m * (1.0f - (new_m > atc_mark_env ? atc_fast : atc_slow));
-        atc_space_env = atc_space_env * (new_s > atc_space_env ? atc_fast : atc_slow) + new_s * (1.0f - (new_s > atc_space_env ? atc_fast : atc_slow));
+        // Use cached expf() values (computed only on baud change)
+        float tc_m = (new_m > atc_mark_env) ? cached_atc_fast : cached_atc_slow;
+        float tc_s = (new_s > atc_space_env) ? cached_atc_fast : cached_atc_slow;
+        atc_mark_env  = atc_mark_env  * tc_m + new_m * (1.0f - tc_m);
+        atc_space_env = atc_space_env * tc_s + new_s * (1.0f - tc_s);
         
         float m_norm = new_m / (atc_mark_env + 1e-6f);
         float s_norm = new_s / (atc_space_env + 1e-6f);
@@ -807,6 +839,24 @@ void core0_dsp_loop() {
         if (shared_rtty_inv) D = -D;
         bool d_sign = (D > 0.0f);
         
+        // Eye diagram accumulation
+        {
+            static int eye_sample = 0;
+            int spb = (int)((float)SAMPLE_RATE / baud);
+            if (spb > EYE_MAX_SPB) spb = EYE_MAX_SPB;
+            shared_eye_spb = spb;
+            int8_t dv = (int8_t)fmaxf(-127.0f, fminf(127.0f, D * 85.0f));
+            if (eye_sample < spb) {
+                shared_eye_buf[shared_eye_idx][eye_sample] = dv;
+            }
+            eye_sample++;
+            if (eye_sample >= spb) {
+                eye_sample = 0;
+                shared_eye_idx = (shared_eye_idx + 1) % EYE_TRACES;
+                shared_eye_ready = true;
+            }
+        }
+
         float phase_inc = baud / (float)SAMPLE_RATE;
         static float freq_error = 0.0f;
         float dpll_beta = tuning_dpll_alpha * tuning_dpll_alpha / 2.0f;
@@ -853,22 +903,31 @@ void core0_dsp_loop() {
                     } else if (baudot_state >= 2 && baudot_state <= 6) { 
                         if (bit) current_char |= (1 << (baudot_state - 2));
                         baudot_state++;
-                    } else if (baudot_state == 7) { 
+                    } else if (baudot_state == 7) {
+                        // Error rate tracking (100-char sliding window)
+                        static uint8_t err_hist[100] = {0};
+                        static int err_idx = 0, err_sum = 0;
+
                         if (bit) { // Valid stop
                             char decoded = '\0';
                             if (current_char == 27) { is_figs = true; shared_figs_flag = true; }
                             else if (current_char == 31) { is_figs = false; shared_ltrs_flag = true; }
                             else {
                                 decoded = is_figs ? ita2_figs[current_char] : ita2_ltrs[current_char];
-                                if (decoded == ' ') is_figs = false; 
+                                if (decoded == ' ') is_figs = false;
                                 if (decoded != '\0') {
                                     rtty_new_char = decoded;
                                     rtty_char_ready = true;
                                 }
                             }
+                            err_sum -= err_hist[err_idx]; err_hist[err_idx] = 0;
+                            err_idx = (err_idx + 1) % 100;
                         } else {
-                            shared_err_flag = true; 
+                            shared_err_flag = true;
+                            err_sum -= err_hist[err_idx]; err_hist[err_idx] = 1; err_sum++;
+                            err_idx = (err_idx + 1) % 100;
                         }
+                        shared_err_rate = (float)err_sum;
                         
                         if (stop_bits_expected <= 1.0f && !d_sign) {
                             baudot_state = 1;
@@ -884,12 +943,12 @@ void core0_dsp_loop() {
         }
         
         if(sc==FFT_SIZE) {
-            memcpy((void*)shared_fft_ts, ts, sizeof(ts)); 
+            memcpy((void*)shared_fft_ts, ts, sizeof(ts));
             memcpy((void*)shared_adc_waveform, tw, sizeof(tw));
             memcpy((void*)shared_mag_m, tw_m, sizeof(tw_m));
             memcpy((void*)shared_mag_s, tw_s, sizeof(tw_s));
-            new_data_ready=true; 
-            
+            new_data_ready=true;
+
             wi=0; memmove(ts, &ts[480], (FFT_SIZE-480)*sizeof(float)); sc=FFT_SIZE-480;
             
             static int diag_timer = 0;
@@ -911,13 +970,13 @@ void core0_dsp_loop() {
         static uint32_t total_work = 0, total_time = 0;
         uint32_t work_end = time_us_32();
         total_work += (work_end - st);
-        total_time += 100;
-        if (total_time >= 500000) { 
-            shared_core0_load = (total_work * 100.0f) / (float)total_time; 
-            total_work = 0; total_time = 0; 
+        total_time += 100; // 100μs per sample at 10kHz
+        if (total_time >= 500000) {
+            shared_core0_load = (total_work * 100.0f) / (float)total_time;
+            total_work = 0; total_time = 0;
         }
-        next_sample_time += 100;
-        while(time_us_32() < next_sample_time) tight_loop_contents();
+        // Hardware FIFO provides exact timing — no drain needed
+        // (tight_loop_contents above ensures no overflow)
     }
 }
 

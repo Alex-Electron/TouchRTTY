@@ -242,31 +242,54 @@ public:
         ili9488_push_colors(0, UI_Y_BOTTOM, 480, 48, (uint16_t*)_spr_bottom.getBuffer()); 
     }
 
-    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float m_freq, float s_freq, bool clipping, float load0, float load1, bool squelch_open, float agc_gain, bool agc_enabled) {
-        _spr_top.fillSprite(COLOR_BG); _spr_top.drawFastHLine(0, 33, 480, COLOR_GRID);    
-        _spr_top.setTextDatum(middle_left); _spr_top.setTextColor(COLOR_TEXT, COLOR_BG); _spr_top.setFont(&fonts::Font2);
-        _spr_top.drawString("SIG", 5, 8); _spr_top.drawRect(35, 1, 95, 14, COLOR_GRID);   
-        int lw = (int)((signal_db+80)*(95/70.0f)); if(lw<0) lw=0; if(lw>95) lw=95;        
-        uint32_t sig_color = 0x00FF00U; if (clipping) sig_color = 0x0000FFU; else if (signal_db > -30.0f) sig_color = 0xFF0000U;
-        _spr_top.fillRect(35, 1, lw, 14, sig_color);
-        _spr_top.drawString("AGC", 5, 24); _spr_top.drawRect(35, 17, 95, 14, COLOR_GRID);   
-        if (agc_enabled) {
-            float gain_db = 20.0f * log10f(agc_gain + 1e-5f);
-            int gw = (int)((gain_db)*(95/46.0f)); if(gw<0) gw=0; if(gw>95) gw=95;
-            _spr_top.fillRect(35, 17, gw, 14, 0x00FFFFU);
-        } else {
-            _spr_top.setTextColor(0x777777U, COLOR_BG); _spr_top.drawString("OFF", 40, 24); _spr_top.setTextColor(COLOR_TEXT, COLOR_BG);
-        }
+    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float m_freq, float s_freq, bool clipping, float load0, float load1, bool squelch_open, float agc_gain, bool agc_enabled, float err_rate) {
+        _spr_top.fillSprite(COLOR_BG); _spr_top.drawFastHLine(0, 33, 480, COLOR_GRID);
+        _spr_top.setFont(&fonts::Font0); // Compact 6x8 font for 3-row layout
         char buf[64];
-        _spr_top.setTextColor(0x00FFFFU, COLOR_BG); 
-        snprintf(buf, sizeof(buf), "%3.0fdB", signal_db); _spr_top.drawString(buf, 135, 8);
-        snprintf(buf, sizeof(buf), "M:%.0f S:%.0f", m_freq, s_freq); _spr_top.drawString(buf, 185, 8);
-        if (squelch_open) { _spr_top.setTextColor(0x00FF00U, COLOR_BG); _spr_top.drawString("RTTY: SYNC", 200, 24); }
-        else { _spr_top.setTextColor(0x777777U, COLOR_BG); _spr_top.drawString("RTTY: WAIT", 200, 24); }
-        _spr_top.setTextColor(0x00FF00U, COLOR_BG); snprintf(buf, sizeof(buf), "SNR:%2.0fdB", snr_db); _spr_top.drawString(buf, 135, 24);
-        _spr_top.setTextDatum(middle_right); _spr_top.setTextColor(0x00FFFFU, COLOR_BG);  
+
+        // --- Row 1 (y=0..9): SIG bar + signal info ---
+        const int bar_x = 28, bar_w = 82, bar_h = 9;
+        _spr_top.setTextDatum(middle_left); _spr_top.setTextColor(0xAAAAAAU, COLOR_BG);
+        _spr_top.drawString("SIG", 2, 5);
+        _spr_top.drawRect(bar_x, 0, bar_w, bar_h, COLOR_GRID);
+        int lw = (int)((signal_db+80)*(bar_w/70.0f)); if(lw<0) lw=0; if(lw>bar_w) lw=bar_w;
+        uint32_t sig_color = 0x00FF00U; if (clipping) sig_color = 0x0000FFU; else if (signal_db > -30.0f) sig_color = 0xFF0000U;
+        _spr_top.fillRect(bar_x, 0, lw, bar_h, sig_color);
+        _spr_top.setTextColor(0x00FFFFU, COLOR_BG);
+        snprintf(buf, sizeof(buf), "%3.0fdB", signal_db); _spr_top.drawString(buf, bar_x+bar_w+4, 5);
+        snprintf(buf, sizeof(buf), "M:%.0f S:%.0f", m_freq, s_freq); _spr_top.drawString(buf, 170, 5);
+        if (squelch_open) { _spr_top.setTextColor(0x00FF00U, COLOR_BG); _spr_top.drawString("SYNC", 280, 5); }
+        else { _spr_top.setTextColor(0x777777U, COLOR_BG); _spr_top.drawString("WAIT", 280, 5); }
+        _spr_top.setTextColor(0x00FF00U, COLOR_BG);
+        snprintf(buf, sizeof(buf), "SNR:%2.0f", snr_db); _spr_top.drawString(buf, 315, 5);
+
+        // --- Row 2 (y=11..20): AGC bar + dB value + info ---
+        _spr_top.setTextColor(0xAAAAAAU, COLOR_BG);
+        _spr_top.drawString("AGC", 2, 16);
+        _spr_top.drawRect(bar_x, 11, bar_w, bar_h, COLOR_GRID);
+        float gain_db = 20.0f * log10f(agc_gain + 1e-5f);
+        if (agc_enabled) {
+            int gw = (int)((gain_db)*(bar_w/46.0f)); if(gw<0) gw=0; if(gw>bar_w) gw=bar_w;
+            _spr_top.fillRect(bar_x, 11, gw, bar_h, 0x00FFFFU);
+        }
+        _spr_top.setTextColor(0x00FFFFU, COLOR_BG);
+        snprintf(buf, sizeof(buf), "%+.0fdB", gain_db); _spr_top.drawString(buf, bar_x+bar_w+4, 16);
+
+        // --- Row 3 (y=22..31): ERR bar + % value + info ---
+        _spr_top.setTextColor(0xAAAAAAU, COLOR_BG);
+        _spr_top.drawString("ERR", 2, 27);
+        _spr_top.drawRect(bar_x, 22, bar_w, bar_h, COLOR_GRID);
+        int ew = (int)(err_rate * bar_w / 100.0f); if(ew<0) ew=0; if(ew>bar_w) ew=bar_w;
+        uint32_t err_color = (err_rate < 5.0f) ? 0x00FF00U : (err_rate < 20.0f) ? 0x00FFFFU : 0x0000FFU;
+        if (ew > 0) _spr_top.fillRect(bar_x, 22, ew, bar_h, err_color);
+        _spr_top.setTextColor(err_color, COLOR_BG);
+        snprintf(buf, sizeof(buf), "%.0f%%", err_rate); _spr_top.drawString(buf, bar_x+bar_w+4, 27);
+
+        // Right-aligned: build/fps/load on row 2, free row 3
+        _spr_top.setTextDatum(middle_right); _spr_top.setTextColor(0x00FFFFU, COLOR_BG);
         snprintf(buf, sizeof(buf), "B:%d F:%lu C0:%.0f%% C1:%.0f%%", BUILD_NUMBER, fps, load0, load1);
-        _spr_top.drawString(buf, 475, 24);
+        _spr_top.drawString(buf, 475, 16);
+
         ili9488_push_colors(0, UI_Y_TOP, 480, UI_TOP_BAR_H, (uint16_t*)_spr_top.getBuffer());
     }
 

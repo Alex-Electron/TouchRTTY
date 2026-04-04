@@ -129,21 +129,38 @@ void ili9488_push_colors(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_
     if (y + h > 320) h = 320 - y;
 
     ili9488_set_window(x, y, x + w - 1, y + h - 1);
-    
-    static uint32_t c32_buf[480]; 
+
+    // Ping-pong double buffering: CPU expands next line while DMA sends current
+    static uint32_t buf[2][480];
+    int current_buf = 0;
+
+    // Pre-fill first buffer
+    for(int col = 0; col < w; col++) {
+        buf[0][col] = expand_color_dynamic(colors[col]);
+    }
 
     gpio_put(PIN_DC, 1);
     gpio_put(PIN_CS, 0);
     switch_to_pio();
 
     for(int row = 0; row < h; row++) {
-        for(int col = 0; col < w; col++) {
-            c32_buf[col] = expand_color_dynamic(colors[row * w + col]);
+        // Start DMA for current buffer
+        dma_channel_configure(dma_chan, &dma_conf, &pio_inst->txf[pio_sm], buf[current_buf], w, true);
+
+        // While DMA is running, expand next line into other buffer
+        int next_buf = current_buf ^ 1;
+        int next_row = row + 1;
+        if (next_row < h) {
+            int offset = next_row * w;
+            for(int col = 0; col < w; col++) {
+                buf[next_buf][col] = expand_color_dynamic(colors[offset + col]);
+            }
         }
-        dma_channel_configure(dma_chan, &dma_conf, &pio_inst->txf[pio_sm], c32_buf, w, true);
+
         dma_channel_wait_for_finish_blocking(dma_chan);
+        current_buf = next_buf;
     }
-    
+
     switch_to_spi();
     gpio_put(PIN_CS, 1);
 }
