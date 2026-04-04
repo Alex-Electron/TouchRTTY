@@ -31,6 +31,11 @@
 const uint8_t* flash_target_contents = (const uint8_t *) (XIP_BASE + CAL_FLASH_OFFSET);
 const uint8_t* flash_settings_contents = (const uint8_t *) (XIP_BASE + SETTINGS_FLASH_OFFSET);
 
+#define NUM_SHIFTS 8
+const float g_shifts[] = {85.0f, 170.0f, 200.0f, 340.0f, 425.0f, 450.0f, 500.0f, 850.0f};
+const int g_shifts_int[] = {85, 170, 200, 340, 425, 450, 500, 850};
+// shift_idx 0..7 = fixed shift, 8 = AUTO (detect from FFT)
+
 struct AppSettings {
     uint32_t magic;
     int baud_idx;
@@ -152,6 +157,9 @@ volatile bool shared_serial_diag = false; // Toggle via Diagnostic Screen or ser
 volatile bool shared_save_request = false; // Save settings from serial command
 volatile bool shared_search_request = false; // Signal search requested by SEARCH button
 volatile int shared_search_state = 0; // 0=idle, 1=searching, 2=found, 3=not found
+volatile float shared_active_shift = 170.0f; // Actual shift in use (from g_shifts or auto-detected)
+volatile bool shared_inv_uncertain = false;  // true = auto-inversion can't determine NOR/INV
+volatile bool shared_inv_auto = true;       // true = auto-inversion enabled, false = manual
 
 void handle_serial_commands() {
     static char cmd_buf[64];
@@ -177,9 +185,12 @@ void handle_serial_commands() {
                     if (ival >= 0 && ival <= 2) { shared_baud_idx = ival; printf(">> BAUD=%d\n", ival); }
                     else printf(">> ERR: BAUD 0-2 (45/50/75)\n");
                 }
+                else if (strcmp(cmd_buf, "SHIFT AUTO") == 0) {
+                    shared_shift_idx = NUM_SHIFTS; printf(">> SHIFT=AUTO\n");
+                }
                 else if (sscanf(cmd_buf, "SHIFT %d", &ival) == 1) {
-                    if (ival >= 0 && ival <= 4) { shared_shift_idx = ival; printf(">> SHIFT=%d\n", ival); }
-                    else printf(">> ERR: SHIFT 0-4 (170/200/425/450/850)\n");
+                    if (ival >= 0 && ival <= NUM_SHIFTS) { shared_shift_idx = ival; printf(">> SHIFT=%d%s\n", ival, ival==NUM_SHIFTS?" (AUTO)":""); }
+                    else printf(">> ERR: SHIFT 0-%d or AUTO (85/170/200/340/425/450/500/850/AUTO)\n", NUM_SHIFTS);
                 }
                 else if (sscanf(cmd_buf, "FREQ %f", &val) == 1) {
                     shared_target_freq = val; shared_actual_freq = val;
@@ -187,21 +198,29 @@ void handle_serial_commands() {
                 }
                 else if (strcmp(cmd_buf, "DIAG ON") == 0)  { shared_serial_diag = true;  printf(">> DIAG ON\n"); }
                 else if (strcmp(cmd_buf, "DIAG OFF") == 0) { shared_serial_diag = false; printf(">> DIAG OFF\n"); }
-                else if (strcmp(cmd_buf, "INV ON") == 0)   { shared_rtty_inv = true;  printf(">> INV ON\n"); }
-                else if (strcmp(cmd_buf, "INV OFF") == 0)  { shared_rtty_inv = false; printf(">> INV OFF\n"); }
+                else if (strcmp(cmd_buf, "INV AUTO") == 0) { shared_inv_auto = true; shared_inv_uncertain = false; printf(">> INV AUTO\n"); }
+                else if (strcmp(cmd_buf, "INV NOR") == 0)  { shared_inv_auto = false; shared_rtty_inv = false; shared_inv_uncertain = false; printf(">> INV NOR (manual)\n"); }
+                else if (strcmp(cmd_buf, "INV INV") == 0)  { shared_inv_auto = false; shared_rtty_inv = true; shared_inv_uncertain = false; printf(">> INV INV (manual)\n"); }
+                else if (strcmp(cmd_buf, "INV ON") == 0)   { shared_inv_auto = false; shared_rtty_inv = true;  printf(">> INV ON (manual)\n"); }
+                else if (strcmp(cmd_buf, "INV OFF") == 0)  { shared_inv_auto = false; shared_rtty_inv = false; printf(">> INV OFF (manual)\n"); }
                 else if (strcmp(cmd_buf, "AFC ON") == 0)   { shared_afc_on = true;  printf(">> AFC ON\n"); }
                 else if (strcmp(cmd_buf, "AFC OFF") == 0)  { shared_afc_on = false; printf(">> AFC OFF\n"); }
                 else if (strcmp(cmd_buf, "CLEAR") == 0)    { shared_clear_dsp = true; printf(">> CLEAR\n"); }
                 else if (strcmp(cmd_buf, "SAVE") == 0)     { shared_save_request = true; printf(">> SAVE REQUESTED\n"); }
                 else if (strcmp(cmd_buf, "STATUS") == 0) {
                     const int bauds_t[] = {45, 50, 75};
-                    const int shifts_t[] = {170, 200, 425, 450, 850};
                     printf("\n=== STATUS (B%d) ===\n", BUILD_NUMBER);
                     printf("ALPHA=%.4f BW=%.2f SQ=%.1f\n", (double)tuning_dpll_alpha, (double)tuning_lpf_k, (double)tuning_sq_snr);
-                    printf("BAUD=%d(%d) SHIFT=%d(%d) INV=%s AFC=%s\n",
-                        shared_baud_idx, bauds_t[shared_baud_idx],
-                        shared_shift_idx, shifts_t[shared_shift_idx],
-                        shared_rtty_inv ? "ON" : "OFF", shared_afc_on ? "ON" : "OFF");
+                    const char* inv_str = shared_inv_auto ? (shared_rtty_inv ? "AUTO(INV)" : "AUTO(NOR)") : (shared_rtty_inv ? "INV" : "NOR");
+                    if (shared_shift_idx < NUM_SHIFTS)
+                        printf("BAUD=%d(%d) SHIFT=%d(%d) INV=%s AFC=%s\n",
+                            shared_baud_idx, bauds_t[shared_baud_idx],
+                            shared_shift_idx, g_shifts_int[shared_shift_idx],
+                            inv_str, shared_afc_on ? "ON" : "OFF");
+                    else
+                        printf("BAUD=%d(%d) SHIFT=AUTO INV=%s AFC=%s\n",
+                            shared_baud_idx, bauds_t[shared_baud_idx],
+                            inv_str, shared_afc_on ? "ON" : "OFF");
                     printf("FREQ=%.1f SNR=%.1f SIG=%.1f AGC=%.2f\n",
                         (double)shared_actual_freq, (double)shared_snr_db,
                         (double)shared_signal_db, (double)shared_agc_gain);
@@ -224,7 +243,7 @@ void handle_serial_commands() {
                     if (ival >= 30 && ival <= 120) { shared_line_width = ival; printf(">> WIDTH=%d\n", ival); }
                     else printf(">> ERR: WIDTH 30-120\n");
                 }
-                else if (strcmp(cmd_buf, "SEARCH") == 0) { shared_search_request = true; shared_search_state = 1; printf(">> SEARCHING...\n"); }
+                else if (strcmp(cmd_buf, "SEARCH") == 0) { shared_rtty_inv = false; shared_afc_on = true; shared_search_request = true; shared_search_state = 1; printf(">> SEARCHING...\n"); }
                 else if (strcmp(cmd_buf, "HELP") == 0) {
                     printf("\n=== COMMANDS (B%d) ===\n", BUILD_NUMBER);
                     printf("--- Tuning ---\n");
@@ -234,9 +253,9 @@ void handle_serial_commands() {
                     printf("FREQ <Hz>            Center frequency\n");
                     printf("--- Protocol ---\n");
                     printf("BAUD <0-2>           0=45 1=50 2=75\n");
-                    printf("SHIFT <0-4>          170/200/425/450/850\n");
+                    printf("SHIFT <0-8>          85/170/200/340/425/450/500/850/AUTO\n");
                     printf("STOP <0-2>           1.0/1.5/2.0 bits\n");
-                    printf("INV ON|OFF           Mark/Space invert\n");
+                    printf("INV AUTO|NOR|INV     Inversion: auto/manual\n");
                     printf("--- Control ---\n");
                     printf("AFC ON|OFF           Auto frequency\n");
                     printf("AGC ON|OFF           Auto gain\n");
@@ -342,13 +361,14 @@ void core1_main() {
     bool tuning_lab_active = false;
     int display_mode = 0;
     bool reset_confirm_mode = false;
+    bool shift_popup_active = false;
     uint32_t saved_text_timer = 0;
     
     AppSettings loaded_set;
     memcpy(&loaded_set, flash_settings_contents, sizeof(AppSettings));
     if (loaded_set.magic == 0xDEADBEEF) {
         shared_baud_idx = loaded_set.baud_idx;
-        shared_shift_idx = loaded_set.shift_idx;
+        shared_shift_idx = (loaded_set.shift_idx >= 0 && loaded_set.shift_idx <= NUM_SHIFTS) ? loaded_set.shift_idx : 1; // default 170Hz
         shared_stop_idx = loaded_set.stop_idx;
         shared_rtty_inv = loaded_set.rtty_inv;
         display_mode = loaded_set.display_mode;
@@ -367,8 +387,12 @@ void core1_main() {
     }
     
     const float bauds[] = {45.45f, 50.0f, 75.0f};
-    const float shifts[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
     const float stop_bits[] = {1.0f, 1.5f, 2.0f};
+    // Active shift: from g_shifts[idx] or auto-detected
+    auto get_shift = []() -> float {
+        if (shared_shift_idx < NUM_SHIFTS) { shared_active_shift = g_shifts[shared_shift_idx]; return shared_active_shift; }
+        return shared_active_shift; // AUTO mode — use last detected or default
+    };
     
     ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_afc_on, menu_mode, shared_search_state);
 
@@ -418,7 +442,7 @@ void core1_main() {
 
         if (rtty_char_ready) {
             char c = rtty_new_char;
-            ui.addRTTYChar(c, !diag_screen_active && !menu_mode && !tuning_lab_active && !reset_confirm_mode);
+            ui.addRTTYChar(c, !diag_screen_active && !menu_mode && !tuning_lab_active && !reset_confirm_mode && !shift_popup_active);
             rtty_char_ready = false;
             // Only output to Serial if diagnostics are OFF
             if (!shared_serial_diag) printf("%c", c);
@@ -463,8 +487,8 @@ void core1_main() {
 
         if (loop_start - last_ui_update > 200000) {
             uint32_t fps = frame_count * 5; frame_count = 0; last_ui_update = loop_start;
-            float m_freq = shared_actual_freq - shifts[shared_shift_idx]/2.0f;
-            float s_freq = shared_actual_freq + shifts[shared_shift_idx]/2.0f;
+            float m_freq = shared_actual_freq - get_shift()/2.0f;
+            float s_freq = shared_actual_freq + get_shift()/2.0f;
             bool is_clipping = shared_adc_clipping; shared_adc_clipping = false; 
             
             if (tuning_lab_active) {
@@ -473,7 +497,7 @@ void core1_main() {
                 ui.drawDiagScreen(shared_adc_v, shared_font_mode);
             }
             
-            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open, shared_agc_gain, shared_agc_enabled, shared_err_rate, shared_rtty_inv);
+            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open, shared_agc_gain, shared_agc_enabled, shared_err_rate, shared_rtty_inv, shared_shift_idx, shared_active_shift, shared_inv_uncertain);
             // Auto-clear search result after 2 seconds + redraw bottom bar on state change
             static int prev_search_state = 0;
             if (shared_search_state >= 2 && search_result_time > 0 && (loop_start - search_result_time > 2000000)) {
@@ -503,7 +527,7 @@ void core1_main() {
             float avg_noise = sm/(FFT_SIZE/2);
             shared_snr_db = pk - avg_noise;
 
-            float shift = shifts[shared_shift_idx];
+            float shift = get_shift();
             int m_bin = (int)((shared_actual_freq - shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
             int s_bin = (int)((shared_actual_freq + shift/2.0f) * FFT_SIZE / SAMPLE_RATE);
             int search_r = 12;
@@ -544,60 +568,64 @@ void core1_main() {
 
             for (int i = 0; i < FFT_SIZE / 2; i++) smooth_mag[i] = smooth_mag[i] * 0.7f + mag[i] * 0.3f;
 
-            // --- Signal Search: find two peaks separated by current shift ---
+            // --- Signal Search: find two peaks separated by shift ---
+            // In AUTO mode (shift_idx==NUM_SHIFTS), tries all standard shifts and picks best
             if (shared_search_request) {
                 shared_search_request = false;
-                float target_shift = shifts[shared_shift_idx];
-                int shift_bins = (int)(target_shift * FFT_SIZE / SAMPLE_RATE);
-                int tolerance = 3; // +/- 3 bins tolerance
-                float best_score = -200.0f;
-                int best_lo_bin = -1, best_hi_bin = -1;
-                // Average noise floor
                 float noise_sum = 0.0f;
                 for (int i = 1; i < FFT_SIZE/2; i++) noise_sum += smooth_mag[i];
                 float noise_avg = noise_sum / (FFT_SIZE/2 - 1);
-                float min_snr = 4.0f; // minimum dB above noise for each peak
-                float max_imbalance = 10.0f; // max dB difference between Mark and Space
-                // Scan all possible low-frequency peak positions
-                for (int lo = 5; lo < FFT_SIZE/2 - shift_bins - tolerance; lo++) {
-                    float lo_mag = smooth_mag[lo];
-                    float lo_snr = lo_mag - noise_avg;
-                    if (lo_snr < min_snr) continue;
-                    // Must be a local maximum (peak, not slope)
-                    if (lo > 0 && smooth_mag[lo-1] > lo_mag) continue;
-                    if (lo < FFT_SIZE/2-1 && smooth_mag[lo+1] > lo_mag) continue;
-                    // Check for matching high peak at lo + shift_bins +/- tolerance
-                    for (int d = -tolerance; d <= tolerance; d++) {
-                        int hi = lo + shift_bins + d;
-                        if (hi < 1 || hi >= FFT_SIZE/2) continue;
-                        float hi_mag = smooth_mag[hi];
-                        float hi_snr = hi_mag - noise_avg;
-                        if (hi_snr < min_snr) continue;
-                        // Balance check: both peaks must be similar amplitude
-                        float imbalance = fabsf(lo_mag - hi_mag);
-                        if (imbalance > max_imbalance) continue;
-                        // Score: sum of SNRs, penalize imbalance
-                        float score = lo_snr + hi_snr - imbalance * 0.5f;
-                        if (score > best_score) {
-                            best_score = score;
-                            best_lo_bin = lo;
-                            best_hi_bin = hi;
+                float min_snr = 4.0f, max_imbalance = 10.0f;
+                int tolerance = 3;
+                float global_best_score = -200.0f;
+                int global_best_lo = -1, global_best_hi = -1;
+                int best_shift_idx = -1;
+                // Which shifts to try
+                int s_start = 0, s_end = NUM_SHIFTS;
+                if (shared_shift_idx < NUM_SHIFTS) { s_start = shared_shift_idx; s_end = shared_shift_idx + 1; }
+                for (int si = s_start; si < s_end; si++) {
+                    int shift_bins = (int)(g_shifts[si] * FFT_SIZE / SAMPLE_RATE);
+                    for (int lo = 5; lo < FFT_SIZE/2 - shift_bins - tolerance; lo++) {
+                        float lo_mag = smooth_mag[lo];
+                        float lo_snr = lo_mag - noise_avg;
+                        if (lo_snr < min_snr) continue;
+                        if (lo > 0 && smooth_mag[lo-1] > lo_mag) continue;
+                        if (lo < FFT_SIZE/2-1 && smooth_mag[lo+1] > lo_mag) continue;
+                        for (int d = -tolerance; d <= tolerance; d++) {
+                            int hi = lo + shift_bins + d;
+                            if (hi < 1 || hi >= FFT_SIZE/2) continue;
+                            float hi_mag = smooth_mag[hi];
+                            float hi_snr = hi_mag - noise_avg;
+                            if (hi_snr < min_snr) continue;
+                            float imbalance = fabsf(lo_mag - hi_mag);
+                            if (imbalance > max_imbalance) continue;
+                            float score = lo_snr + hi_snr - imbalance * 0.5f;
+                            if (score > global_best_score) {
+                                global_best_score = score;
+                                global_best_lo = lo;
+                                global_best_hi = hi;
+                                best_shift_idx = si;
+                            }
                         }
                     }
                 }
-                if (best_lo_bin >= 0 && best_score > 10.0f) {
-                    // Found! Set center frequency
-                    float lo_freq = best_lo_bin * SAMPLE_RATE / (float)FFT_SIZE;
-                    float hi_freq = best_hi_bin * SAMPLE_RATE / (float)FFT_SIZE;
+                if (global_best_lo >= 0 && global_best_score > 10.0f) {
+                    float lo_freq = global_best_lo * SAMPLE_RATE / (float)FFT_SIZE;
+                    float hi_freq = global_best_hi * SAMPLE_RATE / (float)FFT_SIZE;
                     float new_center = (lo_freq + hi_freq) / 2.0f;
                     shared_target_freq = new_center;
                     shared_actual_freq = new_center;
-                    shared_search_state = 2; // found
+                    // In AUTO mode, update active shift to detected value
+                    if (shared_shift_idx >= NUM_SHIFTS) {
+                        shared_active_shift = g_shifts[best_shift_idx];
+                    }
+                    shared_search_state = 2;
                     flag_settings_change();
-                    printf(">> SEARCH: found pair at %.0f/%.0f Hz, center=%.0f\n", lo_freq, hi_freq, new_center);
+                    printf(">> SEARCH: found %.0f/%.0f Hz (shift=%d), center=%.0f\n",
+                        lo_freq, hi_freq, g_shifts_int[best_shift_idx], new_center);
                 } else {
-                    shared_search_state = 3; // not found
-                    printf(">> SEARCH: no RTTY signal found (best_score=%.1f)\n", best_score);
+                    shared_search_state = 3;
+                    printf(">> SEARCH: no RTTY signal found (best=%.1f)\n", global_best_score);
                 }
                 search_result_time = time_us_32();
             }
@@ -613,7 +641,7 @@ void core1_main() {
             }
             
             float hz_px = ((bin_end-bin_start)*(SAMPLE_RATE/(float)FFT_SIZE))/480.0f;
-            int shift_px = (int)(shifts[shared_shift_idx]/hz_px);
+            int shift_px = (int)(get_shift()/hz_px);
             int half_shift = shift_px / 2;
             int m_x = tune_x - half_shift;
             int s_x = tune_x + half_shift;
@@ -704,8 +732,11 @@ void core1_main() {
                 else if (ty > UI_Y_BOTTOM && !was_touched) {
                     int btn_idx = tx / 68; // 480 / 7 approx 68
                     if (btn_idx == 0) { flag_settings_change(); shared_baud_idx = (shared_baud_idx + 1) % 3; }
-                    else if (btn_idx == 1) { flag_settings_change(); shared_shift_idx = (shared_shift_idx + 1) % 5; }
-                    else if (btn_idx == 2) { shared_search_request = true; shared_search_state = 1; }
+                    else if (btn_idx == 1) {
+                        if (shift_popup_active) { shift_popup_active = false; ui.drawRTTY(); }
+                        else { shift_popup_active = true; ui.drawShiftPopup(shared_shift_idx); }
+                    }
+                    else if (btn_idx == 2) { shared_rtty_inv = false; shared_afc_on = true; shared_search_request = true; shared_search_state = 1; }
                     else if (btn_idx == 3) { flag_settings_change(); shared_afc_on = !shared_afc_on; }
                     else if (btn_idx == 4) { flag_settings_change(); shared_stop_idx = (shared_stop_idx + 1) % 3; }
                     else if (btn_idx == 5) { ui.clearRTTY(); shared_clear_dsp = true; }
@@ -729,7 +760,23 @@ void core1_main() {
                     touch_ignore_until = time_us_32() + 300000;
                 }
                 else if (ty >= UI_Y_TEXT && ty < UI_Y_BOTTOM) {
-                    if (reset_confirm_mode && !was_touched) {
+                    if (shift_popup_active && !was_touched) {
+                        int local_y = ty - UI_Y_TEXT;
+                        int col = tx / 160; // 3 columns
+                        int row = (local_y - 5) / 50; // 3 rows, 5px top padding
+                        if (col >= 0 && col < 3 && row >= 0 && row < 3) {
+                            int idx = row * 3 + col;
+                            if (idx >= 0 && idx <= NUM_SHIFTS) {
+                                flag_settings_change();
+                                shared_shift_idx = idx;
+                            }
+                        }
+                        shift_popup_active = false;
+                        ui.drawRTTY();
+                        ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_afc_on, menu_mode, shared_search_state);
+                        touch_ignore_until = time_us_32() + 300000;
+                    }
+                    else if (reset_confirm_mode && !was_touched) {
                         int local_y = ty - UI_Y_TEXT;
                         if (local_y >= 100 && local_y <= 140) {
                             if (tx >= 280 && tx <= 400) { // YES
@@ -957,8 +1004,9 @@ void core0_dsp_loop() {
     uint32_t auto_inv_high_err_since = 0; // when high ERR started
     bool auto_inv_trying = false;      // currently testing inverted
     bool auto_inv_prev_inv = false;    // previous inversion state
+    float auto_inv_pre_err = 0.0f;     // ERR before flip attempt
 
-    const float shifts_hz[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
+    // Core0 uses shared_active_shift for demodulation
     const float bauds[] = {45.45f, 50.0f, 75.0f};
 
     while(true) {
@@ -1020,7 +1068,7 @@ void core0_dsp_loop() {
             cached_atc_slow = expf(-1.0f / (16.0f * ((float)SAMPLE_RATE / baud)));
         }
         
-        float shift = shifts_hz[shared_shift_idx];
+        float shift = shared_active_shift;
         float fm = shared_actual_freq - shift / 2.0f;
         float fs = shared_actual_freq + shift / 2.0f;
         
@@ -1145,31 +1193,43 @@ void core0_dsp_loop() {
                         }
                         shared_err_rate = (float)err_sum;
 
-                        // Auto-inversion: if ERR > 40% for 3 sec with open squelch, try flipping
-                        {
+                        // Auto-inversion with comparative ERR logic
+                        if (shared_inv_auto) {
                             uint32_t now = time_us_32();
-                            if (shared_squelch_open && shared_err_rate > 40.0f) {
+                            // Clear uncertain flag when reception is clean
+                            if (shared_err_rate < 5.0f && shared_squelch_open) shared_inv_uncertain = false;
+
+                            if (shared_squelch_open && shared_err_rate > 12.0f && !auto_inv_trying) {
                                 if (auto_inv_high_err_since == 0) auto_inv_high_err_since = now;
-                                else if (!auto_inv_trying && (now - auto_inv_high_err_since > 3000000)) {
-                                    // High ERR for 3 sec — try inversion
+                                else if (now - auto_inv_high_err_since > 800000) {
+                                    // High ERR for 0.8s — save current ERR, flip and measure
+                                    auto_inv_pre_err = shared_err_rate;
                                     auto_inv_prev_inv = shared_rtty_inv;
                                     shared_rtty_inv = !shared_rtty_inv;
                                     auto_inv_trying = true;
-                                    auto_inv_check_time = now + 3000000; // measure for 3 sec
+                                    auto_inv_check_time = now + 800000;
                                     memset(err_hist, 0, sizeof(err_hist));
                                     err_idx = 0; err_sum = 0;
                                     shared_err_rate = 0.0f;
                                 }
-                            } else if (!auto_inv_trying) {
-                                auto_inv_high_err_since = 0; // reset timer
+                            } else if (!auto_inv_trying && shared_err_rate <= 12.0f) {
+                                auto_inv_high_err_since = 0;
                             }
 
                             if (auto_inv_trying && now > auto_inv_check_time) {
-                                if (shared_err_rate > 35.0f) {
-                                    // Still bad — revert
+                                float new_err = shared_err_rate;
+                                if (new_err < auto_inv_pre_err - 3.0f) {
+                                    // ERR dropped significantly — keep new inversion
+                                    shared_inv_uncertain = false;
+                                } else if (new_err > auto_inv_pre_err + 3.0f) {
+                                    // ERR got worse — revert
                                     shared_rtty_inv = auto_inv_prev_inv;
+                                    shared_inv_uncertain = false;
+                                } else {
+                                    // ERR similar — can't determine, revert and mark uncertain
+                                    shared_rtty_inv = auto_inv_prev_inv;
+                                    shared_inv_uncertain = true;
                                 }
-                                // Either helped or reverted — done
                                 auto_inv_trying = false;
                                 auto_inv_high_err_since = 0;
                                 memset(err_hist, 0, sizeof(err_hist));

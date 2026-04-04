@@ -259,10 +259,11 @@ public:
     void drawBottomBar(int baud_idx, int shift_idx, float stop_bits, bool afc_on, bool menu_mode, int search_state) {
         _spr_bottom.fillSprite(COLOR_BG);
         const int bauds[] = {45, 50, 75};
-        const int shifts[] = {170, 200, 425, 450, 850};
+        const int shifts[] = {85, 170, 200, 340, 425, 450, 500, 850};
         char labels_main[7][16];
         snprintf(labels_main[0], 16, "B %d", bauds[baud_idx]);
-        snprintf(labels_main[1], 16, "S %d", shifts[shift_idx]);
+        if (shift_idx < 8) snprintf(labels_main[1], 16, "S %d", shifts[shift_idx]);
+        else snprintf(labels_main[1], 16, "S:AUTO");
         if (search_state == 1) snprintf(labels_main[2], 16, "SRCH..");
         else if (search_state == 2) snprintf(labels_main[2], 16, "FOUND!");
         else if (search_state == 3) snprintf(labels_main[2], 16, "NONE");
@@ -288,7 +289,7 @@ public:
         ili9488_push_colors(0, UI_Y_BOTTOM, 480, 48, (uint16_t*)_spr_bottom.getBuffer());
     }
 
-    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float m_freq, float s_freq, bool clipping, float load0, float load1, bool squelch_open, float agc_gain, bool agc_enabled, float err_rate, bool rtty_inv) {
+    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float m_freq, float s_freq, bool clipping, float load0, float load1, bool squelch_open, float agc_gain, bool agc_enabled, float err_rate, bool rtty_inv, int shift_idx, float active_shift, bool inv_uncertain) {
         _spr_top.fillSprite(COLOR_BG); _spr_top.drawFastHLine(0, 33, 480, COLOR_GRID);
         _spr_top.setFont(&fonts::Font0); // Compact 6x8 font for 3-row layout
         char buf[64];
@@ -306,9 +307,15 @@ public:
         snprintf(buf, sizeof(buf), "M:%.0f S:%.0f", m_freq, s_freq); _spr_top.drawString(buf, 170, 5);
         if (squelch_open) { _spr_top.setTextColor(0x00FF00U, COLOR_BG); _spr_top.drawString("SYNC", 280, 5); }
         else { _spr_top.setTextColor(0x777777U, COLOR_BG); _spr_top.drawString("WAIT", 280, 5); }
-        // INV/NOR indicator next to SYNC
-        if (rtty_inv) { _spr_top.setTextColor(0x0000FFU, COLOR_BG); _spr_top.drawString("INV", 308, 5); }
-        else { _spr_top.setTextColor(0x888888U, COLOR_BG); _spr_top.drawString("NOR", 308, 5); }
+        // INV/NOR indicator next to SYNC (with ? for uncertain)
+        if (inv_uncertain) {
+            _spr_top.setTextColor(0x00FFFFU, COLOR_BG);
+            _spr_top.drawString(rtty_inv ? "INV?" : "NOR?", 308, 5);
+        } else if (rtty_inv) {
+            _spr_top.setTextColor(0x0000FFU, COLOR_BG); _spr_top.drawString("INV", 308, 5);
+        } else {
+            _spr_top.setTextColor(0x888888U, COLOR_BG); _spr_top.drawString("NOR", 308, 5);
+        }
         _spr_top.setTextColor(0x00FF00U, COLOR_BG);
         snprintf(buf, sizeof(buf), "SNR:%2.0f", snr_db); _spr_top.drawString(buf, 340, 5);
 
@@ -323,6 +330,15 @@ public:
         }
         _spr_top.setTextColor(0x00FFFFU, COLOR_BG);
         snprintf(buf, sizeof(buf), "%+.0fdB", gain_db); _spr_top.drawString(buf, bar_x+bar_w+4, 16);
+        // Shift indicator on Row 2
+        if (shift_idx >= 8) { // AUTO mode
+            _spr_top.setTextColor(0x00FF00U, COLOR_BG);
+            snprintf(buf, sizeof(buf), "SH:%.0f(A)", active_shift);
+        } else {
+            _spr_top.setTextColor(0x00FFFFU, COLOR_BG);
+            snprintf(buf, sizeof(buf), "SH:%.0f", active_shift);
+        }
+        _spr_top.drawString(buf, 170, 16);
 
         // --- Row 3 (y=22..31): ERR bar + % value + info ---
         _spr_top.setTextColor(0xAAAAAAU, COLOR_BG);
@@ -340,6 +356,29 @@ public:
         _spr_top.drawString(buf, 475, 16);
 
         ili9488_push_colors(0, UI_Y_TOP, 480, UI_TOP_BAR_H, (uint16_t*)_spr_top.getBuffer());
+    }
+
+    void drawShiftPopup(int current_shift_idx) {
+        _spr_text.fillSprite(COLOR_BG);
+        _spr_text.setFont(&fonts::Font2);
+        _spr_text.setTextDatum(middle_center);
+        const char* labels[] = {"85", "170", "200", "340", "425", "450", "500", "850", "AUTO"};
+        // Grid 3x3, each cell 160x50px, centered in 480x160
+        int cols = 3, rows = 3;
+        int cell_w = 160, cell_h = 50;
+        int y_off = 5; // top padding
+        for (int i = 0; i < 9; i++) {
+            int col = i % cols, row = i / cols;
+            int x = col * cell_w, y = y_off + row * cell_h;
+            uint32_t bg = 0x333333U, brd = 0x777777U;
+            if (i == current_shift_idx) { bg = 0x004400U; brd = 0x00FF00U; }
+            if (i == 8) { bg = (current_shift_idx == 8) ? 0x004400U : 0x222244U; brd = (current_shift_idx == 8) ? 0x00FF00U : 0x6666FFU; }
+            _spr_text.fillRoundRect(x + 4, y + 2, cell_w - 8, cell_h - 4, 8, bg);
+            _spr_text.drawRoundRect(x + 4, y + 2, cell_w - 8, cell_h - 4, 8, brd);
+            _spr_text.setTextColor(0xFFFFFFU, bg);
+            _spr_text.drawString(labels[i], x + cell_w / 2, y + cell_h / 2);
+        }
+        ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }
 
     void drawDiagScreen(float adc_v, int font_mode) {
