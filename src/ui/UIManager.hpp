@@ -7,7 +7,19 @@
 #include <string>
 #include <vector>
 
-// Hardcoded Palette (Yellow on Blue - R and B channels swapped for Mode 11 quirk)        
+// Eye diagram shared data (defined in main.cpp)
+#define EYE_TRACES 16
+#define EYE_MAX_SPB 256
+extern volatile int8_t shared_eye_buf[EYE_TRACES][EYE_MAX_SPB];
+extern volatile int shared_eye_spb;
+extern volatile int shared_eye_idx;
+extern volatile bool shared_eye_ready;
+extern volatile float tuning_dpll_alpha;
+extern volatile float tuning_lpf_k;
+extern volatile float tuning_sq_snr;
+extern volatile float shared_err_rate;
+
+// Hardcoded Palette (Yellow on Blue - R and B channels swapped for Mode 11 quirk)
 static constexpr uint32_t PAL_BG = 0x330000U; // Dark Blue
 static constexpr uint32_t PAL_GRID = 0x663300U; // Blue-Grey
 static constexpr uint32_t PAL_WAVE = 0x00FFFFU; // Yellow
@@ -186,17 +198,14 @@ public:
     void drawMenu(bool auto_scale, bool exp_scale, int display_mode, float filter_k, float sq_snr, const char* diag_label, const char* save_text) {
         _spr_text.fillSprite(COLOR_BG);
         _spr_text.drawFastHLine(0, 0, 480, COLOR_GRID);
-        int bw = 480 / 4; int bh = 160 / 3; 
-        char buf_fl[16], buf_sq[16];
-        snprintf(buf_fl, 16, "BW: %.2f", filter_k);
-        snprintf(buf_sq, 16, "SQ: %.0f", sq_snr);
+        int bw = 480 / 4; int bh = 160 / 3;
         const char* labels[12] = {
             display_mode == 0 ? "DISP: WF" : (display_mode == 1 ? "DISP: SPEC" : "DISP: SCOPE"),
             exp_scale ? "SCALE: EXP" : "SCALE: LIN",
             auto_scale ? "AUTO: ON" : "AUTO: OFF",
             diag_label,
-            "BW -", buf_fl, "BW +", save_text,
-            "SQ -", buf_sq, "SQ +", "" 
+            "", "", "", "",
+            "", "", "", "TUNE"
         };
         _spr_text.setFont(&fonts::Font2); _spr_text.setTextDatum(middle_center);
         for (int i = 0; i < 12; i++) {
@@ -204,12 +213,11 @@ public:
             int x = (i % 4) * bw; int y = (i / 4) * bh;
             uint32_t bg = 0x333333U, brd = 0x777777U;
             if (i == 2 && auto_scale) { bg = 0x006600U; brd = 0x00FF00U; }
-            if (i == 3) { bg = 0x442200U; brd = 0xAA5500U; } 
-            if (i == 5 || i == 9) { bg = 0x111111U; brd = 0x333333U; } 
-            if (i == 7) { bg = 0x000066U; brd = 0x0000FFU; }
+            if (i == 3) { bg = 0x442200U; brd = 0xAA5500U; }
+            if (i == 11) { bg = 0x004400U; brd = 0x00FF00U; } // TUNE
             _spr_text.fillRoundRect(x + 4, y + 4, bw - 8, bh - 8, 6, bg);
             _spr_text.drawRoundRect(x + 4, y + 4, bw - 8, bh - 8, 6, brd);
-            if (i == 5 || i == 9) _spr_text.setTextColor(0x00FFFFU, bg); else _spr_text.setTextColor(0xFFFFFFU, bg);
+            _spr_text.setTextColor(0xFFFFFFU, bg);
             _spr_text.drawString(labels[i], x + (bw / 2), y + (bh / 2));
         }
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
@@ -345,12 +353,12 @@ public:
 
         _spr_text.setTextDatum(middle_center);
         int bw = 480 / 6;
-        const char* l_diag = serial_diag_on ? "DIAG:ON" : "DIAG:OFF";
+        const char* l_dump = serial_diag_on ? "DUMP:ON" : "DUMP:OFF";
         const char* l_font = (font_mode == 1) ? "NARW" : "NORM";
-        
+
         uint32_t bgs[] = { (serial_diag_on ? 0x004400U : 0x000044U), 0x333333U, 0x333333U, 0x111111U, 0x333333U, 0x000044U };
         uint32_t brds[] = { (serial_diag_on ? 0x00FF00U : 0x0000FFU), 0x777777U, 0x777777U, 0x333333U, 0x777777U, 0x0000FFU };
-        const char* labels[] = { l_diag, l_font, "W-", "", "W+", "RST" };
+        const char* labels[] = { l_dump, l_font, "W-", "", "W+", "RST" };
         
         for (int i = 0; i < 6; i++) {
             int x = i * bw;
@@ -368,6 +376,177 @@ public:
                 _spr_text.drawString(labels[i], x + bw/2, 136);
             }
         }
+        ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
+    }
+
+    // ========== TUNING LAB ==========
+
+    // Phosphor accumulation buffer for eye diagram (240 x 64)
+    static constexpr int EYE_W = 240;
+    static constexpr int EYE_H = 64;
+    uint8_t _eye_acc[EYE_W][EYE_H] = {};
+    int _eye_last_idx = -1; // track which traces we already drew
+
+    void drawEyeDiagram(LGFX_Sprite& spr, int w, int h) {
+        int spb = shared_eye_spb;
+        if (spb < 2) return;
+        if (w > EYE_W) w = EYE_W;
+        if (h > EYE_H) h = EYE_H;
+
+        // Fade accumulation: ~96% retention per frame (245/256)
+        for (int x = 0; x < w; x++)
+            for (int y = 0; y < h; y++)
+                _eye_acc[x][y] = (uint8_t)((_eye_acc[x][y] * 245) >> 8);
+
+        // Add only NEW traces since last call
+        int cur_idx = shared_eye_idx;
+        int traces_to_add = (cur_idx - _eye_last_idx + EYE_TRACES) % EYE_TRACES;
+        if (traces_to_add == 0) traces_to_add = 1; // at least redraw newest
+        if (traces_to_add > EYE_TRACES) traces_to_add = EYE_TRACES;
+
+        for (int t = traces_to_add; t > 0; t--) {
+            int tidx = (cur_idx - t + EYE_TRACES) % EYE_TRACES;
+            int prev_x = -1, prev_y = -1;
+            for (int s = 0; s < spb; s++) {
+                int x = s * w / spb;
+                int8_t dv = shared_eye_buf[tidx][s];
+                int y = h/2 - (dv * (h/2 - 2)) / 127;
+                if (y < 0) y = 0; if (y >= h) y = h - 1;
+
+                if (x >= 0 && x < w) {
+                    int v = _eye_acc[x][y] + 80;
+                    _eye_acc[x][y] = (v > 255) ? 255 : (uint8_t)v;
+                    // Fill gaps between consecutive samples for line continuity
+                    if (prev_x >= 0 && prev_y != y) {
+                        int dy = y - prev_y;
+                        int steps = (dy > 0) ? dy : -dy;
+                        for (int i = 1; i < steps; i++) {
+                            int iy = prev_y + (dy * i) / steps;
+                            if (iy >= 0 && iy < h) {
+                                int v2 = _eye_acc[x][iy] + 40;
+                                _eye_acc[x][iy] = (v2 > 255) ? 255 : (uint8_t)v2;
+                            }
+                        }
+                    }
+                }
+                prev_x = x; prev_y = y;
+            }
+        }
+        _eye_last_idx = cur_idx;
+
+        // Render accumulation buffer to sprite as green phosphor
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                uint8_t v = _eye_acc[x][y];
+                if (v > 2) {
+                    spr.drawPixel(x, y, ((uint32_t)v << 8));
+                }
+            }
+        }
+
+        // Grid overlay
+        spr.drawRect(0, 0, w, h, 0x333300U);
+        spr.drawFastHLine(1, h/2, w - 2, 0x222200U);
+        spr.drawFastVLine(w/2, 0, h, 0x222200U);
+        spr.drawFastVLine(w/4, 0, h, 0x111100U);
+        spr.drawFastVLine(w*3/4, 0, h, 0x111100U);
+
+        // Labels
+        spr.setFont(&fonts::Font0); spr.setTextDatum(top_left);
+        spr.setTextColor(0x00FF00U, PAL_BG);
+        spr.drawString("EYE", 2, 2);
+    }
+
+    void drawTuningControls(float alpha, float lpf_k, float sq_snr, float err_rate) {
+        _spr_text.fillSprite(COLOR_BG);
+        _spr_text.drawFastHLine(0, 0, 480, COLOR_GRID);
+        _spr_text.setFont(&fonts::Font2); _spr_text.setTextDatum(middle_center);
+
+        // Title
+        char buf[32];
+        _spr_text.setTextColor(0x00FF00U, COLOR_BG);
+        _spr_text.drawString("TUNING LAB", 240, 20);
+
+        // Parameter rows: 3 params, each with [-] [value] [+]
+        // Layout: 6 columns x 2 rows of buttons
+        const int bw = 480 / 6; // 80px per button
+        const int bh = 42;
+        const int row0_y = 42;  // First param row
+        const int row1_y = row0_y + bh + 2; // Second row
+
+        struct Param {
+            const char* name; float val; const char* fmt;
+            uint32_t bg; uint32_t brd;
+        };
+        Param params[] = {
+            {"ALPHA", alpha, "%.4f", 0x333333U, 0x777777U},
+            {"BW",    lpf_k, "%.2f",  0x333333U, 0x777777U},
+            {"SQ",    sq_snr, "%.0f", 0x333333U, 0x777777U},
+        };
+
+        // Row 0: [A-] [ALPHA:val] [A+]  [K-] [BW:val] [K+]
+        for (int p = 0; p < 2; p++) {
+            int bx = p * 3 * bw;
+            // Minus button
+            _spr_text.fillRoundRect(bx + 2, row0_y, bw - 4, bh, 6, 0x333333U);
+            _spr_text.drawRoundRect(bx + 2, row0_y, bw - 4, bh, 6, 0x777777U);
+            _spr_text.setTextColor(0xFFFFFFU, 0x333333U);
+            snprintf(buf, sizeof(buf), "%s-", params[p].name);
+            _spr_text.drawString(buf, bx + bw/2, row0_y + bh/2);
+            // Value display
+            _spr_text.fillRoundRect(bx + bw + 2, row0_y, bw - 4, bh, 6, 0x111111U);
+            _spr_text.drawRoundRect(bx + bw + 2, row0_y, bw - 4, bh, 6, 0x333333U);
+            snprintf(buf, sizeof(buf), params[p].fmt, params[p].val);
+            _spr_text.setTextColor(0x00FFFFU, 0x111111U);
+            _spr_text.drawString(buf, bx + bw + bw/2, row0_y + bh/2);
+            // Plus button
+            _spr_text.fillRoundRect(bx + 2*bw + 2, row0_y, bw - 4, bh, 6, 0x333333U);
+            _spr_text.drawRoundRect(bx + 2*bw + 2, row0_y, bw - 4, bh, 6, 0x777777U);
+            _spr_text.setTextColor(0xFFFFFFU, 0x333333U);
+            snprintf(buf, sizeof(buf), "%s+", params[p].name);
+            _spr_text.drawString(buf, bx + 2*bw + bw/2, row0_y + bh/2);
+        }
+
+        // Row 1: [SQ-] [SQ:val] [SQ+]  [SERIAL] [---] [BACK]
+        int bx = 0;
+        // SQ minus
+        _spr_text.fillRoundRect(bx + 2, row1_y, bw - 4, bh, 6, 0x333333U);
+        _spr_text.drawRoundRect(bx + 2, row1_y, bw - 4, bh, 6, 0x777777U);
+        _spr_text.setTextColor(0xFFFFFFU, 0x333333U);
+        _spr_text.drawString("SQ-", bx + bw/2, row1_y + bh/2);
+        // SQ value
+        _spr_text.fillRoundRect(bx + bw + 2, row1_y, bw - 4, bh, 6, 0x111111U);
+        _spr_text.drawRoundRect(bx + bw + 2, row1_y, bw - 4, bh, 6, 0x333333U);
+        snprintf(buf, sizeof(buf), "%.0f", sq_snr);
+        _spr_text.setTextColor(0x00FFFFU, 0x111111U);
+        _spr_text.drawString(buf, bx + bw + bw/2, row1_y + bh/2);
+        // SQ plus
+        _spr_text.fillRoundRect(bx + 2*bw + 2, row1_y, bw - 4, bh, 6, 0x333333U);
+        _spr_text.drawRoundRect(bx + 2*bw + 2, row1_y, bw - 4, bh, 6, 0x777777U);
+        _spr_text.setTextColor(0xFFFFFFU, 0x333333U);
+        _spr_text.drawString("SQ+", bx + 2*bw + bw/2, row1_y + bh/2);
+
+        // DUMP toggle button
+        {
+            bool dump_on = shared_serial_diag;
+            uint32_t dbg = dump_on ? 0x004400U : 0x222200U;
+            uint32_t dbr = dump_on ? 0x00FF00U : 0x777700U;
+            _spr_text.fillRoundRect(3*bw + 2, row1_y, bw - 4, bh, 6, dbg);
+            _spr_text.drawRoundRect(3*bw + 2, row1_y, bw - 4, bh, 6, dbr);
+            _spr_text.setTextColor(dump_on ? 0x00FF00U : 0x777700U, dbg);
+            _spr_text.drawString(dump_on ? "DUMP:ON" : "DUMP:OFF", 3*bw + bw/2, row1_y + bh/2);
+        }
+
+        // Empty slot
+        _spr_text.fillRoundRect(4*bw + 2, row1_y, bw - 4, bh, 6, 0x111111U);
+        _spr_text.drawRoundRect(4*bw + 2, row1_y, bw - 4, bh, 6, 0x333333U);
+
+        // SAVE button
+        _spr_text.fillRoundRect(5*bw + 2, row1_y, bw - 4, bh, 6, 0x000066U);
+        _spr_text.drawRoundRect(5*bw + 2, row1_y, bw - 4, bh, 6, 0x0000FFU);
+        _spr_text.setTextColor(0xFFFFFFU, 0x000066U);
+        _spr_text.drawString("SAVE", 5*bw + bw/2, row1_y + bh/2);
+
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }
 };

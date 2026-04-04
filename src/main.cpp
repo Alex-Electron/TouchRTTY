@@ -120,6 +120,7 @@ volatile float shared_diag_adc_max = 0.0f;
 volatile float shared_atc_m = 0.0f;
 volatile float shared_atc_s = 0.0f;
 volatile float shared_dpll_phase = 0.0f;
+volatile float shared_dpll_ferr = 0.0f; // DPLL frequency error for diagnostics
 volatile bool shared_diag_ready = false;
 
 volatile float shared_target_freq = 1535.0f;
@@ -145,7 +146,8 @@ volatile float tuning_lpf_k = 0.75f;
 volatile float tuning_sq_snr = 6.0f;
 volatile float shared_agc_gain = 1.0f;
 volatile bool shared_agc_enabled = true;
-volatile bool shared_serial_diag = false; // Toggle via Diagnostic Screen
+volatile bool shared_serial_diag = false; // Toggle via Diagnostic Screen or serial command
+volatile bool shared_save_request = false; // Save settings from serial command
 
 void handle_serial_commands() {
     static char cmd_buf[64];
@@ -155,14 +157,84 @@ void handle_serial_commands() {
         if (c == '\n' || c == '\r') {
             cmd_buf[cmd_ptr] = 0;
             if (cmd_ptr > 0) {
-                float val;
-                if (sscanf(cmd_buf, "ALPHA %f", &val) == 1) { tuning_dpll_alpha = val; printf(">> SET ALPHA TO %.4f\n", val); }
-                else if (sscanf(cmd_buf, "K %f", &val) == 1) { tuning_lpf_k = val; printf(">> SET LPF K TO %.2f\n", val); }
-                else if (sscanf(cmd_buf, "SQ %f", &val) == 1) { tuning_sq_snr = val; printf(">> SET SQ SNR TO %.1f\n", val); }
-                else if (strcmp(cmd_buf, "CLEAR") == 0) { shared_clear_dsp = true; printf(">> DSP RESET\n"); }
-                else if (strcmp(cmd_buf, "INV ON") == 0) { shared_rtty_inv = true; printf(">> RX INVERTED\n"); }
-                else if (strcmp(cmd_buf, "INV OFF") == 0) { shared_rtty_inv = false; printf(">> RX NORMAL\n"); }
-                else { printf(">> UNKNOWN COMMAND: %s\n", cmd_buf); }
+                float val; int ival;
+                if (sscanf(cmd_buf, "ALPHA %f", &val) == 1) {
+                    val = fmaxf(0.005f, fminf(0.200f, val));
+                    tuning_dpll_alpha = val; printf(">> ALPHA=%.4f\n", val);
+                }
+                else if (sscanf(cmd_buf, "BW %f", &val) == 1 || sscanf(cmd_buf, "K %f", &val) == 1) {
+                    val = fmaxf(0.3f, fminf(2.0f, val));
+                    tuning_lpf_k = val; printf(">> BW=%.2f\n", val);
+                }
+                else if (sscanf(cmd_buf, "SQ %f", &val) == 1) {
+                    tuning_sq_snr = val; printf(">> SQ=%.1f\n", val);
+                }
+                else if (sscanf(cmd_buf, "BAUD %d", &ival) == 1) {
+                    if (ival >= 0 && ival <= 2) { shared_baud_idx = ival; printf(">> BAUD=%d\n", ival); }
+                    else printf(">> ERR: BAUD 0-2 (45/50/75)\n");
+                }
+                else if (sscanf(cmd_buf, "SHIFT %d", &ival) == 1) {
+                    if (ival >= 0 && ival <= 4) { shared_shift_idx = ival; printf(">> SHIFT=%d\n", ival); }
+                    else printf(">> ERR: SHIFT 0-4 (170/200/425/450/850)\n");
+                }
+                else if (sscanf(cmd_buf, "FREQ %f", &val) == 1) {
+                    shared_target_freq = val; shared_actual_freq = val;
+                    printf(">> FREQ=%.1f\n", val);
+                }
+                else if (strcmp(cmd_buf, "DIAG ON") == 0)  { shared_serial_diag = true;  printf(">> DIAG ON\n"); }
+                else if (strcmp(cmd_buf, "DIAG OFF") == 0) { shared_serial_diag = false; printf(">> DIAG OFF\n"); }
+                else if (strcmp(cmd_buf, "INV ON") == 0)   { shared_rtty_inv = true;  printf(">> INV ON\n"); }
+                else if (strcmp(cmd_buf, "INV OFF") == 0)  { shared_rtty_inv = false; printf(">> INV OFF\n"); }
+                else if (strcmp(cmd_buf, "AFC ON") == 0)   { shared_afc_on = true;  printf(">> AFC ON\n"); }
+                else if (strcmp(cmd_buf, "AFC OFF") == 0)  { shared_afc_on = false; printf(">> AFC OFF\n"); }
+                else if (strcmp(cmd_buf, "CLEAR") == 0)    { shared_clear_dsp = true; printf(">> CLEAR\n"); }
+                else if (strcmp(cmd_buf, "SAVE") == 0)     { shared_save_request = true; printf(">> SAVE REQUESTED\n"); }
+                else if (strcmp(cmd_buf, "STATUS") == 0) {
+                    const int bauds_t[] = {45, 50, 75};
+                    const int shifts_t[] = {170, 200, 425, 450, 850};
+                    printf("\n=== STATUS (B%d) ===\n", BUILD_NUMBER);
+                    printf("ALPHA=%.4f BW=%.2f SQ=%.1f\n", (double)tuning_dpll_alpha, (double)tuning_lpf_k, (double)tuning_sq_snr);
+                    printf("BAUD=%d(%d) SHIFT=%d(%d) INV=%s AFC=%s\n",
+                        shared_baud_idx, bauds_t[shared_baud_idx],
+                        shared_shift_idx, shifts_t[shared_shift_idx],
+                        shared_rtty_inv ? "ON" : "OFF", shared_afc_on ? "ON" : "OFF");
+                    printf("FREQ=%.1f SNR=%.1f SIG=%.1f AGC=%.2f\n",
+                        (double)shared_actual_freq, (double)shared_snr_db,
+                        (double)shared_signal_db, (double)shared_agc_gain);
+                    printf("SQ=%s ERR=%.0f%% DIAG=%s\n",
+                        shared_squelch_open ? "OPEN" : "SHUT",
+                        (double)shared_err_rate,
+                        shared_serial_diag ? "ON" : "OFF");
+                    printf("====================\n");
+                }
+                else if (sscanf(cmd_buf, "STOP %d", &ival) == 1) {
+                    if (ival >= 0 && ival <= 2) { shared_stop_idx = ival; printf(">> STOP=%d\n", ival); }
+                    else printf(">> ERR: STOP 0-2 (1.0/1.5/2.0)\n");
+                }
+                else if (strcmp(cmd_buf, "AGC ON") == 0)   { shared_agc_enabled = true;  printf(">> AGC ON\n"); }
+                else if (strcmp(cmd_buf, "AGC OFF") == 0)  { shared_agc_enabled = false; printf(">> AGC OFF\n"); }
+                else if (strcmp(cmd_buf, "HELP") == 0) {
+                    printf("\n=== COMMANDS (B%d) ===\n", BUILD_NUMBER);
+                    printf("--- Tuning ---\n");
+                    printf("ALPHA <0.005-0.200>  DPLL loop bandwidth\n");
+                    printf("BW <0.3-2.0>         LPF filter K\n");
+                    printf("SQ <dB>              Squelch SNR threshold\n");
+                    printf("FREQ <Hz>            Center frequency\n");
+                    printf("--- Protocol ---\n");
+                    printf("BAUD <0-2>           0=45 1=50 2=75\n");
+                    printf("SHIFT <0-4>          170/200/425/450/850\n");
+                    printf("STOP <0-2>           1.0/1.5/2.0 bits\n");
+                    printf("INV ON|OFF           Mark/Space invert\n");
+                    printf("--- Control ---\n");
+                    printf("AFC ON|OFF           Auto frequency\n");
+                    printf("AGC ON|OFF           Auto gain\n");
+                    printf("DIAG ON|OFF          Diagnostic stream\n");
+                    printf("STATUS               All parameters\n");
+                    printf("SAVE                 Save to flash\n");
+                    printf("CLEAR                Reset DSP state\n");
+                    printf("======================\n");
+                }
+                else { printf(">> UNKNOWN: %s (try HELP)\n", cmd_buf); }
             }
             cmd_ptr = 0;
         } else if (cmd_ptr < 63) {
@@ -244,18 +316,7 @@ const float fir_coeffs[FIR_TAPS] = {
 void core1_main() {
     LGFX_RP2350 tft; tft.init(); tft.setRotation(1);
 
-    bool boot_touch = false;
-
-    if (boot_touch || shared_force_cal) {
-        multicore_lockout_start_blocking();
-        uint32_t ints = save_and_disable_interrupts();
-        flash_range_erase(CAL_FLASH_OFFSET, FLASH_SECTOR_SIZE);
-        flash_range_erase(SETTINGS_FLASH_OFFSET, FLASH_SECTOR_SIZE);
-        restore_interrupts(ints);
-        multicore_lockout_end_blocking();
-    }
-
-    load_or_calibrate(tft, boot_touch || shared_force_cal);
+    load_or_calibrate(tft, shared_force_cal);
 
     ili9488_init();    ili9488_fill_screen(0x0000);
     UIManager ui(&tft); ui.init();
@@ -263,6 +324,7 @@ void core1_main() {
     bool auto_scale = true, exp_scale = true;
     bool menu_mode = false;
     bool diag_screen_active = false;
+    bool tuning_lab_active = false;
     int display_mode = 0;
     bool reset_confirm_mode = false;
     uint32_t saved_text_timer = 0;
@@ -313,9 +375,33 @@ void core1_main() {
         uint32_t loop_start = time_us_32();
         handle_serial_commands();
 
+        // Handle save request from serial command
+        if (shared_save_request) {
+            shared_save_request = false;
+            AppSettings s;
+            s.magic = 0xDEADBEEF;
+            s.baud_idx = shared_baud_idx; s.shift_idx = shared_shift_idx;
+            s.stop_idx = shared_stop_idx; s.rtty_inv = shared_rtty_inv;
+            s.display_mode = display_mode; s.exp_scale = exp_scale;
+            s.auto_scale = auto_scale; s.filter_k = tuning_lpf_k;
+            s.sq_snr = tuning_sq_snr; s.target_freq = shared_target_freq;
+            s.serial_diag = shared_serial_diag; s.line_width = shared_line_width;
+            s.afc_on = shared_afc_on; s.font_mode = shared_font_mode;
+            uint8_t page_buf[FLASH_PAGE_SIZE] = {0};
+            memcpy(page_buf, &s, sizeof(AppSettings));
+            multicore_lockout_start_blocking();
+            uint32_t ints = save_and_disable_interrupts();
+            flash_range_erase(SETTINGS_FLASH_OFFSET, FLASH_SECTOR_SIZE);
+            flash_range_program(SETTINGS_FLASH_OFFSET, page_buf, FLASH_PAGE_SIZE);
+            restore_interrupts(ints);
+            multicore_lockout_end_blocking();
+            settings_need_save = false;
+            printf(">> SAVED OK\n");
+        }
+
         if (rtty_char_ready) {
             char c = rtty_new_char;
-            ui.addRTTYChar(c, !diag_screen_active && !menu_mode);
+            ui.addRTTYChar(c, !diag_screen_active && !menu_mode && !tuning_lab_active && !reset_confirm_mode);
             rtty_char_ready = false;
             // Only output to Serial if diagnostics are OFF
             if (!shared_serial_diag) printf("%c", c);
@@ -334,18 +420,24 @@ void core1_main() {
             if (!shared_serial_diag) printf("[LTRS]"); 
         }
 
-        if (shared_diag_ready && shared_serial_diag) {
+        if (shared_diag_ready) {
             shared_diag_ready = false;
-            printf("\n--- TUNING DIAGNOSTICS (B%d) ---\n", BUILD_NUMBER);
-            printf("Step 1 (ADC & AGC): V=%.2fV (Range: %.0f-%.0f) AGC_Gain=%.2fx\n", shared_adc_v, shared_diag_adc_min, shared_diag_adc_max, shared_agc_gain);
-            printf("Step 2 (ATC Level): Mark_Env=%.4f Space_Env=%.4f\n", shared_atc_m, shared_atc_s);
-            printf("Step 3 (FFT Peaks): SNR=%.1f dB, Signal=%.1f dB\n", shared_snr_db, shared_signal_db);
-            printf("Step 4 (RTTY Status): Squelch=%s DPLL_Phase=%.2f\n", shared_squelch_open ? "OPEN" : "SHUT", shared_dpll_phase);
-            float b = bauds[shared_baud_idx];
-            printf("Params: Baud=%.2f ALPHA=%.4f K=%.2f SQ=%.1f\n", b, tuning_dpll_alpha, tuning_lpf_k, tuning_sq_snr);
-            printf("---------------------------------\n");
-        } else if (shared_diag_ready) {
-            shared_diag_ready = false; // Reset anyway if serial diag is off
+            if (shared_serial_diag) {
+                // Compact diagnostic stream — one line per update, easy to parse
+                float agc_db = 20.0f * log10f(shared_agc_gain + 1e-10f);
+                const int bauds_d[] = {45, 50, 75};
+                printf("[D] SNR=%.1f SIG=%.1f ERR=%.0f%% SQ=%s AGC=%+.0fdB PH=%.2f FE=%.5f M=%.3f S=%.3f A=%.4f K=%.2f SQT=%.1f F=%.0f B=%d C0=%d%% C1=%d%%\n",
+                    (double)shared_snr_db, (double)shared_signal_db,
+                    (double)shared_err_rate,
+                    shared_squelch_open ? "OPEN" : "SHUT",
+                    (double)agc_db, (double)shared_dpll_phase,
+                    (double)shared_dpll_ferr,
+                    (double)shared_atc_m, (double)shared_atc_s,
+                    (double)tuning_dpll_alpha, (double)tuning_lpf_k,
+                    (double)tuning_sq_snr, (double)shared_actual_freq,
+                    bauds_d[shared_baud_idx],
+                    (int)shared_core0_load, (int)shared_core1_load);
+            }
         }
 
         float bin_idx = shared_actual_freq / (SAMPLE_RATE / (float)FFT_SIZE);
@@ -358,7 +450,9 @@ void core1_main() {
             float s_freq = shared_actual_freq + shifts[shared_shift_idx]/2.0f;
             bool is_clipping = shared_adc_clipping; shared_adc_clipping = false; 
             
-            if (diag_screen_active) {
+            if (tuning_lab_active) {
+                ui.drawTuningControls(tuning_dpll_alpha, tuning_lpf_k, tuning_sq_snr, shared_err_rate);
+            } else if (diag_screen_active) {
                 ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width, shared_font_mode);
             }
             
@@ -447,7 +541,12 @@ void core1_main() {
             }
             ili9488_push_colors(0, UI_Y_MARKER, 480, UI_MARKER_H, (uint16_t*)marker_spr.getBuffer());
 
-            if (display_mode == 0) { 
+            if (tuning_lab_active) {
+                // Eye diagram in left half of DSP zone
+                spectrum.fillSprite(PAL_BG);
+                ui.drawEyeDiagram(spectrum, 240, UI_DSP_ZONE_H);
+                ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
+            } else if (display_mode == 0) {
                 spectrum.scroll(0, 1);
                 uint16_t* line_ptr = (uint16_t*)spectrum.getBuffer();
                 for (int x = 0; x < 480; x++) {
@@ -525,18 +624,23 @@ void core1_main() {
                     else if (btn_idx == 3) { flag_settings_change(); shared_afc_on = !shared_afc_on; }
                     else if (btn_idx == 4) { flag_settings_change(); shared_stop_idx = (shared_stop_idx + 1) % 3; }
                     else if (btn_idx == 5) { ui.clearRTTY(); shared_clear_dsp = true; }
-                    else if (btn_idx >= 6) { 
-                        if (diag_screen_active && !menu_mode) {
+                    else if (btn_idx >= 6) {
+                        if (tuning_lab_active) {
+                            // Tuning Lab -> back to main menu
+                            tuning_lab_active = false;
+                            menu_mode = true;
+                        } else if (diag_screen_active && !menu_mode) {
                             diag_screen_active = false;
                             ui.drawRTTY();
                         } else {
                             menu_mode = !menu_mode;
                             if(menu_mode) diag_screen_active = false; else ui.drawRTTY();
-                        }                    } 
+                        }
+                    }
                     
                     if (!menu_mode) reset_confirm_mode = false;
                     ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_rtty_inv, shared_afc_on, menu_mode);
-                    if (menu_mode) ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, "DIAG", "SAVE");
+                    if (menu_mode) ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, "DIAG", "");
                     touch_ignore_until = time_us_32() + 300000;
                 }
                 else if (ty >= UI_Y_TEXT && ty < UI_Y_BOTTOM) {
@@ -552,62 +656,25 @@ void core1_main() {
                                 multicore_lockout_end_blocking();
                                 watchdog_enable(1, 1);
                                 while(1);
-                            } else { // NO
+                            } else if (tx >= 80 && tx <= 200) { // NO
                                 reset_confirm_mode = false;
-                                ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, "DIAG", "SAVE");
+                                diag_screen_active = true;
+                                ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width, shared_font_mode);
                             }
-                        } else {
-                            reset_confirm_mode = false;
-                            ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, "DIAG", "SAVE");
                         }
+                        // Ignore taps outside YES/NO buttons — keep confirm dialog open
                         touch_ignore_until = time_us_32() + 300000;
                     } else if (menu_mode && !was_touched) {
                         int col = tx / (480/4);
                         int row = (ty - UI_Y_TEXT) / (160/3);
                         int btn = row * 4 + col;
-                        const char* save_text = "SAVE";
                         if (btn == 0) { flag_settings_change(); display_mode = (display_mode + 1) % 3; spectrum.fillSprite(PAL_BG); }
                         else if (btn == 1) { flag_settings_change(); exp_scale = !exp_scale; }
                         else if (btn == 2) { flag_settings_change(); auto_scale = !auto_scale; }
-                        else if (btn == 3) { diag_screen_active = true; menu_mode = false; } // Enter sub-menu
-                        else if (btn == 4) { flag_settings_change(); tuning_lpf_k -= 0.05f; if(tuning_lpf_k < 0.5f) tuning_lpf_k = 0.5f; }
-                        else if (btn == 6) { flag_settings_change(); tuning_lpf_k += 0.05f; if(tuning_lpf_k > 1.5f) tuning_lpf_k = 1.5f; }
-                        else if (btn == 7) {
-                           AppSettings s;
-                           s.magic = 0xDEADBEEF;
-                           s.baud_idx = shared_baud_idx;
-                           s.shift_idx = shared_shift_idx;
-                           s.stop_idx = shared_stop_idx;
-                           s.rtty_inv = shared_rtty_inv;
-                           s.display_mode = display_mode;
-                           s.exp_scale = exp_scale;
-                           s.auto_scale = auto_scale;
-                           s.filter_k = tuning_lpf_k;
-                           s.sq_snr = tuning_sq_snr;
-                           s.target_freq = shared_target_freq;
-                           s.serial_diag = shared_serial_diag;
-                           s.line_width = shared_line_width;
-                           s.afc_on = shared_afc_on;
-                           s.font_mode = shared_font_mode; // New
+                        else if (btn == 3) { diag_screen_active = true; menu_mode = false; }
+                        else if (btn == 11) { tuning_lab_active = true; menu_mode = false; }
 
-                           uint8_t page_buf[FLASH_PAGE_SIZE] = {0};
-                           memcpy(page_buf, &s, sizeof(AppSettings));
-                           multicore_lockout_start_blocking();
-                           uint32_t ints = save_and_disable_interrupts();
-                           flash_range_erase(SETTINGS_FLASH_OFFSET, FLASH_SECTOR_SIZE);
-                           flash_range_program(SETTINGS_FLASH_OFFSET, page_buf, FLASH_PAGE_SIZE);
-                           restore_interrupts(ints);
-                           multicore_lockout_end_blocking();
-
-                           save_text = "SAVED!";
-                           saved_text_timer = time_us_32();
-                           settings_need_save = false;
-                        }
-                        else if (btn == 8) { flag_settings_change(); tuning_sq_snr -= 1.0f; }
-                        else if (btn == 10) { flag_settings_change(); tuning_sq_snr += 1.0f; }
-                        else if (btn == 11) { reset_confirm_mode = true; ui.drawResetConfirm(); }
-
-                        if (menu_mode && !reset_confirm_mode) ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, "DIAG", save_text);
+                        if (menu_mode && !reset_confirm_mode) ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, "DIAG", "");
                         touch_ignore_until = time_us_32() + 300000;
                         } else if (diag_screen_active && !was_touched) {
                             // Diagnostics screen touch handling (6 buttons, 80px each)
@@ -636,9 +703,62 @@ void core1_main() {
                                 if (!reset_confirm_mode) ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width, shared_font_mode);
                                 touch_ignore_until = time_us_32() + 300000;
                             }
-                        }
+                        } else if (tuning_lab_active && !was_touched) {
+                            // Tuning Lab touch: 6 cols x 2 rows, 80px each
+                            // Row 0 (y=42..83): A- A_val A+ K- K_val K+
+                            // Row 1 (y=86..127): SQ- SQ_val SQ+ DUMP --- SAVE
+                            int local_y = ty - UI_Y_TEXT;
+                            int col = tx / 80;
+                            int row = -1;
+                            if (local_y >= 42 && local_y < 84) row = 0;
+                            else if (local_y >= 86 && local_y < 128) row = 1;
 
- else if (!menu_mode && !diag_screen_active) {
+                            if (row == 0) {
+                                if (col == 0) { flag_settings_change(); tuning_dpll_alpha -= 0.005f; if (tuning_dpll_alpha < 0.005f) tuning_dpll_alpha = 0.005f; }
+                                else if (col == 2) { flag_settings_change(); tuning_dpll_alpha += 0.005f; if (tuning_dpll_alpha > 0.200f) tuning_dpll_alpha = 0.200f; }
+                                else if (col == 3) { flag_settings_change(); tuning_lpf_k -= 0.05f; if (tuning_lpf_k < 0.3f) tuning_lpf_k = 0.3f; }
+                                else if (col == 5) { flag_settings_change(); tuning_lpf_k += 0.05f; if (tuning_lpf_k > 2.0f) tuning_lpf_k = 2.0f; }
+                            } else if (row == 1) {
+                                if (col == 0) { flag_settings_change(); tuning_sq_snr -= 1.0f; }
+                                else if (col == 2) { flag_settings_change(); tuning_sq_snr += 1.0f; }
+                                else if (col == 3) {
+                                    // DUMP toggle: enable/disable diagnostic stream
+                                    shared_serial_diag = !shared_serial_diag;
+                                }
+                                else if (col == 5) {
+                                    // SAVE settings to flash
+                                    AppSettings s;
+                                    s.magic = 0xDEADBEEF;
+                                    s.baud_idx = shared_baud_idx;
+                                    s.shift_idx = shared_shift_idx;
+                                    s.stop_idx = shared_stop_idx;
+                                    s.rtty_inv = shared_rtty_inv;
+                                    s.display_mode = display_mode;
+                                    s.exp_scale = exp_scale;
+                                    s.auto_scale = auto_scale;
+                                    s.filter_k = tuning_lpf_k;
+                                    s.sq_snr = tuning_sq_snr;
+                                    s.target_freq = shared_target_freq;
+                                    s.serial_diag = shared_serial_diag;
+                                    s.line_width = shared_line_width;
+                                    s.afc_on = shared_afc_on;
+                                    s.font_mode = shared_font_mode;
+
+                                    uint8_t page_buf[FLASH_PAGE_SIZE] = {0};
+                                    memcpy(page_buf, &s, sizeof(AppSettings));
+                                    multicore_lockout_start_blocking();
+                                    uint32_t ints = save_and_disable_interrupts();
+                                    flash_range_erase(SETTINGS_FLASH_OFFSET, FLASH_SECTOR_SIZE);
+                                    flash_range_program(SETTINGS_FLASH_OFFSET, page_buf, FLASH_PAGE_SIZE);
+                                    restore_interrupts(ints);
+                                    multicore_lockout_end_blocking();
+                                    settings_need_save = false;
+                                }
+                            }
+                            ui.drawTuningControls(tuning_dpll_alpha, tuning_lpf_k, tuning_sq_snr, shared_err_rate);
+                            touch_ignore_until = time_us_32() + 200000;
+
+ } else if (!menu_mode && !diag_screen_active && !tuning_lab_active) {
 
                         if (tx > 440) {
                             int local_y = ty - UI_Y_TEXT;
@@ -839,24 +959,6 @@ void core0_dsp_loop() {
         if (shared_rtty_inv) D = -D;
         bool d_sign = (D > 0.0f);
         
-        // Eye diagram accumulation
-        {
-            static int eye_sample = 0;
-            int spb = (int)((float)SAMPLE_RATE / baud);
-            if (spb > EYE_MAX_SPB) spb = EYE_MAX_SPB;
-            shared_eye_spb = spb;
-            int8_t dv = (int8_t)fmaxf(-127.0f, fminf(127.0f, D * 85.0f));
-            if (eye_sample < spb) {
-                shared_eye_buf[shared_eye_idx][eye_sample] = dv;
-            }
-            eye_sample++;
-            if (eye_sample >= spb) {
-                eye_sample = 0;
-                shared_eye_idx = (shared_eye_idx + 1) % EYE_TRACES;
-                shared_eye_ready = true;
-            }
-        }
-
         float phase_inc = baud / (float)SAMPLE_RATE;
         static float freq_error = 0.0f;
         float dpll_beta = tuning_dpll_alpha * tuning_dpll_alpha / 2.0f;
@@ -889,11 +991,27 @@ void core0_dsp_loop() {
             last_d_sign = d_sign;
             
             if (baudot_state > 0) {
-                symbol_phase += phase_inc + freq_error; 
-                integrate_acc += D; 
-                
+                symbol_phase += phase_inc + freq_error;
+                integrate_acc += D;
+
+                // Eye diagram: DPLL-locked accumulation (zero jitter)
+                // symbol_phase 0..1 maps to x position within one bit period
+                {
+                    int spb = (int)((float)SAMPLE_RATE / baud);
+                    if (spb > EYE_MAX_SPB) spb = EYE_MAX_SPB;
+                    shared_eye_spb = spb;
+                    int ex = (int)(symbol_phase * (float)(spb - 1));
+                    if (ex >= 0 && ex < spb) {
+                        int8_t dv = (int8_t)fmaxf(-127.0f, fminf(127.0f, D * 85.0f));
+                        shared_eye_buf[shared_eye_idx][ex] = dv;
+                    }
+                }
+
                 if (symbol_phase >= 1.0f) {
                     symbol_phase -= 1.0f;
+                    // Advance eye trace on bit boundary
+                    shared_eye_idx = (shared_eye_idx + 1) % EYE_TRACES;
+                    shared_eye_ready = true;
                     bool bit = (integrate_acc > 0.0f);
                     integrate_acc = 0.0f;
                     
@@ -959,6 +1077,7 @@ void core0_dsp_loop() {
                 shared_atc_m = atc_mark_env;
                 shared_atc_s = atc_space_env;
                 shared_dpll_phase = symbol_phase;
+                shared_dpll_ferr = freq_error;
                 shared_diag_ready = true;
                 
                 diag_adc_min = 4096.0f; diag_adc_max = 0.0f;
@@ -988,35 +1107,37 @@ int main() {
     gpio_pull_up(ENC_SW);
     sleep_ms(10);
     
-    // 100ms Debounce for Factory Reset check
+    // 100ms Debounce for calibration check
     bool pressed = true;
     for(int i=0; i<10; i++) {
         if (gpio_get(ENC_SW) != 0) { pressed = false; break; }
         sleep_ms(10);
     }
-    shared_force_cal = pressed;
-    
-    // Hardware Hard Reset (Hold for 3 seconds)
-    if (shared_force_cal) {
+    shared_force_cal = pressed; // Any press = recalibrate touch
+
+    // Hardware Hard Reset (Hold for 3 seconds) — wipes all settings too
+    if (pressed) {
+        bool held_long = true;
         gpio_init(PICO_DEFAULT_LED_PIN);
         gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
         for(int i=0; i<15; i++) {
             gpio_put(PICO_DEFAULT_LED_PIN, i%2);
             sleep_ms(200);
-            if (gpio_get(ENC_SW) != 0) { shared_force_cal = false; break; }
+            if (gpio_get(ENC_SW) != 0) { held_long = false; break; }
         }
-        if (shared_force_cal) {
-            // WIPE IT ALL
+        if (held_long) {
+            // WIPE IT ALL (cal + settings)
             multicore_lockout_start_blocking();
             uint32_t ints = save_and_disable_interrupts();
             flash_range_erase(CAL_FLASH_OFFSET, FLASH_SECTOR_SIZE);
             flash_range_erase(SETTINGS_FLASH_OFFSET, FLASH_SECTOR_SIZE);
             restore_interrupts(ints);
             multicore_lockout_end_blocking();
-            
+
             // Flash LED rapidly to confirm
             for(int i=0; i<20; i++) { gpio_put(PICO_DEFAULT_LED_PIN, i%2); sleep_ms(50); }
         }
+        // shared_force_cal stays true — Core 1 will run touch calibration
     }
     
     stdio_init_all(); sleep_ms(2000);
