@@ -242,35 +242,83 @@ public:
         ili9488_push_colors(0, UI_Y_BOTTOM, 480, 48, (uint16_t*)_spr_bottom.getBuffer()); 
     }
 
-    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float m_freq, float s_freq, bool clipping, float load0, float load1, bool squelch_open, float agc_gain, bool agc_enabled) {
-        _spr_top.fillSprite(COLOR_BG); _spr_top.drawFastHLine(0, 33, 480, COLOR_GRID);    
-        _spr_top.setTextDatum(middle_left); _spr_top.setTextColor(COLOR_TEXT, COLOR_BG); _spr_top.setFont(&fonts::Font2);
-        _spr_top.drawString("SIG", 5, 8); _spr_top.drawRect(35, 1, 95, 14, COLOR_GRID);   
-        int lw = (int)((signal_db+80)*(95/70.0f)); if(lw<0) lw=0; if(lw>95) lw=95;        
+    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float m_freq, float s_freq, bool clipping, float load0, float load1, bool squelch_open, float agc_gain, bool agc_enabled, float err_rate) {
+        _spr_top.fillSprite(COLOR_BG); _spr_top.drawFastHLine(0, 33, 480, COLOR_GRID);
+
+        // 3 thin bars on the left
+        _spr_top.setTextDatum(top_left); _spr_top.setTextColor(COLOR_TEXT, COLOR_BG); _spr_top.setFont(&fonts::Font0);
+
+        // Signal Bar
+        _spr_top.drawString("SIG", 2, 2); _spr_top.drawRect(24, 1, 95, 9, COLOR_GRID);
+        int lw = (int)((signal_db+80)*(95/70.0f)); if(lw<0) lw=0; if(lw>95) lw=95;
         uint32_t sig_color = 0x00FF00U; if (clipping) sig_color = 0x0000FFU; else if (signal_db > -30.0f) sig_color = 0xFF0000U;
-        _spr_top.fillRect(35, 1, lw, 14, sig_color);
-        _spr_top.drawString("AGC", 5, 24); _spr_top.drawRect(35, 17, 95, 14, COLOR_GRID);   
+        _spr_top.fillRect(24, 1, lw, 9, sig_color);
+
+        // AGC Bar
+        _spr_top.drawString("AGC", 2, 13); _spr_top.drawRect(24, 12, 95, 9, COLOR_GRID);
         if (agc_enabled) {
             float gain_db = 20.0f * log10f(agc_gain + 1e-5f);
             int gw = (int)((gain_db)*(95/46.0f)); if(gw<0) gw=0; if(gw>95) gw=95;
-            _spr_top.fillRect(35, 17, gw, 14, 0x00FFFFU);
+            _spr_top.fillRect(24, 12, gw, 9, 0x00FFFFU);
         } else {
-            _spr_top.setTextColor(0x777777U, COLOR_BG); _spr_top.drawString("OFF", 40, 24); _spr_top.setTextColor(COLOR_TEXT, COLOR_BG);
+            _spr_top.setTextColor(0x777777U, COLOR_BG); _spr_top.drawString("OFF", 27, 13); _spr_top.setTextColor(COLOR_TEXT, COLOR_BG);
         }
+
+        // Error Rate Bar
+        _spr_top.drawString("ERR", 2, 24); _spr_top.drawRect(24, 23, 95, 9, COLOR_GRID);
+        if (err_rate >= 0) {
+            int ew = (int)(err_rate * (95 / 15.0f)); // Max 15% on the bar
+            if (ew > 95) ew = 95;
+            uint32_t err_color = (err_rate > 5.0f) ? 0x0000FFU : 0x00FFFFU; // RED if bad, YELLOW if ok (BGR format)
+            _spr_top.fillRect(24, 23, ew, 9, err_color);
+        }
+
+        // Restore Font2 and middle_left for remaining text
+        _spr_top.setTextDatum(middle_left); _spr_top.setFont(&fonts::Font2);
         char buf[64];
-        _spr_top.setTextColor(0x00FFFFU, COLOR_BG); 
-        snprintf(buf, sizeof(buf), "%3.0fdB", signal_db); _spr_top.drawString(buf, 135, 8);
-        snprintf(buf, sizeof(buf), "M:%.0f S:%.0f", m_freq, s_freq); _spr_top.drawString(buf, 185, 8);
-        if (squelch_open) { _spr_top.setTextColor(0x00FF00U, COLOR_BG); _spr_top.drawString("RTTY: SYNC", 200, 24); }
-        else { _spr_top.setTextColor(0x777777U, COLOR_BG); _spr_top.drawString("RTTY: WAIT", 200, 24); }
-        _spr_top.setTextColor(0x00FF00U, COLOR_BG); snprintf(buf, sizeof(buf), "SNR:%2.0fdB", snr_db); _spr_top.drawString(buf, 135, 24);
-        _spr_top.setTextDatum(middle_right); _spr_top.setTextColor(0x00FFFFU, COLOR_BG);  
+
+        _spr_top.setTextColor(0x00FFFFU, COLOR_BG);
+        snprintf(buf, sizeof(buf), "%3.0fdB", signal_db); _spr_top.drawString(buf, 125, 8);
+
+        // Status text
+        if (squelch_open) { _spr_top.setTextColor(0x00FF00U, COLOR_BG); _spr_top.drawString("RTTY: SYNC", 125, 24); }
+        else { _spr_top.setTextColor(0x777777U, COLOR_BG); _spr_top.drawString("RTTY: WAIT", 125, 24); }
+
+        _spr_top.setTextColor(0x00FF00U, COLOR_BG); snprintf(buf, sizeof(buf), "SNR:%2.0fdB", snr_db); _spr_top.drawString(buf, 235, 8);
+
+        if (err_rate >= 0) {
+            uint32_t err_color = (err_rate > 5.0f) ? 0x0000FFU : 0x00FFFFU;
+            snprintf(buf, sizeof(buf), "ERR:%.1f%%", err_rate);
+            _spr_top.setTextColor(err_color, COLOR_BG);
+            _spr_top.drawString(buf, 235, 24);
+        }
+
+        _spr_top.setTextDatum(middle_right); _spr_top.setTextColor(0x00FFFFU, COLOR_BG);
         snprintf(buf, sizeof(buf), "B:%d F:%lu C0:%.0f%% C1:%.0f%%", BUILD_NUMBER, fps, load0, load1);
         _spr_top.drawString(buf, 475, 24);
         ili9488_push_colors(0, UI_Y_TOP, 480, UI_TOP_BAR_H, (uint16_t*)_spr_top.getBuffer());
     }
+    void drawFreqPopup(float m_freq, float s_freq) {
+        LGFX_Sprite popup(_tft);
+        popup.setColorDepth(16);
+        popup.createSprite(200, 60);
+        popup.fillSprite(0x333333U); // Dark grey
+        popup.drawRect(0, 0, 200, 60, 0xFFFFFFU);
+        popup.setTextColor(0xFFFFFFU, 0x333333U);
+        popup.setTextDatum(middle_center);
+        popup.setFont(&fonts::Font2);
+        char buf[64];
+        snprintf(buf, sizeof(buf), "MARK: %.0f Hz", m_freq);
+        popup.drawString(buf, 100, 20);
+        snprintf(buf, sizeof(buf), "SPACE: %.0f Hz", s_freq);
+        popup.drawString(buf, 100, 40);
+        ili9488_push_colors(140, UI_Y_TEXT + 10, 200, 60, (uint16_t*)popup.getBuffer());
+        popup.deleteSprite();
+    }
 
-    void drawDiagScreen(float adc_v, bool serial_diag_on, int line_width, int font_mode) {
+    void restoreTextZone() {
+        ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
+    }    void drawDiagScreen(float adc_v, bool serial_diag_on, int line_width, int font_mode) {
         _spr_text.fillSprite(COLOR_BG);
         _spr_text.drawFastHLine(0, 111, 480, COLOR_GRID);
         _spr_text.setTextDatum(top_left); _spr_text.setFont(&fonts::Font2);

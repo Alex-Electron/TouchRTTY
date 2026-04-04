@@ -2,7 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Build 189] - 2026-04-02
+## [Build 189] - 2026-04-04
+### Added
+- **Error Rate Indicator:** Added real-time error percentage and visual progress bar (yellow/red based on BGR threshold) to the top status bar.
+- **Frequency Popup:** Active frequency details (MARK/SPACE) now appear as a temporary floating popup when dragging the tuning marker, keeping the top bar clean.
+- **Error Rate Window:** Bounded error tracking window (resizes after 50 symbols) for highly responsive signal quality monitoring.
+- **Stacked Status Bars:** Reorganized the top-left UI to vertically stack thin progress bars for SIG, AGC, and ERR for a cleaner layout.
+
+### Fixed
+- **Factory Reset Deadlock:** Resolved a critical boot loop when pressing the encoder button on startup by removing an incorrect early `multicore_lockout_start_blocking()` call.
+- **Color Format Quirk:** Adjusted status bar warning colors to account for LovyanGFX's BGR byte order with the ILI9488 display driver.
+- **Popup Overwrite Bug:** Prevented incoming RTTY characters from writing to the screen while the Factory Reset confirmation dialog is active.
+
 ### Optimized
 - **Hardware FPU Acceleration:** Enforced strict `float` policy across all DSP code (Core 0).
 - **Fast Math Migration:** Replaced all double-precision functions/constants with single-precision `float` variants (`sinf`, `cosf`, `sqrtf`, etc.).
@@ -10,7 +21,7 @@ All notable changes to this project will be documented in this file.
 - **Compilation Flags:** Optimized `-O3`, `-ffast-math`, and `-funroll-loops` verified in CMake.
 
 ### Status
-- **Release Candidate 2 (RC2)** - Highly optimized DSP core.
+- **Release Candidate 3 (RC3)** - Stable release prioritizing robust touch UI handling and precision DSP monitoring.
 
 ## [Build 188] - 2026-04-02
 ### Added

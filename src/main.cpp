@@ -116,6 +116,8 @@ volatile float shared_mag_s[480];
 volatile char rtty_new_char = 0;
 volatile bool rtty_char_ready = false;
 volatile bool shared_err_flag = false;
+volatile uint32_t shared_err_count = 0;
+volatile uint32_t shared_total_count = 0;
 volatile bool shared_figs_flag = false;
 volatile bool shared_ltrs_flag = false;
 
@@ -305,6 +307,8 @@ void core1_main() {
 
     uint32_t c1_total_work = 0;
     uint32_t c1_last_measure = time_us_32();
+    uint32_t freq_popup_timer = 0;
+    bool freq_popup_active = false;
 
     while (true) {
         uint32_t loop_start = time_us_32();
@@ -312,7 +316,7 @@ void core1_main() {
 
         if (rtty_char_ready) {
             char c = rtty_new_char;
-            ui.addRTTYChar(c, !diag_screen_active && !menu_mode);
+            ui.addRTTYChar(c, !diag_screen_active && !menu_mode && !reset_confirm_mode);
             rtty_char_ready = false;
             // Only output to Serial if diagnostics are OFF
             if (!shared_serial_diag) printf("%c", c);
@@ -359,7 +363,9 @@ void core1_main() {
                 ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width, shared_font_mode);
             }
             
-            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open, shared_agc_gain, shared_agc_enabled);
+            float err_rate = -1.0f;
+            if (shared_total_count > 0) err_rate = (shared_err_count * 100.0f) / shared_total_count;
+            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open, shared_agc_gain, shared_agc_enabled, err_rate);
         }
         
         if (new_data_ready) {
@@ -514,6 +520,11 @@ void core1_main() {
                 if (ty >= UI_Y_MARKER && ty <= (UI_Y_DSP + UI_DSP_ZONE_H)) {
                     flag_settings_change(); shared_target_freq = (bin_start + (tx / 480.0f) * (bin_end - bin_start)) * (SAMPLE_RATE / (float)FFT_SIZE);
                     shared_actual_freq = shared_target_freq; // SNAP INSTANTLY
+                    freq_popup_active = true;
+                    freq_popup_timer = time_us_32();
+                    float m_freq = shared_actual_freq - shifts[shared_shift_idx]/2.0f;
+                    float s_freq = shared_actual_freq + shifts[shared_shift_idx]/2.0f;
+                    ui.drawFreqPopup(m_freq, s_freq);
                 }
                 else if (ty > UI_Y_BOTTOM && !was_touched) {
                     int btn_idx = tx / 68; // 480 / 7 approx 68
@@ -654,6 +665,19 @@ void core1_main() {
             was_touched = is_touched; last_touch = loop_start;
         }
         
+        if (freq_popup_active && (time_us_32() - freq_popup_timer > 3000000)) {
+            freq_popup_active = false;
+            if (!menu_mode && !diag_screen_active && !reset_confirm_mode) {
+                ui.restoreTextZone();
+            } else if (menu_mode && !reset_confirm_mode) {
+                ui.drawMenu(auto_scale, exp_scale, display_mode, tuning_lpf_k, tuning_sq_snr, "DIAG", "SAVE");
+            } else if (diag_screen_active && !reset_confirm_mode) {
+                ui.drawDiagScreen(shared_adc_v, shared_serial_diag, shared_line_width, shared_font_mode);
+            } else if (reset_confirm_mode) {
+                ui.drawResetConfirm();
+            }
+        }
+        
         uint32_t loop_end = time_us_32();
         c1_total_work += (loop_end - loop_start);
         if (loop_start - c1_last_measure >= 500000) {
@@ -762,6 +786,8 @@ void core0_dsp_loop() {
             atc_space_env = 0.01f;
             shared_squelch_open = false;
             last_d_sign = true;
+            shared_err_count = 0;
+            shared_total_count = 0;
         }
 
         uint32_t st = time_us_32();
@@ -898,8 +924,17 @@ void core0_dsp_loop() {
                                     rtty_char_ready = true;
                                 }
                             }
+                            shared_total_count++;
                         } else {
                             shared_err_flag = true; 
+                            shared_err_count++;
+                            shared_total_count++;
+                        }
+                        
+                        // Limit the window so error rate responds quickly
+                        if (shared_total_count > 50) {
+                            shared_total_count /= 2;
+                            shared_err_count /= 2;
                         }
                         
                         if (stop_bits_expected <= 1.0f && !d_sign) {
