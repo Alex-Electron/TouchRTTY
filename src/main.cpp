@@ -580,31 +580,61 @@ void core1_main() {
                 float global_best_score = -200.0f;
                 int global_best_lo = -1, global_best_hi = -1;
                 int best_shift_idx = -1;
-                // Which shifts to try
-                int s_start = 0, s_end = NUM_SHIFTS;
-                if (shared_shift_idx < NUM_SHIFTS) { s_start = shared_shift_idx; s_end = shared_shift_idx + 1; }
-                for (int si = s_start; si < s_end; si++) {
-                    int shift_bins = (int)(g_shifts[si] * FFT_SIZE / SAMPLE_RATE);
-                    for (int lo = 5; lo < FFT_SIZE/2 - shift_bins - tolerance; lo++) {
-                        float lo_mag = smooth_mag[lo];
-                        float lo_snr = lo_mag - noise_avg;
-                        if (lo_snr < min_snr) continue;
-                        if (lo > 0 && smooth_mag[lo-1] > lo_mag) continue;
-                        if (lo < FFT_SIZE/2-1 && smooth_mag[lo+1] > lo_mag) continue;
-                        for (int d = -tolerance; d <= tolerance; d++) {
-                            int hi = lo + shift_bins + d;
-                            if (hi < 1 || hi >= FFT_SIZE/2) continue;
-                            float hi_mag = smooth_mag[hi];
-                            float hi_snr = hi_mag - noise_avg;
-                            if (hi_snr < min_snr) continue;
-                            float imbalance = fabsf(lo_mag - hi_mag);
-                            if (imbalance > max_imbalance) continue;
-                            float score = lo_snr + hi_snr - imbalance * 0.5f;
-                            if (score > global_best_score) {
-                                global_best_score = score;
-                                global_best_lo = lo;
-                                global_best_hi = hi;
-                                best_shift_idx = si;
+                // Search helper lambda
+                auto search_shifts = [&](const int* idxs, int count) {
+                    for (int j = 0; j < count; j++) {
+                        int si = idxs[j];
+                        int shift_bins = (int)(g_shifts[si] * FFT_SIZE / SAMPLE_RATE);
+                        for (int lo = 5; lo < FFT_SIZE/2 - shift_bins - tolerance; lo++) {
+                            float lo_mag = smooth_mag[lo];
+                            float lo_snr = lo_mag - noise_avg;
+                            if (lo_snr < min_snr) continue;
+                            if (lo > 0 && smooth_mag[lo-1] > lo_mag) continue;
+                            if (lo < FFT_SIZE/2-1 && smooth_mag[lo+1] > lo_mag) continue;
+                            for (int d = -tolerance; d <= tolerance; d++) {
+                                int hi = lo + shift_bins + d;
+                                if (hi < 1 || hi >= FFT_SIZE/2) continue;
+                                float hi_mag = smooth_mag[hi];
+                                float hi_snr = hi_mag - noise_avg;
+                                if (hi_snr < min_snr) continue;
+                                float imbalance = fabsf(lo_mag - hi_mag);
+                                if (imbalance > max_imbalance) continue;
+                                float score = lo_snr + hi_snr - imbalance * 0.5f;
+                                if (score > global_best_score) {
+                                    global_best_score = score;
+                                    global_best_lo = lo;
+                                    global_best_hi = hi;
+                                    best_shift_idx = si;
+                                }
+                            }
+                        }
+                    }
+                };
+                if (shared_shift_idx < NUM_SHIFTS) {
+                    int single[] = {shared_shift_idx};
+                    search_shifts(single, 1);
+                } else {
+                    // AUTO: search all shifts, then prefer priority if scores are close
+                    int all[] = {0,1,2,3,4,5,6,7};
+                    search_shifts(all, NUM_SHIFTS);
+                    // Tie-breaker: if a priority shift (170/450/850) scored within 2dB of best, use it
+                    if (global_best_score > 10.0f && best_shift_idx >= 0) {
+                        bool is_priority = (g_shifts[best_shift_idx] == 170.0f || g_shifts[best_shift_idx] == 450.0f || g_shifts[best_shift_idx] == 850.0f);
+                        if (!is_priority) {
+                            // Re-scan only priority shifts to see if one is close
+                            float saved_score = global_best_score;
+                            int saved_lo = global_best_lo, saved_hi = global_best_hi, saved_si = best_shift_idx;
+                            global_best_score = -200.0f;
+                            const int prio[] = {1, 5, 7};
+                            search_shifts(prio, 3);
+                            if (global_best_score >= saved_score - 2.0f) {
+                                // Priority shift is close enough — keep it
+                            } else {
+                                // Non-priority was clearly better — restore
+                                global_best_score = saved_score;
+                                global_best_lo = saved_lo;
+                                global_best_hi = saved_hi;
+                                best_shift_idx = saved_si;
                             }
                         }
                     }
