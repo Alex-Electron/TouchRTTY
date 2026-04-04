@@ -873,6 +873,12 @@ void core0_dsp_loop() {
     int err_idx = 0, err_sum = 0;
     float freq_error = 0.0f;
 
+    // Auto-inversion detection
+    uint32_t auto_inv_check_time = 0;  // when to check next
+    uint32_t auto_inv_high_err_since = 0; // when high ERR started
+    bool auto_inv_trying = false;      // currently testing inverted
+    bool auto_inv_prev_inv = false;    // previous inversion state
+
     const float shifts_hz[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
     const float bauds[] = {45.45f, 50.0f, 75.0f};
 
@@ -1059,7 +1065,40 @@ void core0_dsp_loop() {
                             err_idx = (err_idx + 1) % 100;
                         }
                         shared_err_rate = (float)err_sum;
-                        
+
+                        // Auto-inversion: if ERR > 40% for 3 sec with open squelch, try flipping
+                        {
+                            uint32_t now = time_us_32();
+                            if (shared_squelch_open && shared_err_rate > 40.0f) {
+                                if (auto_inv_high_err_since == 0) auto_inv_high_err_since = now;
+                                else if (!auto_inv_trying && (now - auto_inv_high_err_since > 3000000)) {
+                                    // High ERR for 3 sec — try inversion
+                                    auto_inv_prev_inv = shared_rtty_inv;
+                                    shared_rtty_inv = !shared_rtty_inv;
+                                    auto_inv_trying = true;
+                                    auto_inv_check_time = now + 3000000; // measure for 3 sec
+                                    memset(err_hist, 0, sizeof(err_hist));
+                                    err_idx = 0; err_sum = 0;
+                                    shared_err_rate = 0.0f;
+                                }
+                            } else if (!auto_inv_trying) {
+                                auto_inv_high_err_since = 0; // reset timer
+                            }
+
+                            if (auto_inv_trying && now > auto_inv_check_time) {
+                                if (shared_err_rate > 35.0f) {
+                                    // Still bad — revert
+                                    shared_rtty_inv = auto_inv_prev_inv;
+                                }
+                                // Either helped or reverted — done
+                                auto_inv_trying = false;
+                                auto_inv_high_err_since = 0;
+                                memset(err_hist, 0, sizeof(err_hist));
+                                err_idx = 0; err_sum = 0;
+                                shared_err_rate = 0.0f;
+                            }
+                        }
+
                         if (stop_bits_expected <= 1.0f && !d_sign) {
                             baudot_state = 1;
                             symbol_phase = 0.0f; 
