@@ -150,6 +150,8 @@ volatile float shared_agc_gain = 1.0f;
 volatile bool shared_agc_enabled = true;
 volatile bool shared_serial_diag = false; // Toggle via Diagnostic Screen or serial command
 volatile bool shared_save_request = false; // Save settings from serial command
+volatile bool shared_search_request = false; // Signal search requested by SEARCH button
+volatile int shared_search_state = 0; // 0=idle, 1=searching, 2=found, 3=not found
 
 void handle_serial_commands() {
     static char cmd_buf[64];
@@ -217,6 +219,12 @@ void handle_serial_commands() {
                 else if (strcmp(cmd_buf, "AGC OFF") == 0)  { shared_agc_enabled = false; printf(">> AGC OFF\n"); }
                 else if (strcmp(cmd_buf, "SCALE EXP") == 0) { shared_exp_scale = true;  printf(">> SCALE EXP\n"); }
                 else if (strcmp(cmd_buf, "SCALE LIN") == 0) { shared_exp_scale = false; printf(">> SCALE LIN\n"); }
+                else if (strncmp(cmd_buf, "WIDTH ", 6) == 0) {
+                    int ival = atoi(cmd_buf + 6);
+                    if (ival >= 30 && ival <= 120) { shared_line_width = ival; printf(">> WIDTH=%d\n", ival); }
+                    else printf(">> ERR: WIDTH 30-120\n");
+                }
+                else if (strcmp(cmd_buf, "SEARCH") == 0) { shared_search_request = true; shared_search_state = 1; printf(">> SEARCHING...\n"); }
                 else if (strcmp(cmd_buf, "HELP") == 0) {
                     printf("\n=== COMMANDS (B%d) ===\n", BUILD_NUMBER);
                     printf("--- Tuning ---\n");
@@ -233,7 +241,9 @@ void handle_serial_commands() {
                     printf("AFC ON|OFF           Auto frequency\n");
                     printf("AGC ON|OFF           Auto gain\n");
                     printf("SCALE EXP|LIN        Waterfall scale\n");
+                    printf("WIDTH <30-120>       Text line width\n");
                     printf("DIAG ON|OFF          Diagnostic stream\n");
+                    printf("SEARCH               Find RTTY signal\n");
                     printf("STATUS               All parameters\n");
                     printf("SAVE                 Save to flash\n");
                     printf("CLEAR                Reset DSP state\n");
@@ -360,7 +370,7 @@ void core1_main() {
     const float shifts[] = {170.0f, 200.0f, 425.0f, 450.0f, 850.0f};
     const float stop_bits[] = {1.0f, 1.5f, 2.0f};
     
-    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_rtty_inv, shared_afc_on, menu_mode);
+    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_afc_on, menu_mode, shared_search_state);
 
     LGFX_Sprite spectrum(&tft); spectrum.setColorDepth(16); spectrum.createSprite(480, UI_DSP_ZONE_H);
     LGFX_Sprite marker_spr(&tft); marker_spr.setColorDepth(16); marker_spr.createSprite(480, UI_MARKER_H);
@@ -376,6 +386,7 @@ void core1_main() {
     static SimpleFFT fft; static float real[FFT_SIZE], imag[FFT_SIZE], mag[FFT_SIZE/2];
 
     uint32_t c1_total_work = 0;
+    uint32_t search_result_time = 0;
     uint32_t c1_last_measure = time_us_32();
 
     while (true) {
@@ -450,8 +461,8 @@ void core1_main() {
         tune_x = (int)((bin_idx - bin_start) / bin_per_pixel);
         tune_x = std::clamp((int)tune_x, 10, 470);
 
-        if (loop_start - last_ui_update > 500000) {
-            uint32_t fps = frame_count * 2; frame_count = 0; last_ui_update = loop_start;
+        if (loop_start - last_ui_update > 200000) {
+            uint32_t fps = frame_count * 5; frame_count = 0; last_ui_update = loop_start;
             float m_freq = shared_actual_freq - shifts[shared_shift_idx]/2.0f;
             float s_freq = shared_actual_freq + shifts[shared_shift_idx]/2.0f;
             bool is_clipping = shared_adc_clipping; shared_adc_clipping = false; 
@@ -462,7 +473,17 @@ void core1_main() {
                 ui.drawDiagScreen(shared_adc_v, shared_font_mode);
             }
             
-            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open, shared_agc_gain, shared_agc_enabled, shared_err_rate);
+            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open, shared_agc_gain, shared_agc_enabled, shared_err_rate, shared_rtty_inv);
+            // Auto-clear search result after 2 seconds + redraw bottom bar on state change
+            static int prev_search_state = 0;
+            if (shared_search_state >= 2 && search_result_time > 0 && (loop_start - search_result_time > 2000000)) {
+                shared_search_state = 0;
+            }
+            if (shared_search_state != prev_search_state) {
+                prev_search_state = shared_search_state;
+                if (!tuning_lab_active && !diag_screen_active)
+                    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_afc_on, menu_mode, shared_search_state);
+            }
         }
         
         if (new_data_ready) {
@@ -522,7 +543,65 @@ void core1_main() {
             frame_count++;
 
             for (int i = 0; i < FFT_SIZE / 2; i++) smooth_mag[i] = smooth_mag[i] * 0.7f + mag[i] * 0.3f;
-            
+
+            // --- Signal Search: find two peaks separated by current shift ---
+            if (shared_search_request) {
+                shared_search_request = false;
+                float target_shift = shifts[shared_shift_idx];
+                int shift_bins = (int)(target_shift * FFT_SIZE / SAMPLE_RATE);
+                int tolerance = 3; // +/- 3 bins tolerance
+                float best_score = -200.0f;
+                int best_lo_bin = -1, best_hi_bin = -1;
+                // Average noise floor
+                float noise_sum = 0.0f;
+                for (int i = 1; i < FFT_SIZE/2; i++) noise_sum += smooth_mag[i];
+                float noise_avg = noise_sum / (FFT_SIZE/2 - 1);
+                float min_snr = 4.0f; // minimum dB above noise for each peak
+                float max_imbalance = 10.0f; // max dB difference between Mark and Space
+                // Scan all possible low-frequency peak positions
+                for (int lo = 5; lo < FFT_SIZE/2 - shift_bins - tolerance; lo++) {
+                    float lo_mag = smooth_mag[lo];
+                    float lo_snr = lo_mag - noise_avg;
+                    if (lo_snr < min_snr) continue;
+                    // Must be a local maximum (peak, not slope)
+                    if (lo > 0 && smooth_mag[lo-1] > lo_mag) continue;
+                    if (lo < FFT_SIZE/2-1 && smooth_mag[lo+1] > lo_mag) continue;
+                    // Check for matching high peak at lo + shift_bins +/- tolerance
+                    for (int d = -tolerance; d <= tolerance; d++) {
+                        int hi = lo + shift_bins + d;
+                        if (hi < 1 || hi >= FFT_SIZE/2) continue;
+                        float hi_mag = smooth_mag[hi];
+                        float hi_snr = hi_mag - noise_avg;
+                        if (hi_snr < min_snr) continue;
+                        // Balance check: both peaks must be similar amplitude
+                        float imbalance = fabsf(lo_mag - hi_mag);
+                        if (imbalance > max_imbalance) continue;
+                        // Score: sum of SNRs, penalize imbalance
+                        float score = lo_snr + hi_snr - imbalance * 0.5f;
+                        if (score > best_score) {
+                            best_score = score;
+                            best_lo_bin = lo;
+                            best_hi_bin = hi;
+                        }
+                    }
+                }
+                if (best_lo_bin >= 0 && best_score > 10.0f) {
+                    // Found! Set center frequency
+                    float lo_freq = best_lo_bin * SAMPLE_RATE / (float)FFT_SIZE;
+                    float hi_freq = best_hi_bin * SAMPLE_RATE / (float)FFT_SIZE;
+                    float new_center = (lo_freq + hi_freq) / 2.0f;
+                    shared_target_freq = new_center;
+                    shared_actual_freq = new_center;
+                    shared_search_state = 2; // found
+                    flag_settings_change();
+                    printf(">> SEARCH: found pair at %.0f/%.0f Hz, center=%.0f\n", lo_freq, hi_freq, new_center);
+                } else {
+                    shared_search_state = 3; // not found
+                    printf(">> SEARCH: no RTTY signal found (best_score=%.1f)\n", best_score);
+                }
+                search_result_time = time_us_32();
+            }
+
             if (auto_scale) {
                 float peak_db = -100.0f;
                 for (int x = 0; x < 480; x++) {
@@ -626,7 +705,7 @@ void core1_main() {
                     int btn_idx = tx / 68; // 480 / 7 approx 68
                     if (btn_idx == 0) { flag_settings_change(); shared_baud_idx = (shared_baud_idx + 1) % 3; }
                     else if (btn_idx == 1) { flag_settings_change(); shared_shift_idx = (shared_shift_idx + 1) % 5; }
-                    else if (btn_idx == 2) { flag_settings_change(); shared_rtty_inv = !shared_rtty_inv; }
+                    else if (btn_idx == 2) { shared_search_request = true; shared_search_state = 1; }
                     else if (btn_idx == 3) { flag_settings_change(); shared_afc_on = !shared_afc_on; }
                     else if (btn_idx == 4) { flag_settings_change(); shared_stop_idx = (shared_stop_idx + 1) % 3; }
                     else if (btn_idx == 5) { ui.clearRTTY(); shared_clear_dsp = true; }
@@ -645,7 +724,7 @@ void core1_main() {
                     }
                     
                     if (!menu_mode) reset_confirm_mode = false;
-                    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_rtty_inv, shared_afc_on, menu_mode);
+                    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_afc_on, menu_mode, shared_search_state);
                     if (menu_mode) ui.drawMenu(auto_scale, display_mode, "DIAG");
                     touch_ignore_until = time_us_32() + 300000;
                 }
@@ -687,7 +766,7 @@ void core1_main() {
                             if (local_y > 111) {
                                 if (tx < 240) { // FONT toggle: BIG→MED→SMALL→TINY
                                     shared_font_mode = (shared_font_mode + 1) % 4;
-                                    const int widths[] = {55, 62, 73, 120};
+                                    const int widths[] = {55, 62, 73, 90}; // BIG:8px, MED:7px, SMALL:6px, TINY:5px
                                     shared_line_width = widths[shared_font_mode];
                                     flag_settings_change();
                                 } else { // RST
