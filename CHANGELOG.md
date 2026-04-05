@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Build 206] - 2026-04-05
+### Added
+- **Baud rate auto-detection**: symbol duration histogram approach (like PhosphorRTTY)
+  - Accumulates D-sign transitions for 3 seconds, builds interval histogram
+  - Scores each candidate baud (45.45/50/75/100) by matching peaks at multiples of bit_period
+  - Weighted scoring: distance decay + harmonic multiplier
+  - Clear winner (>1.5× second best): apply immediately
+  - Ambiguous: sequential ERR verification (2s per baud)
+- **100 Baud support**: new baud rate for NAVTEX/SITOR
+  - Baud popup: 3×2 grid (45/50/75/100/AUTO)
+  - Serial command: `BAUD 0-3` (manual) or `BAUD 4`/`BAUD AUTO`
+  - `shared_baud_idx`: 0=45, 1=50, 2=75, 3=100, 4=AUTO
+- **BD indicator in top bar** (Row 3, under shift): BD:45 (cyan), BD:50(A) (green auto), BD:.. (yellow detecting)
+- **100 Baud in test generator** (`tools/rtty_simulator.html`)
+
+### Fixed
+- **SEARCH not finding 450Hz meteo signal**: was only scanning manual shift; now always scans ALL 8 shifts
+- **SEARCH breaking manual settings**: was forcing all params to AUTO; now only triggers auto-detect for params already in AUTO mode
+- **SEARCH always applies detected shift**: switches shift_idx to AUTO after applying found shift
+
 ## [Build 205] - 2026-04-05
 ### Added
 - **Stop-bit popup**: 2×2 touch grid (1.0 / 1.5 / 2.0 / AUTO) with blue AUTO highlight

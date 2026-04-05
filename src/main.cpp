@@ -165,6 +165,12 @@ volatile float shared_active_stop = 1.5f;  // actual stop bits in use
 volatile bool shared_stop_detect_req = false; // request auto stop-bit detection
 volatile int shared_stop_detect_state = 0;  // 0=idle, 1=testing, 2=done
 
+// Baud auto-detection
+volatile bool shared_baud_auto = false;     // true = auto baud detection mode
+volatile bool shared_baud_detect_req = false; // request auto baud detection
+volatile int shared_baud_detect_state = 0;  // 0=idle, 1=histogram, 2=verify, 3=done
+volatile float shared_active_baud = 45.45f; // actual baud in use (for AUTO mode)
+
 void handle_serial_commands() {
     static char cmd_buf[64];
     static int cmd_ptr = 0;
@@ -199,9 +205,15 @@ void handle_serial_commands() {
                 else if (sscanf(cmd_buf, "SQ %f", &val) == 1) {
                     tuning_sq_snr = val; printf(">> SQ=%.1f\n", val);
                 }
+                else if (strcmp(cmd_buf, "BAUD AUTO") == 0) {
+                    shared_baud_idx = 4; shared_baud_auto = true;
+                    shared_baud_detect_req = true; shared_baud_detect_state = 1;
+                    printf(">> BAUD=AUTO (detecting...)\n");
+                }
                 else if (sscanf(cmd_buf, "BAUD %d", &ival) == 1) {
-                    if (ival >= 0 && ival <= 2) { shared_baud_idx = ival; printf(">> BAUD=%d\n", ival); }
-                    else printf(">> ERR: BAUD 0-2 (45/50/75)\n");
+                    if (ival >= 0 && ival <= 3) { shared_baud_idx = ival; shared_baud_auto = false; printf(">> BAUD=%d\n", ival); }
+                    else if (ival == 4) { shared_baud_idx = 4; shared_baud_auto = true; shared_baud_detect_req = true; shared_baud_detect_state = 1; printf(">> BAUD=AUTO\n"); }
+                    else printf(">> ERR: BAUD 0-4 (45/50/75/100/AUTO)\n");
                 }
                 else if (strcmp(cmd_buf, "SHIFT AUTO") == 0) {
                     shared_shift_idx = NUM_SHIFTS; printf(">> SHIFT=AUTO\n");
@@ -226,18 +238,20 @@ void handle_serial_commands() {
                 else if (strcmp(cmd_buf, "CLEAR") == 0)    { shared_clear_dsp = true; printf(">> CLEAR\n"); }
                 else if (strcmp(cmd_buf, "SAVE") == 0)     { shared_save_request = true; printf(">> SAVE REQUESTED\n"); }
                 else if (strcmp(cmd_buf, "STATUS") == 0) {
-                    const int bauds_t[] = {45, 50, 75};
+                    const int bauds_t[] = {45, 50, 75, 100};
                     printf("\n=== STATUS (B%d) ===\n", BUILD_NUMBER);
                     printf("ALPHA=%.4f BW=%.2f SQ=%.1f\n", (double)tuning_dpll_alpha, (double)tuning_lpf_k, (double)tuning_sq_snr);
                     const char* inv_str = shared_inv_auto ? (shared_rtty_inv ? "AUTO(INV)" : "AUTO(NOR)") : (shared_rtty_inv ? "INV" : "NOR");
+                    const char* baud_str_s = shared_baud_auto ? "AUTO" : "";
+                    int baud_val = shared_baud_auto ? (int)shared_active_baud : bauds_t[shared_baud_idx];
                     if (shared_shift_idx < NUM_SHIFTS)
-                        printf("BAUD=%d(%d) SHIFT=%d(%d) INV=%s AFC=%s\n",
-                            shared_baud_idx, bauds_t[shared_baud_idx],
+                        printf("BAUD=%s%d SHIFT=%d(%d) INV=%s AFC=%s\n",
+                            baud_str_s, baud_val,
                             shared_shift_idx, g_shifts_int[shared_shift_idx],
                             inv_str, shared_afc_on ? "ON" : "OFF");
                     else
-                        printf("BAUD=%d(%d) SHIFT=AUTO INV=%s AFC=%s\n",
-                            shared_baud_idx, bauds_t[shared_baud_idx],
+                        printf("BAUD=%s%d SHIFT=AUTO INV=%s AFC=%s\n",
+                            baud_str_s, baud_val,
                             inv_str, shared_afc_on ? "ON" : "OFF");
                     printf("FREQ=%.1f SNR=%.1f SIG=%.1f AGC=%.2f\n",
                         (double)shared_actual_freq, (double)shared_snr_db,
@@ -277,7 +291,7 @@ void handle_serial_commands() {
                     printf("SQ <dB>              Squelch SNR threshold\n");
                     printf("FREQ <Hz>            Center frequency\n");
                     printf("--- Protocol ---\n");
-                    printf("BAUD <0-2>           0=45 1=50 2=75\n");
+                    printf("BAUD <0-4>|AUTO      0=45 1=50 2=75 3=100 4/AUTO=auto\n");
                     printf("SHIFT <0-8>          85/170/200/340/425/450/500/850/AUTO\n");
                     printf("STOP <0-2>|AUTO      1.0/1.5/2.0/AUTO bits\n");
                     printf("INV AUTO|NOR|INV     Inversion: auto/manual\n");
@@ -385,12 +399,14 @@ void core1_main() {
     bool reset_confirm_mode = false;
     bool shift_popup_active = false;
     bool stop_popup_active = false;
+    bool baud_popup_active = false;
     uint32_t saved_text_timer = 0;
     
     AppSettings loaded_set;
     memcpy(&loaded_set, flash_settings_contents, sizeof(AppSettings));
     if (loaded_set.magic == 0xDEADBEEF) {
-        shared_baud_idx = loaded_set.baud_idx;
+        shared_baud_idx = (loaded_set.baud_idx >= 0 && loaded_set.baud_idx <= 4) ? loaded_set.baud_idx : 0;
+        shared_baud_auto = (shared_baud_idx == 4);
         shared_shift_idx = (loaded_set.shift_idx >= 0 && loaded_set.shift_idx <= NUM_SHIFTS) ? loaded_set.shift_idx : 1; // default 170Hz
         shared_stop_idx = loaded_set.stop_idx;
         shared_rtty_inv = loaded_set.rtty_inv;
@@ -409,7 +425,7 @@ void core1_main() {
             tuning_dpll_alpha = loaded_set.dpll_alpha;
     }
     
-    const float bauds[] = {45.45f, 50.0f, 75.0f};
+    const float bauds[] = {45.45f, 50.0f, 75.0f, 100.0f};
     const float stop_bits[] = {1.0f, 1.5f, 2.0f};
     // Active shift: from g_shifts[idx] or auto-detected
     auto get_shift = []() -> float {
@@ -420,8 +436,12 @@ void core1_main() {
         if (shared_stop_idx < 3) { shared_active_stop = stop_bits[shared_stop_idx]; return shared_active_stop; }
         return shared_active_stop; // AUTO — use last detected
     };
-    
-    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, get_stop(), shared_afc_on, menu_mode, shared_search_state, shared_stop_auto);
+    auto get_baud = [&]() -> float {
+        if (shared_baud_idx < 4) { shared_active_baud = bauds[shared_baud_idx]; return shared_active_baud; }
+        return shared_active_baud; // AUTO — use last detected
+    };
+
+    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, get_stop(), shared_afc_on, menu_mode, shared_search_state, shared_stop_auto, shared_baud_auto);
 
     LGFX_Sprite spectrum(&tft); spectrum.setColorDepth(16); spectrum.createSprite(480, UI_DSP_ZONE_H);
     LGFX_Sprite marker_spr(&tft); marker_spr.setColorDepth(16); marker_spr.createSprite(480, UI_MARKER_H);
@@ -469,7 +489,7 @@ void core1_main() {
 
         if (rtty_char_ready) {
             char c = rtty_new_char;
-            ui.addRTTYChar(c, !diag_screen_active && !menu_mode && !tuning_lab_active && !reset_confirm_mode && !shift_popup_active && !stop_popup_active);
+            ui.addRTTYChar(c, !diag_screen_active && !menu_mode && !tuning_lab_active && !reset_confirm_mode && !shift_popup_active && !stop_popup_active && !baud_popup_active);
             rtty_char_ready = false;
             // Only output to Serial if diagnostics are OFF
             if (!shared_serial_diag) printf("%c", c);
@@ -493,7 +513,7 @@ void core1_main() {
             if (shared_serial_diag) {
                 // Compact diagnostic stream — one line per update, easy to parse
                 float agc_db = 20.0f * log10f(shared_agc_gain + 1e-10f);
-                const int bauds_d[] = {45, 50, 75};
+                const int bauds_d[] = {45, 50, 75, 100};
                 printf("[D] SNR=%.1f SIG=%.1f ERR=%.0f%% SQ=%s AGC=%+.0fdB PH=%.2f FE=%.5f M=%.3f S=%.3f A=%.4f K=%.2f SQT=%.1f F=%.0f B=%d C0=%d%% C1=%d%%\n",
                     (double)shared_snr_db, (double)shared_signal_db,
                     (double)shared_err_rate,
@@ -524,7 +544,7 @@ void core1_main() {
                 ui.drawDiagScreen(shared_adc_v, shared_font_mode);
             }
             
-            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open, shared_agc_gain, shared_agc_enabled, shared_err_rate, shared_rtty_inv, shared_shift_idx, shared_active_shift, shared_inv_uncertain, shared_stop_auto, shared_active_stop, shared_stop_detect_state);
+            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open, shared_agc_gain, shared_agc_enabled, shared_err_rate, shared_rtty_inv, shared_shift_idx, shared_active_shift, shared_inv_uncertain, shared_stop_auto, shared_active_stop, shared_stop_detect_state, shared_baud_auto, shared_active_baud, shared_baud_detect_state);
             // Auto-clear search result after 2 seconds + redraw bottom bar on state change
             static int prev_search_state = 0;
             if (shared_search_state >= 2 && search_result_time > 0 && (loop_start - search_result_time > 2000000)) {
@@ -533,7 +553,7 @@ void core1_main() {
             if (shared_search_state != prev_search_state) {
                 prev_search_state = shared_search_state;
                 if (!tuning_lab_active && !diag_screen_active)
-                    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, get_stop(), shared_afc_on, menu_mode, shared_search_state, shared_stop_auto);
+                    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, get_stop(), shared_afc_on, menu_mode, shared_search_state, shared_stop_auto, shared_baud_auto);
             }
         }
         
@@ -614,17 +634,24 @@ void core1_main() {
                     float new_center = found_signals[select].center;
                     shared_target_freq = new_center;
                     shared_actual_freq = new_center;
-                    if (shared_shift_idx >= NUM_SHIFTS)
-                        shared_active_shift = found_signals[select].shift;
+                    shared_active_shift = found_signals[select].shift;
+                    shared_shift_idx = NUM_SHIFTS; // switch to AUTO
                     shared_search_state = 2;
                     flag_settings_change();
                     printf(">> SEARCH: [%d/%d] center=%.0f shift=%.0f score=%.1f (cycle)\n",
                         select + 1, found_count, new_center, found_signals[select].shift, found_signals[select].score);
                     // Re-trigger autodetect for new signal
+                    // Re-trigger autodetect only for params already in AUTO
                     shared_err_rate = 0.0f;
-                    shared_stop_idx = 3; shared_stop_auto = true;
-                    shared_stop_detect_req = true; shared_stop_detect_state = 1;
-                    shared_inv_auto = true; shared_inv_uncertain = false; shared_rtty_inv = false;
+                    if (shared_baud_auto) {
+                        shared_baud_detect_req = true; shared_baud_detect_state = 1;
+                    }
+                    if (shared_stop_auto) {
+                        shared_stop_detect_req = true; shared_stop_detect_state = 1;
+                    }
+                    if (shared_inv_auto) {
+                        shared_inv_uncertain = false; shared_rtty_inv = false;
+                    }
                     search_result_time = time_us_32();
                     last_search_time = now_search;
                     goto search_done;
@@ -642,16 +669,10 @@ void core1_main() {
                 struct { int lo; int hi; int si; float score; } candidates[MAX_CANDIDATES];
                 int num_candidates = 0;
 
-                // Determine which shifts to scan
+                // Always scan ALL shifts — SEARCH should find any signal
                 int scan_idxs[NUM_SHIFTS];
-                int scan_count;
-                if (shared_shift_idx < NUM_SHIFTS) {
-                    scan_idxs[0] = shared_shift_idx;
-                    scan_count = 1;
-                } else {
-                    for (int i = 0; i < NUM_SHIFTS; i++) scan_idxs[i] = i;
-                    scan_count = NUM_SHIFTS;
-                }
+                int scan_count = NUM_SHIFTS;
+                for (int i = 0; i < NUM_SHIFTS; i++) scan_idxs[i] = i;
 
                 for (int j = 0; j < scan_count; j++) {
                     int si = scan_idxs[j];
@@ -779,9 +800,9 @@ void core1_main() {
                     float new_center = found_signals[select].center;
                     shared_target_freq = new_center;
                     shared_actual_freq = new_center;
-                    if (shared_shift_idx >= NUM_SHIFTS) {
-                        shared_active_shift = found_signals[select].shift;
-                    }
+                    // SEARCH always applies the detected shift
+                    shared_active_shift = found_signals[select].shift;
+                    shared_shift_idx = NUM_SHIFTS; // switch to AUTO
                     shared_search_state = 2;
                     flag_settings_change();
                     printf(">> SEARCH: [%d/%d] center=%.0f shift=%.0f score=%.1f\n",
@@ -793,11 +814,17 @@ void core1_main() {
                                 i == select ? "*" : "", found_signals[i].shift);
                         printf("\n");
                     }
-                    // AUTODETECT pipeline: SEARCH → STOP → INV
+                    // AUTODETECT pipeline: only trigger auto for params already in AUTO
                     shared_err_rate = 0.0f;
-                    shared_stop_idx = 3; shared_stop_auto = true;
-                    shared_stop_detect_req = true; shared_stop_detect_state = 1;
-                    shared_inv_auto = true; shared_inv_uncertain = false; shared_rtty_inv = false;
+                    if (shared_baud_auto) {
+                        shared_baud_detect_req = true; shared_baud_detect_state = 1;
+                    }
+                    if (shared_stop_auto) {
+                        shared_stop_detect_req = true; shared_stop_detect_state = 1;
+                    }
+                    if (shared_inv_auto) {
+                        shared_inv_uncertain = false; shared_rtty_inv = false;
+                    }
                 } else {
                     shared_search_state = 3;
                     found_current = -1;
@@ -909,16 +936,19 @@ void core1_main() {
                 }
                 else if (ty > UI_Y_BOTTOM && !was_touched) {
                     int btn_idx = tx / 68; // 480 / 7 approx 68
-                    if (btn_idx == 0) { flag_settings_change(); shared_baud_idx = (shared_baud_idx + 1) % 3; }
+                    if (btn_idx == 0) {
+                        if (baud_popup_active) { baud_popup_active = false; ui.drawRTTY(); }
+                        else { baud_popup_active = true; shift_popup_active = false; stop_popup_active = false; ui.drawBaudPopup(shared_baud_idx, shared_baud_auto); }
+                    }
                     else if (btn_idx == 1) {
                         if (shift_popup_active) { shift_popup_active = false; ui.drawRTTY(); }
-                        else { shift_popup_active = true; ui.drawShiftPopup(shared_shift_idx); }
+                        else { shift_popup_active = true; baud_popup_active = false; stop_popup_active = false; ui.drawShiftPopup(shared_shift_idx); }
                     }
                     else if (btn_idx == 2) { shared_rtty_inv = false; shared_afc_on = true; shared_search_request = true; shared_search_state = 1; }
                     else if (btn_idx == 3) { flag_settings_change(); shared_afc_on = !shared_afc_on; }
                     else if (btn_idx == 4) {
                         if (stop_popup_active) { stop_popup_active = false; ui.drawRTTY(); }
-                        else { stop_popup_active = true; shift_popup_active = false; ui.drawStopPopup(shared_stop_idx, shared_stop_auto); }
+                        else { stop_popup_active = true; shift_popup_active = false; baud_popup_active = false; ui.drawStopPopup(shared_stop_idx, shared_stop_auto); }
                     }
                     else if (btn_idx == 5) { ui.clearRTTY(); shared_clear_dsp = true; }
                     else if (btn_idx >= 6) {
@@ -936,12 +966,38 @@ void core1_main() {
                     }
                     
                     if (!menu_mode) reset_confirm_mode = false;
-                    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, get_stop(), shared_afc_on, menu_mode, shared_search_state, shared_stop_auto);
+                    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, get_stop(), shared_afc_on, menu_mode, shared_search_state, shared_stop_auto, shared_baud_auto);
                     if (menu_mode) ui.drawMenu(auto_scale, display_mode, "DIAG");
                     touch_ignore_until = time_us_32() + 300000;
                 }
                 else if (ty >= UI_Y_TEXT && ty < UI_Y_BOTTOM) {
-                    if (shift_popup_active && !was_touched) {
+                    if (baud_popup_active && !was_touched) {
+                        int local_y = ty - UI_Y_TEXT;
+                        int col = tx / 160; // 3 columns
+                        int row = (local_y - 5) / 75; // 2 rows
+                        if (col >= 0 && col < 3 && row >= 0 && row < 2) {
+                            int idx = row * 3 + col;
+                            if (idx >= 0 && idx <= 4) {
+                                flag_settings_change();
+                                if (idx < 4) {
+                                    shared_baud_idx = idx;
+                                    shared_baud_auto = false;
+                                    shared_active_baud = bauds[idx];
+                                } else {
+                                    // AUTO — trigger histogram detection
+                                    shared_baud_idx = 4;
+                                    shared_baud_auto = true;
+                                    shared_baud_detect_req = true;
+                                    shared_baud_detect_state = 1;
+                                }
+                            }
+                        }
+                        baud_popup_active = false;
+                        ui.drawRTTY();
+                        ui.drawBottomBar(shared_baud_idx, shared_shift_idx, get_stop(), shared_afc_on, menu_mode, shared_search_state, shared_stop_auto, shared_baud_auto);
+                        touch_ignore_until = time_us_32() + 300000;
+                    }
+                    else if (shift_popup_active && !was_touched) {
                         int local_y = ty - UI_Y_TEXT;
                         int col = tx / 160; // 3 columns
                         int row = (local_y - 5) / 50; // 3 rows, 5px top padding
@@ -954,7 +1010,7 @@ void core1_main() {
                         }
                         shift_popup_active = false;
                         ui.drawRTTY();
-                        ui.drawBottomBar(shared_baud_idx, shared_shift_idx, get_stop(), shared_afc_on, menu_mode, shared_search_state, shared_stop_auto);
+                        ui.drawBottomBar(shared_baud_idx, shared_shift_idx, get_stop(), shared_afc_on, menu_mode, shared_search_state, shared_stop_auto, shared_baud_auto);
                         touch_ignore_until = time_us_32() + 300000;
                     }
                     else if (stop_popup_active && !was_touched) {
@@ -980,7 +1036,7 @@ void core1_main() {
                         }
                         stop_popup_active = false;
                         ui.drawRTTY();
-                        ui.drawBottomBar(shared_baud_idx, shared_shift_idx, get_stop(), shared_afc_on, menu_mode, shared_search_state, shared_stop_auto);
+                        ui.drawBottomBar(shared_baud_idx, shared_shift_idx, get_stop(), shared_afc_on, menu_mode, shared_search_state, shared_stop_auto, shared_baud_auto);
                         touch_ignore_until = time_us_32() + 300000;
                     }
                     else if (reset_confirm_mode && !was_touched) {
@@ -1219,8 +1275,20 @@ void core0_dsp_loop() {
     float stop_detect_err[3] = {100.0f, 100.0f, 100.0f}; // ERR for each stop value
     int stop_detect_saved_idx = 1;     // original stop idx before detection
 
+    // Auto baud-rate detection via symbol duration histogram
+    #define BAUD_HIST_BINS 350  // 0..35ms at 0.1ms (1 sample) resolution
+    int baud_hist[BAUD_HIST_BINS] = {0};
+    int baud_hist_sample_count = 0;      // total samples since detection start
+    int baud_last_transition = -1;       // sample index of last D sign change
+    bool baud_prev_d_sign = true;
+    int baud_detect_phase = 0;           // 0=idle, 1=accumulating histogram, 2=verifying, 3=done
+    uint32_t baud_detect_start = 0;
+    int baud_detect_best_idx = 0;        // best baud index from histogram
+    float baud_verify_err[4] = {100.0f, 100.0f, 100.0f, 100.0f};
+    int baud_verify_phase = 0;           // which baud to verify (0..2), only used when verify needed
+
     // Core0 uses shared_active_shift for demodulation
-    const float bauds[] = {45.45f, 50.0f, 75.0f};
+    const float bauds[] = {45.45f, 50.0f, 75.0f, 100.0f};
 
     while(true) {
         // Wait for hardware-timed ADC sample (FIFO provides exact 10kHz timing)
@@ -1266,7 +1334,7 @@ void core0_dsp_loop() {
         
         f_out = agc_out;
         
-        float baud = bauds[shared_baud_idx];
+        float baud = (shared_baud_idx < 4) ? bauds[shared_baud_idx] : shared_active_baud;
         static float current_k = -1.0f;
         float stop_bits_expected = (shared_stop_idx < 3) ? ((shared_stop_idx == 0) ? 1.0f : ((shared_stop_idx == 1) ? 1.5f : 2.0f)) : shared_active_stop;
         
@@ -1319,7 +1387,21 @@ void core0_dsp_loop() {
         D = fmaxf(-1.5f, fminf(1.5f, D));
         if (shared_rtty_inv) D = -D;
         bool d_sign = (D > 0.0f);
-        
+
+        // Baud detection: accumulate symbol duration histogram
+        if (baud_detect_phase == 1 && shared_squelch_open) {
+            baud_hist_sample_count++;
+            if (d_sign != baud_prev_d_sign) {
+                if (baud_last_transition >= 0) {
+                    int interval = baud_hist_sample_count - baud_last_transition;
+                    if (interval > 0 && interval < BAUD_HIST_BINS)
+                        baud_hist[interval]++;
+                }
+                baud_last_transition = baud_hist_sample_count;
+            }
+            baud_prev_d_sign = d_sign;
+        }
+
         float phase_inc = baud / (float)SAMPLE_RATE;
         // freq_error declared above, before main loop
         float dpll_beta = tuning_dpll_alpha * tuning_dpll_alpha / 2.0f;
@@ -1540,8 +1622,142 @@ void core0_dsp_loop() {
                     }
                 }
             }
+
+            // Auto baud-rate detection state machine (histogram-based)
+            uint32_t now_baud = time_us_32();
+            if (shared_baud_detect_req && baud_detect_phase == 0) {
+                // Start histogram accumulation
+                memset(baud_hist, 0, sizeof(baud_hist));
+                baud_hist_sample_count = 0;
+                baud_last_transition = -1;
+                baud_prev_d_sign = d_sign;
+                baud_detect_phase = 1;
+                baud_detect_start = now_baud;
+                shared_baud_detect_req = false;
+                shared_baud_detect_state = 1;
+                printf("[BAUD-DET] Accumulating histogram (3s)...\n");
+            }
+            if (baud_detect_phase == 1 && (now_baud - baud_detect_start) > 3000000) {
+                // Analyze histogram: score each candidate baud rate
+                // For each baud, check if histogram peaks align with multiples of bit_period
+                const float cand_bauds[] = {45.45f, 50.0f, 75.0f, 100.0f};
+                float baud_scores[4] = {0};
+                int window = 8; // ±0.8ms tolerance window
+
+                // Print histogram peaks for diagnostics
+                printf("[BAUD-DET] Histogram (top intervals):");
+                { struct { int bin; int count; } tops[5] = {}; int nt = 0;
+                  for (int b = 50; b < BAUD_HIST_BINS; b++) {
+                    if (baud_hist[b] > 0) {
+                        int pos = nt < 5 ? nt++ : -1;
+                        if (pos < 0 && baud_hist[b] > tops[4].count) pos = 4;
+                        if (pos >= 0) {
+                            tops[pos] = {b, baud_hist[b]};
+                            for (int k = pos; k > 0 && tops[k].count > tops[k-1].count; k--)
+                                std::swap(tops[k], tops[k-1]);
+                        }
+                    }
+                  }
+                  for (int i = 0; i < nt; i++)
+                    printf(" %d(%.1fms,n=%d)", tops[i].bin, tops[i].bin*0.1f, tops[i].count);
+                  printf("\n");
+                }
+
+                for (int ci = 0; ci < 4; ci++) {
+                    float bit_period = (float)SAMPLE_RATE / cand_bauds[ci]; // samples per bit
+                    // Score = sum of histogram values at k*bit_period ± window, k=1..5
+                    for (int k = 1; k <= 5; k++) {
+                        int center = (int)(bit_period * k + 0.5f);
+                        for (int d = -window; d <= window; d++) {
+                            int bin = center + d;
+                            if (bin >= 0 && bin < BAUD_HIST_BINS) {
+                                // Weight closer bins higher, earlier multiples higher
+                                float dist_w = 1.0f - fabsf((float)d) / (float)(window + 1);
+                                float mult_w = 1.0f / (float)k; // first multiple = full weight
+                                baud_scores[ci] += baud_hist[bin] * dist_w * mult_w;
+                            }
+                        }
+                    }
+                    printf("[BAUD-DET] %.2f baud: period=%.1f samples, score=%.1f\n",
+                        (double)cand_bauds[ci], (double)bit_period, (double)baud_scores[ci]);
+                }
+
+                // Pick best score
+                baud_detect_best_idx = 0;
+                for (int i = 1; i < 4; i++)
+                    if (baud_scores[i] > baud_scores[baud_detect_best_idx])
+                        baud_detect_best_idx = i;
+
+                float best_score = baud_scores[baud_detect_best_idx];
+                float second_best = 0;
+                for (int i = 0; i < 4; i++)
+                    if (i != baud_detect_best_idx && baud_scores[i] > second_best)
+                        second_best = baud_scores[i];
+
+                // If winner is clear (>1.5x second), apply directly
+                // Otherwise verify with ERR test
+                if (best_score > 5.0f && best_score > second_best * 1.5f) {
+                    // Clear winner — apply immediately
+                    shared_active_baud = cand_bauds[baud_detect_best_idx];
+                    shared_baud_idx = 4; // keep AUTO
+                    shared_baud_detect_state = 3; // done
+                    baud_detect_phase = 0;
+                    printf("[BAUD-DET] Result: %.2f baud (score=%.1f, clear winner)\n",
+                        (double)shared_active_baud, (double)best_score);
+                } else if (best_score > 1.0f) {
+                    // Ambiguous — verify top 2 with ERR test
+                    printf("[BAUD-DET] Ambiguous, verifying with ERR test...\n");
+                    baud_detect_phase = 2;
+                    baud_verify_phase = 0;
+                    baud_verify_err[0] = baud_verify_err[1] = baud_verify_err[2] = 100.0f;
+                    // Start testing baud 0 (45.45)
+                    shared_active_baud = cand_bauds[0];
+                    shared_baud_idx = 4; // keep AUTO
+                    memset(err_hist, 0, sizeof(err_hist)); err_idx = 0; err_sum = 0; shared_err_rate = 0.0f;
+                    auto_inv_trying = false; auto_inv_high_err_since = 0;
+                    baud_detect_start = now_baud;
+                    shared_baud_detect_state = 2;
+                    printf("[BAUD-DET] Testing %.2f baud...\n", (double)cand_bauds[0]);
+                } else {
+                    // No signal / too weak — default to 45.45
+                    shared_active_baud = 45.45f;
+                    shared_baud_idx = 4;
+                    shared_baud_detect_state = 3;
+                    baud_detect_phase = 0;
+                    printf("[BAUD-DET] No clear signal, defaulting to 45.45 baud\n");
+                }
+            }
+            // ERR verification phase
+            if (baud_detect_phase == 2) {
+                const float cand_bauds_v[] = {45.45f, 50.0f, 75.0f, 100.0f};
+                if (now_baud - baud_detect_start > 2000000) { // 2s per baud test
+                    baud_verify_err[baud_verify_phase] = shared_err_rate;
+                    printf("[BAUD-DET] %.2f baud: ERR=%.1f%%\n",
+                        (double)cand_bauds_v[baud_verify_phase], (double)shared_err_rate);
+                    baud_verify_phase++;
+                    if (baud_verify_phase < 4) {
+                        shared_active_baud = cand_bauds_v[baud_verify_phase];
+                        memset(err_hist, 0, sizeof(err_hist)); err_idx = 0; err_sum = 0; shared_err_rate = 0.0f;
+                        baud_detect_start = now_baud;
+                        printf("[BAUD-DET] Testing %.2f baud...\n", (double)cand_bauds_v[baud_verify_phase]);
+                    } else {
+                        // Pick lowest ERR
+                        int best = 0;
+                        for (int i = 1; i < 4; i++)
+                            if (baud_verify_err[i] < baud_verify_err[best]) best = i;
+                        shared_active_baud = cand_bauds_v[best];
+                        shared_baud_idx = 4; // keep AUTO
+                        shared_baud_detect_state = 3;
+                        baud_detect_phase = 0;
+                        memset(err_hist, 0, sizeof(err_hist)); err_idx = 0; err_sum = 0; shared_err_rate = 0.0f;
+                        printf("[BAUD-DET] Result: %.2f baud (ERR: 45=%.0f%% 50=%.0f%% 75=%.0f%% 100=%.0f%%)\n",
+                            (double)shared_active_baud,
+                            (double)baud_verify_err[0], (double)baud_verify_err[1], (double)baud_verify_err[2], (double)baud_verify_err[3]);
+                    }
+                }
+            }
         }
-        
+
         static uint32_t total_work = 0, total_time = 0;
         uint32_t work_end = time_us_32();
         total_work += (work_end - st);

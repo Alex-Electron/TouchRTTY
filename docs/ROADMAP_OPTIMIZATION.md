@@ -155,11 +155,14 @@
 - [x] Приоритет стандартных шифтов (170/450/850): tie-breaker ±2dB при близких scores
 - [x] Один проход по всем шифтам, затем сравнение с приоритетными если лучший — нестандартный
 
-### Авто-определение скорости (Baud) — TODO
-- [ ] Метод 1: замер минимальной длительности символа (мин. время между перепадами M↔S)
-- [ ] ~22мс → 45.45 Бод, ~20мс → 50 Бод, ~13мс → 75 Бод
-- [ ] Метод 2: анализ DPLL freq_error — если интегратор уехал далеко, скорость неверна
-- [ ] Перебор 3 скоростей, замер ERR на каждой, выбор лучшей
+### Авто-определение скорости (Baud) — DONE (Build 206)
+- [x] Symbol Duration Histogram: D-sign transitions → interval histogram (3s accumulation)
+- [x] Scoring: peaks at multiples of bit_period ± 8 samples, distance decay + harmonic weight
+- [x] Clear winner (>1.5× second): immediate apply; ambiguous → sequential ERR verify (2s/baud)
+- [x] 4 baud rates: 45.45 / 50 / 75 / 100 Baud
+- [x] Popup 3×2: 45/50/75/100/AUTO
+- [x] BD indicator: Row 3 top bar (BD:45 cyan, BD:50(A) green, BD:.. yellow)
+- [x] Serial: `BAUD 0-3` (manual), `BAUD 4`/`BAUD AUTO` (auto-detect)
 
 ### Авто-определение стоп-бита — DONE (Build 205)
 - [x] Popup-меню 2×2: 1.0 / 1.5 / 2.0 / AUTO (кнопка ST в нижней панели)
@@ -179,7 +182,7 @@
 SEARCH уже запускает: поиск сигнала → определение шифта → стоп-бита → инверсии.
 - [x] Pipeline: SEARCH → SHIFT → STOP → INV (работает автоматически)
 - [x] Прогресс: индикаторы ST:.. и NOR?/INV? в top bar
-- [ ] Авто-определение скорости (BAUD) — не реализовано, последний недостающий элемент
+- [x] Авто-определение скорости (BAUD) — DONE (Build 206), histogram + ERR verify
 - [ ] Итоговый экран "Found: 50 Baud, 450 Hz shift, 1.5 stop, LSB"
 
 ## 7b. Встроенный автотюнинг на приборе — TODO

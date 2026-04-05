@@ -256,12 +256,13 @@ public:
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }
 
-    void drawBottomBar(int baud_idx, int shift_idx, float stop_bits, bool afc_on, bool menu_mode, int search_state, bool stop_auto = false) {
+    void drawBottomBar(int baud_idx, int shift_idx, float stop_bits, bool afc_on, bool menu_mode, int search_state, bool stop_auto = false, bool baud_auto = false) {
         _spr_bottom.fillSprite(COLOR_BG);
-        const int bauds[] = {45, 50, 75};
+        const int bauds[] = {45, 50, 75, 100};
         const int shifts[] = {85, 170, 200, 340, 425, 450, 500, 850};
         char labels_main[7][16];
-        snprintf(labels_main[0], 16, "B %d", bauds[baud_idx]);
+        if (baud_auto) snprintf(labels_main[0], 16, "B:AUTO");
+        else snprintf(labels_main[0], 16, "B %d", bauds[baud_idx]);
         if (shift_idx < 8) snprintf(labels_main[1], 16, "S %d", shifts[shift_idx]);
         else snprintf(labels_main[1], 16, "S:AUTO");
         if (search_state == 1) snprintf(labels_main[2], 16, "SRCH..");
@@ -290,7 +291,7 @@ public:
         ili9488_push_colors(0, UI_Y_BOTTOM, 480, 48, (uint16_t*)_spr_bottom.getBuffer());
     }
 
-    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float m_freq, float s_freq, bool clipping, float load0, float load1, bool squelch_open, float agc_gain, bool agc_enabled, float err_rate, bool rtty_inv, int shift_idx, float active_shift, bool inv_uncertain, bool stop_auto = false, float active_stop = 1.5f, int stop_detect_state = 0) {
+    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float m_freq, float s_freq, bool clipping, float load0, float load1, bool squelch_open, float agc_gain, bool agc_enabled, float err_rate, bool rtty_inv, int shift_idx, float active_shift, bool inv_uncertain, bool stop_auto = false, float active_stop = 1.5f, int stop_detect_state = 0, bool baud_auto = false, float active_baud = 45.45f, int baud_detect_state = 0) {
         _spr_top.fillSprite(COLOR_BG); _spr_top.drawFastHLine(0, 33, 480, COLOR_GRID);
         _spr_top.setFont(&fonts::Font0); // Compact 6x8 font for 3-row layout
         char buf[64];
@@ -356,7 +357,13 @@ public:
             _spr_top.drawString(buf, 230, 16);
         }
 
-        // --- Row 3 (y=22..31): ERR bar + % value + info ---
+        // Right-aligned: build/fps/load on row 2
+        _spr_top.setTextDatum(middle_right); _spr_top.setTextColor(0x00FFFFU, COLOR_BG);
+        snprintf(buf, sizeof(buf), "B:%d F:%lu C0:%.0f%% C1:%.0f%%", BUILD_NUMBER, fps, load0, load1);
+        _spr_top.drawString(buf, 475, 16);
+
+        // --- Row 3 (y=22..31): ERR bar + % value + baud indicator ---
+        _spr_top.setTextDatum(middle_left);
         _spr_top.setTextColor(0xAAAAAAU, COLOR_BG);
         _spr_top.drawString("ERR", 2, 27);
         _spr_top.drawRect(bar_x, 22, bar_w, bar_h, COLOR_GRID);
@@ -365,11 +372,21 @@ public:
         if (ew > 0) _spr_top.fillRect(bar_x, 22, ew, bar_h, err_color);
         _spr_top.setTextColor(err_color, COLOR_BG);
         snprintf(buf, sizeof(buf), "%.0f%%", err_rate); _spr_top.drawString(buf, bar_x+bar_w+4, 27);
-
-        // Right-aligned: build/fps/load on row 2, free row 3
-        _spr_top.setTextDatum(middle_right); _spr_top.setTextColor(0x00FFFFU, COLOR_BG);
-        snprintf(buf, sizeof(buf), "B:%d F:%lu C0:%.0f%% C1:%.0f%%", BUILD_NUMBER, fps, load0, load1);
-        _spr_top.drawString(buf, 475, 16);
+        // Baud indicator on Row 3 (after ERR)
+        if (baud_auto) {
+            if (baud_detect_state == 1 || baud_detect_state == 2) {
+                _spr_top.setTextColor(0x00FFFFU, COLOR_BG); // yellow = detecting
+                _spr_top.drawString("BD:..", 170, 27);
+            } else {
+                _spr_top.setTextColor(0x00FF00U, COLOR_BG); // green = auto
+                snprintf(buf, sizeof(buf), "BD:%.0f(A)", active_baud);
+                _spr_top.drawString(buf, 170, 27);
+            }
+        } else {
+            _spr_top.setTextColor(0x00FFFFU, COLOR_BG); // cyan = manual
+            snprintf(buf, sizeof(buf), "BD:%.0f", active_baud);
+            _spr_top.drawString(buf, 170, 27);
+        }
 
         ili9488_push_colors(0, UI_Y_TOP, 480, UI_TOP_BAR_H, (uint16_t*)_spr_top.getBuffer());
     }
@@ -414,6 +431,29 @@ public:
             if (i == 3) { bg = stop_auto ? 0x004400U : 0x222244U; brd = stop_auto ? 0x00FF00U : 0x6666FFU; }
             _spr_text.fillRoundRect(x + 6, y + 4, cell_w - 12, cell_h - 8, 8, bg);
             _spr_text.drawRoundRect(x + 6, y + 4, cell_w - 12, cell_h - 8, 8, brd);
+            _spr_text.setTextColor(0xFFFFFFU, bg);
+            _spr_text.drawString(labels[i], x + cell_w / 2, y + cell_h / 2);
+        }
+        ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
+    }
+
+    void drawBaudPopup(int current_baud_idx, bool baud_auto) {
+        _spr_text.fillSprite(COLOR_BG);
+        _spr_text.setFont(&fonts::Font2);
+        _spr_text.setTextDatum(middle_center);
+        const char* labels[] = {"45", "50", "75", "100", "AUTO", ""};
+        // Grid 3x2, each cell 160x75px
+        int cols = 3, cell_w = 160, cell_h = 75;
+        int y_off = 5;
+        for (int i = 0; i < 5; i++) {
+            int col = i % cols, row = i / cols;
+            int x = col * cell_w, y = y_off + row * cell_h;
+            uint32_t bg = 0x333333U, brd = 0x777777U;
+            bool selected = baud_auto ? (i == 4) : (i == current_baud_idx);
+            if (selected) { bg = 0x004400U; brd = 0x00FF00U; }
+            if (i == 4) { bg = baud_auto ? 0x004400U : 0x222244U; brd = baud_auto ? 0x00FF00U : 0x6666FFU; }
+            _spr_text.fillRoundRect(x + 4, y + 2, cell_w - 8, cell_h - 4, 8, bg);
+            _spr_text.drawRoundRect(x + 4, y + 2, cell_w - 8, cell_h - 4, 8, brd);
             _spr_text.setTextColor(0xFFFFFFU, bg);
             _spr_text.drawString(labels[i], x + cell_w / 2, y + cell_h / 2);
         }
