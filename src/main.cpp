@@ -160,15 +160,33 @@ volatile int shared_search_state = 0; // 0=idle, 1=searching, 2=found, 3=not fou
 volatile float shared_active_shift = 170.0f; // Actual shift in use (from g_shifts or auto-detected)
 volatile bool shared_inv_uncertain = false;  // true = auto-inversion can't determine NOR/INV
 volatile bool shared_inv_auto = true;       // true = auto-inversion enabled, false = manual
+volatile bool shared_stop_auto = false;     // true = auto stop-bit detection
+volatile float shared_active_stop = 1.5f;  // actual stop bits in use
+volatile bool shared_stop_detect_req = false; // request auto stop-bit detection
+volatile int shared_stop_detect_state = 0;  // 0=idle, 1=testing, 2=done
 
 void handle_serial_commands() {
     static char cmd_buf[64];
     static int cmd_ptr = 0;
+    static uint32_t last_char_time = 0;
+    bool process = false;
     int c = getchar_timeout_us(0);
     if (c != PICO_ERROR_TIMEOUT) {
+        last_char_time = time_us_32();
         if (c == '\n' || c == '\r') {
-            cmd_buf[cmd_ptr] = 0;
-            if (cmd_ptr > 0) {
+            process = (cmd_ptr > 0);
+        } else if (cmd_ptr < 63) {
+            cmd_buf[cmd_ptr++] = (char)c;
+        }
+    }
+    // Timeout: if buffer has data and no new char for 500ms, treat as complete command
+    if (!process && cmd_ptr > 0 && last_char_time > 0 && (time_us_32() - last_char_time) > 500000) {
+        process = true;
+    }
+    if (process) {
+        cmd_buf[cmd_ptr] = 0;
+        last_char_time = 0;
+        if (cmd_ptr > 0) {
                 float val; int ival;
                 if (sscanf(cmd_buf, "ALPHA %f", &val) == 1) {
                     val = fmaxf(0.005f, fminf(0.200f, val));
@@ -224,15 +242,22 @@ void handle_serial_commands() {
                     printf("FREQ=%.1f SNR=%.1f SIG=%.1f AGC=%.2f\n",
                         (double)shared_actual_freq, (double)shared_snr_db,
                         (double)shared_signal_db, (double)shared_agc_gain);
-                    printf("SQ=%s ERR=%.0f%% DIAG=%s\n",
+                    const char* stop_str = shared_stop_auto ? "AUTO" : (shared_stop_idx==0?"1.0":shared_stop_idx==1?"1.5":"2.0");
+                    printf("STOP=%s(%.1f) SQ=%s ERR=%.0f%% DIAG=%s\n",
+                        stop_str, (double)shared_active_stop,
                         shared_squelch_open ? "OPEN" : "SHUT",
                         (double)shared_err_rate,
                         shared_serial_diag ? "ON" : "OFF");
                     printf("====================\n");
                 }
+                else if (strcmp(cmd_buf, "STOP AUTO") == 0) {
+                    shared_stop_idx = 3; shared_stop_auto = true;
+                    shared_stop_detect_req = true; shared_stop_detect_state = 1;
+                    printf(">> STOP=AUTO (detecting...)\n");
+                }
                 else if (sscanf(cmd_buf, "STOP %d", &ival) == 1) {
-                    if (ival >= 0 && ival <= 2) { shared_stop_idx = ival; printf(">> STOP=%d\n", ival); }
-                    else printf(">> ERR: STOP 0-2 (1.0/1.5/2.0)\n");
+                    if (ival >= 0 && ival <= 2) { shared_stop_idx = ival; shared_stop_auto = false; printf(">> STOP=%d (%.1f bits)\n", ival, ival==0?1.0f:ival==1?1.5f:2.0f); }
+                    else printf(">> ERR: STOP 0-2 or AUTO (1.0/1.5/2.0/AUTO)\n");
                 }
                 else if (strcmp(cmd_buf, "AGC ON") == 0)   { shared_agc_enabled = true;  printf(">> AGC ON\n"); }
                 else if (strcmp(cmd_buf, "AGC OFF") == 0)  { shared_agc_enabled = false; printf(">> AGC OFF\n"); }
@@ -254,7 +279,7 @@ void handle_serial_commands() {
                     printf("--- Protocol ---\n");
                     printf("BAUD <0-2>           0=45 1=50 2=75\n");
                     printf("SHIFT <0-8>          85/170/200/340/425/450/500/850/AUTO\n");
-                    printf("STOP <0-2>           1.0/1.5/2.0 bits\n");
+                    printf("STOP <0-2>|AUTO      1.0/1.5/2.0/AUTO bits\n");
                     printf("INV AUTO|NOR|INV     Inversion: auto/manual\n");
                     printf("--- Control ---\n");
                     printf("AFC ON|OFF           Auto frequency\n");
@@ -271,10 +296,7 @@ void handle_serial_commands() {
                 else { printf(">> UNKNOWN: %s (try HELP)\n", cmd_buf); }
             }
             cmd_ptr = 0;
-        } else if (cmd_ptr < 63) {
-            cmd_buf[cmd_ptr++] = (char)c;
         }
-    }
 }
 
 const char ita2_ltrs[32] = {
@@ -362,6 +384,7 @@ void core1_main() {
     int display_mode = 0;
     bool reset_confirm_mode = false;
     bool shift_popup_active = false;
+    bool stop_popup_active = false;
     uint32_t saved_text_timer = 0;
     
     AppSettings loaded_set;
@@ -391,10 +414,14 @@ void core1_main() {
     // Active shift: from g_shifts[idx] or auto-detected
     auto get_shift = []() -> float {
         if (shared_shift_idx < NUM_SHIFTS) { shared_active_shift = g_shifts[shared_shift_idx]; return shared_active_shift; }
-        return shared_active_shift; // AUTO mode — use last detected or default
+        return shared_active_shift;
+    };
+    auto get_stop = [&]() -> float {
+        if (shared_stop_idx < 3) { shared_active_stop = stop_bits[shared_stop_idx]; return shared_active_stop; }
+        return shared_active_stop; // AUTO — use last detected
     };
     
-    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_afc_on, menu_mode, shared_search_state);
+    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, get_stop(), shared_afc_on, menu_mode, shared_search_state, shared_stop_auto);
 
     LGFX_Sprite spectrum(&tft); spectrum.setColorDepth(16); spectrum.createSprite(480, UI_DSP_ZONE_H);
     LGFX_Sprite marker_spr(&tft); marker_spr.setColorDepth(16); marker_spr.createSprite(480, UI_MARKER_H);
@@ -442,7 +469,7 @@ void core1_main() {
 
         if (rtty_char_ready) {
             char c = rtty_new_char;
-            ui.addRTTYChar(c, !diag_screen_active && !menu_mode && !tuning_lab_active && !reset_confirm_mode && !shift_popup_active);
+            ui.addRTTYChar(c, !diag_screen_active && !menu_mode && !tuning_lab_active && !reset_confirm_mode && !shift_popup_active && !stop_popup_active);
             rtty_char_ready = false;
             // Only output to Serial if diagnostics are OFF
             if (!shared_serial_diag) printf("%c", c);
@@ -497,7 +524,7 @@ void core1_main() {
                 ui.drawDiagScreen(shared_adc_v, shared_font_mode);
             }
             
-            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open, shared_agc_gain, shared_agc_enabled, shared_err_rate, shared_rtty_inv, shared_shift_idx, shared_active_shift, shared_inv_uncertain);
+            ui.updateTopBar(shared_adc_v, fps, shared_signal_db, shared_snr_db, m_freq, s_freq, is_clipping, shared_core0_load, shared_core1_load, shared_squelch_open, shared_agc_gain, shared_agc_enabled, shared_err_rate, shared_rtty_inv, shared_shift_idx, shared_active_shift, shared_inv_uncertain, shared_stop_auto, shared_active_stop, shared_stop_detect_state);
             // Auto-clear search result after 2 seconds + redraw bottom bar on state change
             static int prev_search_state = 0;
             if (shared_search_state >= 2 && search_result_time > 0 && (loop_start - search_result_time > 2000000)) {
@@ -506,7 +533,7 @@ void core1_main() {
             if (shared_search_state != prev_search_state) {
                 prev_search_state = shared_search_state;
                 if (!tuning_lab_active && !diag_screen_active)
-                    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_afc_on, menu_mode, shared_search_state);
+                    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, get_stop(), shared_afc_on, menu_mode, shared_search_state, shared_stop_auto);
             }
         }
         
@@ -568,97 +595,218 @@ void core1_main() {
 
             for (int i = 0; i < FFT_SIZE / 2; i++) smooth_mag[i] = smooth_mag[i] * 0.7f + mag[i] * 0.3f;
 
-            // --- Signal Search: find two peaks separated by shift ---
-            // In AUTO mode (shift_idx==NUM_SHIFTS), tries all standard shifts and picks best
+            // --- Signal Search: find ALL RTTY signals, cycle between them ---
+            #define MAX_FOUND_SIGNALS 8
+            static struct { float center; float shift; int shift_idx; float score; } found_signals[MAX_FOUND_SIGNALS];
+            static int found_count = 0;
+            static int found_current = -1; // index of currently selected signal
+            static uint32_t last_search_time = 0;
+
             if (shared_search_request) {
                 shared_search_request = false;
+                uint32_t now_search = time_us_32();
+
+                // If we have recent results (< 10s) and multiple signals, just cycle
+                if (found_count > 1 && found_current >= 0 &&
+                    (now_search - last_search_time) < 10000000) {
+                    int select = (found_current + 1) % found_count;
+                    found_current = select;
+                    float new_center = found_signals[select].center;
+                    shared_target_freq = new_center;
+                    shared_actual_freq = new_center;
+                    if (shared_shift_idx >= NUM_SHIFTS)
+                        shared_active_shift = found_signals[select].shift;
+                    shared_search_state = 2;
+                    flag_settings_change();
+                    printf(">> SEARCH: [%d/%d] center=%.0f shift=%.0f score=%.1f (cycle)\n",
+                        select + 1, found_count, new_center, found_signals[select].shift, found_signals[select].score);
+                    // Re-trigger autodetect for new signal
+                    shared_err_rate = 0.0f;
+                    shared_stop_idx = 3; shared_stop_auto = true;
+                    shared_stop_detect_req = true; shared_stop_detect_state = 1;
+                    shared_inv_auto = true; shared_inv_uncertain = false; shared_rtty_inv = false;
+                    search_result_time = time_us_32();
+                    last_search_time = now_search;
+                    goto search_done;
+                }
+
                 float noise_sum = 0.0f;
                 for (int i = 1; i < FFT_SIZE/2; i++) noise_sum += smooth_mag[i];
                 float noise_avg = noise_sum / (FFT_SIZE/2 - 1);
-                float min_snr = 4.0f, max_imbalance = 10.0f;
-                int tolerance = 3;
-                float global_best_score = -200.0f;
-                int global_best_lo = -1, global_best_hi = -1;
-                int best_shift_idx = -1;
-                // Search helper lambda
-                auto search_shifts = [&](const int* idxs, int count) {
-                    for (int j = 0; j < count; j++) {
-                        int si = idxs[j];
-                        int shift_bins = (int)(g_shifts[si] * FFT_SIZE / SAMPLE_RATE);
-                        for (int lo = 5; lo < FFT_SIZE/2 - shift_bins - tolerance; lo++) {
-                            float lo_mag = smooth_mag[lo];
-                            float lo_snr = lo_mag - noise_avg;
-                            if (lo_snr < min_snr) continue;
-                            if (lo > 0 && smooth_mag[lo-1] > lo_mag) continue;
-                            if (lo < FFT_SIZE/2-1 && smooth_mag[lo+1] > lo_mag) continue;
-                            for (int d = -tolerance; d <= tolerance; d++) {
-                                int hi = lo + shift_bins + d;
-                                if (hi < 1 || hi >= FFT_SIZE/2) continue;
-                                float hi_mag = smooth_mag[hi];
-                                float hi_snr = hi_mag - noise_avg;
-                                if (hi_snr < min_snr) continue;
-                                float imbalance = fabsf(lo_mag - hi_mag);
-                                if (imbalance > max_imbalance) continue;
-                                float score = lo_snr + hi_snr - imbalance * 0.5f;
-                                if (score > global_best_score) {
-                                    global_best_score = score;
-                                    global_best_lo = lo;
-                                    global_best_hi = hi;
-                                    best_shift_idx = si;
+                float min_snr = 8.0f, max_imbalance = 20.0f;
+                int tolerance = 2;
+                float min_score = 20.0f;
+
+                // Collect ALL candidate signals (large enough for all shifts)
+                static constexpr int MAX_CANDIDATES = 128;
+                struct { int lo; int hi; int si; float score; } candidates[MAX_CANDIDATES];
+                int num_candidates = 0;
+
+                // Determine which shifts to scan
+                int scan_idxs[NUM_SHIFTS];
+                int scan_count;
+                if (shared_shift_idx < NUM_SHIFTS) {
+                    scan_idxs[0] = shared_shift_idx;
+                    scan_count = 1;
+                } else {
+                    for (int i = 0; i < NUM_SHIFTS; i++) scan_idxs[i] = i;
+                    scan_count = NUM_SHIFTS;
+                }
+
+                for (int j = 0; j < scan_count; j++) {
+                    int si = scan_idxs[j];
+                    int shift_bins = (int)(g_shifts[si] * FFT_SIZE / SAMPLE_RATE);
+                    for (int lo = 5; lo < FFT_SIZE/2 - shift_bins - tolerance; lo++) {
+                        float lo_mag = smooth_mag[lo];
+                        float lo_snr = lo_mag - noise_avg;
+                        if (lo_snr < min_snr) continue;
+                        if (lo > 0 && smooth_mag[lo-1] > lo_mag) continue;
+                        if (lo < FFT_SIZE/2-1 && smooth_mag[lo+1] > lo_mag) continue;
+                        for (int d = -tolerance; d <= tolerance; d++) {
+                            int hi = lo + shift_bins + d;
+                            if (hi < 1 || hi >= FFT_SIZE/2) continue;
+                            float hi_mag = smooth_mag[hi];
+                            float hi_snr = hi_mag - noise_avg;
+                            if (hi_snr < min_snr) continue;
+                            // Both peaks must be local maxima
+                            if (hi > 0 && smooth_mag[hi-1] > hi_mag) continue;
+                            if (hi < FFT_SIZE/2-1 && smooth_mag[hi+1] > hi_mag) continue;
+                            float imbalance = fabsf(lo_mag - hi_mag);
+                            if (imbalance > max_imbalance) continue;
+                            float ideal_bins = g_shifts[si] * FFT_SIZE / (float)SAMPLE_RATE;
+                            float actual_bins = (float)(hi - lo);
+                            float dist_penalty = fabsf(actual_bins - ideal_bins) * 1.5f;
+                            float score = lo_snr + hi_snr - imbalance * 0.5f - dist_penalty;
+                            if (score > min_score) {
+                                if (num_candidates < MAX_CANDIDATES) {
+                                    candidates[num_candidates++] = {lo, hi, si, score};
+                                } else {
+                                    // Array full — replace weakest candidate if this one is better
+                                    int worst = 0;
+                                    for (int w = 1; w < MAX_CANDIDATES; w++)
+                                        if (candidates[w].score < candidates[worst].score) worst = w;
+                                    if (score > candidates[worst].score)
+                                        candidates[worst] = {lo, hi, si, score};
                                 }
                             }
                         }
                     }
-                };
-                if (shared_shift_idx < NUM_SHIFTS) {
-                    int single[] = {shared_shift_idx};
-                    search_shifts(single, 1);
-                } else {
-                    // AUTO: search all shifts, then prefer priority if scores are close
-                    int all[] = {0,1,2,3,4,5,6,7};
-                    search_shifts(all, NUM_SHIFTS);
-                    // Tie-breaker: if a priority shift (170/450/850) scored within 2dB of best, use it
-                    if (global_best_score > 10.0f && best_shift_idx >= 0) {
-                        bool is_priority = (g_shifts[best_shift_idx] == 170.0f || g_shifts[best_shift_idx] == 450.0f || g_shifts[best_shift_idx] == 850.0f);
-                        if (!is_priority) {
-                            // Re-scan only priority shifts to see if one is close
-                            float saved_score = global_best_score;
-                            int saved_lo = global_best_lo, saved_hi = global_best_hi, saved_si = best_shift_idx;
-                            global_best_score = -200.0f;
-                            const int prio[] = {1, 5, 7};
-                            search_shifts(prio, 3);
-                            if (global_best_score >= saved_score - 2.0f) {
-                                // Priority shift is close enough — keep it
-                            } else {
-                                // Non-priority was clearly better — restore
-                                global_best_score = saved_score;
-                                global_best_lo = saved_lo;
-                                global_best_hi = saved_hi;
-                                best_shift_idx = saved_si;
+                }
+
+                // (debug output removed)
+
+                // Sort candidates by score descending (best first)
+                for (int i = 0; i < num_candidates - 1; i++)
+                    for (int j = i + 1; j < num_candidates; j++)
+                        if (candidates[j].score > candidates[i].score)
+                            std::swap(candidates[i], candidates[j]);
+
+                // Deduplicate: suppress candidates that share any peak (lo or hi)
+                // with a higher-scoring candidate (already sorted best-first).
+                // Two signals sharing a peak = same physical signal interpreted differently.
+                for (int i = 0; i < num_candidates; i++) {
+                    if (candidates[i].score < 0) continue;
+                    for (int j = i + 1; j < num_candidates; j++) {
+                        if (candidates[j].score < 0) continue;
+                        bool overlap = (abs(candidates[i].lo - candidates[j].lo) <= 3 ||
+                                        abs(candidates[i].hi - candidates[j].hi) <= 3 ||
+                                        abs(candidates[i].lo - candidates[j].hi) <= 3 ||
+                                        abs(candidates[i].hi - candidates[j].lo) <= 3);
+                        if (overlap) candidates[j].score = -1.0f; // suppress weaker
+                    }
+                }
+
+                // 425/450 tie-breaker: prefer 450 when ambiguous
+                for (int i = 0; i < num_candidates; i++) {
+                    if (candidates[i].score < 0) continue;
+                    if (g_shifts[candidates[i].si] == 425.0f) {
+                        for (int k = 0; k < num_candidates; k++) {
+                            if (candidates[k].score < 0) continue;
+                            if (g_shifts[candidates[k].si] == 450.0f &&
+                                abs(candidates[i].lo - candidates[k].lo) <= 5 &&
+                                candidates[k].score >= candidates[i].score - 2.0f) {
+                                candidates[i].score = -1.0f;
+                                break;
                             }
                         }
                     }
                 }
-                if (global_best_lo >= 0 && global_best_score > 10.0f) {
-                    float lo_freq = global_best_lo * SAMPLE_RATE / (float)FFT_SIZE;
-                    float hi_freq = global_best_hi * SAMPLE_RATE / (float)FFT_SIZE;
-                    float new_center = (lo_freq + hi_freq) / 2.0f;
+
+                // Adaptive threshold: discard candidates scoring < 30% of best
+                float best_score = 0;
+                for (int i = 0; i < num_candidates; i++)
+                    if (candidates[i].score > best_score) best_score = candidates[i].score;
+                float score_threshold = best_score * 0.40f;
+                for (int i = 0; i < num_candidates; i++)
+                    if (candidates[i].score >= 0 && candidates[i].score < score_threshold)
+                        candidates[i].score = -1.0f;
+
+                // (dedup debug removed)
+
+                // Collect surviving candidates into found_signals
+                found_count = 0;
+                for (int i = 0; i < num_candidates && found_count < MAX_FOUND_SIGNALS; i++) {
+                    if (candidates[i].score < 0) continue;
+                    float lo_f = candidates[i].lo * SAMPLE_RATE / (float)FFT_SIZE;
+                    float hi_f = candidates[i].hi * SAMPLE_RATE / (float)FFT_SIZE;
+                    found_signals[found_count++] = {(lo_f+hi_f)/2.0f, g_shifts[candidates[i].si], candidates[i].si, candidates[i].score};
+                }
+
+                // Sort by center frequency (left to right on waterfall)
+                for (int i = 0; i < found_count - 1; i++)
+                    for (int j = i + 1; j < found_count; j++)
+                        if (found_signals[j].center < found_signals[i].center)
+                            std::swap(found_signals[i], found_signals[j]);
+
+                if (found_count > 0) {
+                    int select = 0;
+                    if (found_current >= 0 && found_count > 1) {
+                        // Subsequent press: cycle by frequency (list is sorted by center freq)
+                        int closest = 0;
+                        float closest_dist = 9999.0f;
+                        for (int i = 0; i < found_count; i++) {
+                            float dist = fabsf(found_signals[i].center - shared_actual_freq);
+                            if (dist < closest_dist) { closest_dist = dist; closest = i; }
+                        }
+                        select = (closest + 1) % found_count;
+                    } else {
+                        // First press: select strongest signal (best score)
+                        for (int i = 1; i < found_count; i++)
+                            if (found_signals[i].score > found_signals[select].score) select = i;
+                    }
+                    found_current = select;
+
+                    float new_center = found_signals[select].center;
                     shared_target_freq = new_center;
                     shared_actual_freq = new_center;
-                    // In AUTO mode, update active shift to detected value
                     if (shared_shift_idx >= NUM_SHIFTS) {
-                        shared_active_shift = g_shifts[best_shift_idx];
+                        shared_active_shift = found_signals[select].shift;
                     }
                     shared_search_state = 2;
                     flag_settings_change();
-                    printf(">> SEARCH: found %.0f/%.0f Hz (shift=%d), center=%.0f\n",
-                        lo_freq, hi_freq, g_shifts_int[best_shift_idx], new_center);
+                    printf(">> SEARCH: [%d/%d] center=%.0f shift=%.0f score=%.1f\n",
+                        select + 1, found_count, new_center, found_signals[select].shift, found_signals[select].score);
+                    if (found_count > 1) {
+                        printf(">> Signals found:");
+                        for (int i = 0; i < found_count; i++)
+                            printf(" %.0f(%s%.0f)", found_signals[i].center,
+                                i == select ? "*" : "", found_signals[i].shift);
+                        printf("\n");
+                    }
+                    // AUTODETECT pipeline: SEARCH → STOP → INV
+                    shared_err_rate = 0.0f;
+                    shared_stop_idx = 3; shared_stop_auto = true;
+                    shared_stop_detect_req = true; shared_stop_detect_state = 1;
+                    shared_inv_auto = true; shared_inv_uncertain = false; shared_rtty_inv = false;
                 } else {
                     shared_search_state = 3;
-                    printf(">> SEARCH: no RTTY signal found (best=%.1f)\n", global_best_score);
+                    found_current = -1;
+                    printf(">> SEARCH: no RTTY signal found\n");
                 }
                 search_result_time = time_us_32();
+                last_search_time = time_us_32();
             }
+            search_done:;
 
             if (auto_scale) {
                 float peak_db = -100.0f;
@@ -768,7 +916,10 @@ void core1_main() {
                     }
                     else if (btn_idx == 2) { shared_rtty_inv = false; shared_afc_on = true; shared_search_request = true; shared_search_state = 1; }
                     else if (btn_idx == 3) { flag_settings_change(); shared_afc_on = !shared_afc_on; }
-                    else if (btn_idx == 4) { flag_settings_change(); shared_stop_idx = (shared_stop_idx + 1) % 3; }
+                    else if (btn_idx == 4) {
+                        if (stop_popup_active) { stop_popup_active = false; ui.drawRTTY(); }
+                        else { stop_popup_active = true; shift_popup_active = false; ui.drawStopPopup(shared_stop_idx, shared_stop_auto); }
+                    }
                     else if (btn_idx == 5) { ui.clearRTTY(); shared_clear_dsp = true; }
                     else if (btn_idx >= 6) {
                         if (tuning_lab_active) {
@@ -785,7 +936,7 @@ void core1_main() {
                     }
                     
                     if (!menu_mode) reset_confirm_mode = false;
-                    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_afc_on, menu_mode, shared_search_state);
+                    ui.drawBottomBar(shared_baud_idx, shared_shift_idx, get_stop(), shared_afc_on, menu_mode, shared_search_state, shared_stop_auto);
                     if (menu_mode) ui.drawMenu(auto_scale, display_mode, "DIAG");
                     touch_ignore_until = time_us_32() + 300000;
                 }
@@ -803,7 +954,33 @@ void core1_main() {
                         }
                         shift_popup_active = false;
                         ui.drawRTTY();
-                        ui.drawBottomBar(shared_baud_idx, shared_shift_idx, stop_bits[shared_stop_idx], shared_afc_on, menu_mode, shared_search_state);
+                        ui.drawBottomBar(shared_baud_idx, shared_shift_idx, get_stop(), shared_afc_on, menu_mode, shared_search_state, shared_stop_auto);
+                        touch_ignore_until = time_us_32() + 300000;
+                    }
+                    else if (stop_popup_active && !was_touched) {
+                        int local_y = ty - UI_Y_TEXT;
+                        int col = tx / 240; // 2 columns
+                        int row = (local_y - 20) / 60; // 2 rows
+                        if (col >= 0 && col < 2 && row >= 0 && row < 2) {
+                            int idx = row * 2 + col;
+                            if (idx >= 0 && idx <= 3) {
+                                flag_settings_change();
+                                if (idx < 3) {
+                                    shared_stop_idx = idx;
+                                    shared_stop_auto = false;
+                                    shared_active_stop = (idx==0)?1.0f:(idx==1)?1.5f:2.0f;
+                                } else {
+                                    // AUTO
+                                    shared_stop_idx = 3;
+                                    shared_stop_auto = true;
+                                    shared_stop_detect_req = true;
+                                    shared_stop_detect_state = 1;
+                                }
+                            }
+                        }
+                        stop_popup_active = false;
+                        ui.drawRTTY();
+                        ui.drawBottomBar(shared_baud_idx, shared_shift_idx, get_stop(), shared_afc_on, menu_mode, shared_search_state, shared_stop_auto);
                         touch_ignore_until = time_us_32() + 300000;
                     }
                     else if (reset_confirm_mode && !was_touched) {
@@ -1036,6 +1213,12 @@ void core0_dsp_loop() {
     bool auto_inv_prev_inv = false;    // previous inversion state
     float auto_inv_pre_err = 0.0f;     // ERR before flip attempt
 
+    // Auto stop-bit detection
+    int stop_detect_phase = 0;         // 0=idle, 1..3 = testing stop idx 0/1/2
+    uint32_t stop_detect_start = 0;    // when current test started
+    float stop_detect_err[3] = {100.0f, 100.0f, 100.0f}; // ERR for each stop value
+    int stop_detect_saved_idx = 1;     // original stop idx before detection
+
     // Core0 uses shared_active_shift for demodulation
     const float bauds[] = {45.45f, 50.0f, 75.0f};
 
@@ -1085,7 +1268,7 @@ void core0_dsp_loop() {
         
         float baud = bauds[shared_baud_idx];
         static float current_k = -1.0f;
-        float stop_bits_expected = (shared_stop_idx == 0) ? 1.0f : ((shared_stop_idx == 1) ? 1.5f : 2.0f);
+        float stop_bits_expected = (shared_stop_idx < 3) ? ((shared_stop_idx == 0) ? 1.0f : ((shared_stop_idx == 1) ? 1.5f : 2.0f)) : shared_active_stop;
         
         if (baud != current_baud || tuning_lpf_k != current_k) {
             current_baud = baud;
@@ -1268,13 +1451,17 @@ void core0_dsp_loop() {
                             }
                         }
 
-                        if (stop_bits_expected <= 1.0f && !d_sign) {
+                        if (stop_bits_expected <= 1.05f) {
+                            // 1.0 stop bit: always enter start-bit state immediately
+                            // (no gap between characters). Don't check !d_sign — the
+                            // biquad LPF may not have crossed over yet. If idle (Mark),
+                            // state 1 will detect false start and return to state 0.
                             baudot_state = 1;
-                            symbol_phase = 0.0f; 
+                            symbol_phase = 0.0f;
                             integrate_acc = D;
                             current_char = 0;
                         } else {
-                            baudot_state = 0; 
+                            baudot_state = 0;
                         }
                     }
                 }
@@ -1304,6 +1491,54 @@ void core0_dsp_loop() {
                 diag_adc_min = 4096.0f; diag_adc_max = 0.0f;
                 diag_m_pow = 0.0f; diag_s_pow = 0.0f;
                 diag_samples = 0;
+            }
+
+            // Auto stop-bit detection state machine
+            uint32_t now_stop = time_us_32();
+            if (shared_stop_detect_req && stop_detect_phase == 0) {
+                // Start detection: save current, begin testing idx 0 (1.0 bits)
+                stop_detect_saved_idx = shared_stop_idx;
+                stop_detect_phase = 1;
+                shared_stop_idx = 0;
+                shared_active_stop = 1.0f;
+                // Reset ERR and disable auto-inv during stop detection
+                memset(err_hist, 0, sizeof(err_hist)); err_idx = 0; err_sum = 0; shared_err_rate = 0.0f;
+                auto_inv_trying = false; auto_inv_high_err_since = 0;
+                stop_detect_start = now_stop;
+                shared_stop_detect_req = false;
+                shared_stop_detect_state = 1;
+                printf("[STOP-DET] Testing 1.0 bits...\n");
+            }
+            if (stop_detect_phase >= 1 && stop_detect_phase <= 3) {
+                if (now_stop - stop_detect_start > 3000000) { // 3.0s per test (~18 chars at 45 baud)
+                    stop_detect_err[stop_detect_phase - 1] = shared_err_rate;
+                    printf("[STOP-DET] %.1f bits: ERR=%.1f%%\n",
+                        stop_detect_phase==1?1.0f:stop_detect_phase==2?1.5f:2.0f,
+                        (double)shared_err_rate);
+                    if (stop_detect_phase < 3) {
+                        stop_detect_phase++;
+                        shared_stop_idx = stop_detect_phase - 1;
+                        shared_active_stop = (stop_detect_phase==2) ? 1.5f : 2.0f;
+                        memset(err_hist, 0, sizeof(err_hist)); err_idx = 0; err_sum = 0; shared_err_rate = 0.0f;
+                        stop_detect_start = now_stop;
+                        printf("[STOP-DET] Testing %.1f bits...\n", shared_active_stop);
+                    } else {
+                        // All 3 tested — pick lowest ERR, default 1.5 only if truly equal
+                        int best_idx = 1; // default 1.5 (most common)
+                        float best_err = stop_detect_err[1];
+                        for (int i = 0; i < 3; i++) {
+                            if (stop_detect_err[i] < best_err) { best_err = stop_detect_err[i]; best_idx = i; }
+                        }
+                        shared_stop_idx = 3; // keep AUTO mode
+                        shared_active_stop = (best_idx==0)?1.0f:(best_idx==1)?1.5f:2.0f;
+                        shared_stop_detect_state = 2;
+                        stop_detect_phase = 0;
+                        memset(err_hist, 0, sizeof(err_hist)); err_idx = 0; err_sum = 0; shared_err_rate = 0.0f;
+                        printf("[STOP-DET] Result: %.1f bits (ERR: 1.0=%.0f%% 1.5=%.0f%% 2.0=%.0f%%)\n",
+                            (double)shared_active_stop,
+                            (double)stop_detect_err[0], (double)stop_detect_err[1], (double)stop_detect_err[2]);
+                    }
+                }
             }
         }
         

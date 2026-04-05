@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Build 205] - 2026-04-05
+### Added
+- **Stop-bit popup**: 2×2 touch grid (1.0 / 1.5 / 2.0 / AUTO) with blue AUTO highlight
+- **Auto stop-bit detection**: sequential test 1.0→1.5→2.0 (3s each), picks lowest ERR rate
+- **Multi-signal SEARCH**: finds ALL RTTY signals on waterfall, cycles between them on repeat press
+  - First press: selects strongest signal by score
+  - Subsequent presses (< 10s): cycles through saved list without re-scanning
+  - After 10s timeout: performs fresh search
+- **SEARCH → AUTODETECT pipeline**: SEARCH triggers stop-bit detection + auto-inversion
+- **Serial commands**: `STOP AUTO`, `STOP 0/1/2` for stop-bit control
+- **Top bar indicators**: ST:1.5 (cyan), ST:1.5(A) (green auto), ST:.. (yellow detecting)
+- **Bottom bar**: ST button shows current stop-bit or "ST:AUTO"
+
+### Fixed
+- **SEARCH not finding real signals**: candidates array overflow (32→128 with eviction), imbalance threshold too strict (10→20 dB), first press selected by frequency instead of score
+- **1.0 stop-bit decoding ("123" → "0)")**: two root causes fixed:
+  - Simulator ITA2 FIGURES table had `\03` octal escape bug (single ETX char instead of `\0`+`3`), fixed with `\x003`
+  - Framer Continuous DPLL checked D polarity which failed due to biquad LPF delay; removed check for 1.0 stop bits
+- **Serial console not responding to HELP**: VS Code Serial Monitor sends without CR/LF; added 500ms timeout-based command parsing
+- **Auto stop-bit always picking 1.5**: test time too short (1s→3s), removed priority tie-breaker
+
+### Changed
+- **RTTY Simulator** (`tools/rtty_simulator.html`): shift dropdown (8 values + Custom), single center frequency input, auto-computed Mark/Space display, `setValueAtTime` for instantaneous frequency switching
+- **Adaptive SEARCH threshold**: candidates scoring < 40% of best are discarded
+
 ## [Build 194] - 2026-04-04
 ### Added
 - **Tuning Lab** (MENU → TUNE): dedicated screen for DSP parameter tuning

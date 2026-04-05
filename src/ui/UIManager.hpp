@@ -256,7 +256,7 @@ public:
         ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
     }
 
-    void drawBottomBar(int baud_idx, int shift_idx, float stop_bits, bool afc_on, bool menu_mode, int search_state) {
+    void drawBottomBar(int baud_idx, int shift_idx, float stop_bits, bool afc_on, bool menu_mode, int search_state, bool stop_auto = false) {
         _spr_bottom.fillSprite(COLOR_BG);
         const int bauds[] = {45, 50, 75};
         const int shifts[] = {85, 170, 200, 340, 425, 450, 500, 850};
@@ -269,7 +269,8 @@ public:
         else if (search_state == 3) snprintf(labels_main[2], 16, "NONE");
         else snprintf(labels_main[2], 16, "SEARCH");
         snprintf(labels_main[3], 16, afc_on ? "AFC:ON" : "AFC:OFF");
-        snprintf(labels_main[4], 16, "ST %.1f", stop_bits);
+        if (stop_auto) snprintf(labels_main[4], 16, "ST:AUTO");
+        else snprintf(labels_main[4], 16, "ST %.1f", stop_bits);
         snprintf(labels_main[5], 16, "CLEAR");
         snprintf(labels_main[6], 16, "MENU");
         int btn_w = 480 / 7; _spr_bottom.setFont(&fonts::Font2); _spr_bottom.setTextDatum(middle_center);
@@ -289,7 +290,7 @@ public:
         ili9488_push_colors(0, UI_Y_BOTTOM, 480, 48, (uint16_t*)_spr_bottom.getBuffer());
     }
 
-    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float m_freq, float s_freq, bool clipping, float load0, float load1, bool squelch_open, float agc_gain, bool agc_enabled, float err_rate, bool rtty_inv, int shift_idx, float active_shift, bool inv_uncertain) {
+    void updateTopBar(float adc_v, uint32_t fps, float signal_db, float snr_db, float m_freq, float s_freq, bool clipping, float load0, float load1, bool squelch_open, float agc_gain, bool agc_enabled, float err_rate, bool rtty_inv, int shift_idx, float active_shift, bool inv_uncertain, bool stop_auto = false, float active_stop = 1.5f, int stop_detect_state = 0) {
         _spr_top.fillSprite(COLOR_BG); _spr_top.drawFastHLine(0, 33, 480, COLOR_GRID);
         _spr_top.setFont(&fonts::Font0); // Compact 6x8 font for 3-row layout
         char buf[64];
@@ -339,6 +340,21 @@ public:
             snprintf(buf, sizeof(buf), "SH:%.0f", active_shift);
         }
         _spr_top.drawString(buf, 170, 16);
+        // Stop-bit indicator on Row 2 after SH
+        if (stop_auto) {
+            if (stop_detect_state == 1) {
+                _spr_top.setTextColor(0x00FFFFU, COLOR_BG); // yellow = detecting
+                _spr_top.drawString("ST:..", 230, 16);
+            } else {
+                _spr_top.setTextColor(0x00FF00U, COLOR_BG); // green = auto detected
+                snprintf(buf, sizeof(buf), "ST:%.1f(A)", active_stop);
+                _spr_top.drawString(buf, 230, 16);
+            }
+        } else {
+            _spr_top.setTextColor(0x00FFFFU, COLOR_BG); // cyan = manual
+            snprintf(buf, sizeof(buf), "ST:%.1f", active_stop);
+            _spr_top.drawString(buf, 230, 16);
+        }
 
         // --- Row 3 (y=22..31): ERR bar + % value + info ---
         _spr_top.setTextColor(0xAAAAAAU, COLOR_BG);
@@ -375,6 +391,29 @@ public:
             if (i == 8) { bg = (current_shift_idx == 8) ? 0x004400U : 0x222244U; brd = (current_shift_idx == 8) ? 0x00FF00U : 0x6666FFU; }
             _spr_text.fillRoundRect(x + 4, y + 2, cell_w - 8, cell_h - 4, 8, bg);
             _spr_text.drawRoundRect(x + 4, y + 2, cell_w - 8, cell_h - 4, 8, brd);
+            _spr_text.setTextColor(0xFFFFFFU, bg);
+            _spr_text.drawString(labels[i], x + cell_w / 2, y + cell_h / 2);
+        }
+        ili9488_push_colors(0, UI_Y_TEXT, 480, UI_TEXT_ZONE_H, (uint16_t*)_spr_text.getBuffer());
+    }
+
+    void drawStopPopup(int current_stop_idx, bool stop_auto) {
+        _spr_text.fillSprite(COLOR_BG);
+        _spr_text.setFont(&fonts::Font2);
+        _spr_text.setTextDatum(middle_center);
+        const char* labels[] = {"1.0", "1.5", "2.0", "AUTO"};
+        // Grid 2x2, each cell 240x60px, centered in 480x160 with padding
+        int cols = 2, cell_w = 240, cell_h = 60;
+        int y_off = 20;
+        for (int i = 0; i < 4; i++) {
+            int col = i % cols, row = i / cols;
+            int x = col * cell_w, y = y_off + row * cell_h;
+            uint32_t bg = 0x333333U, brd = 0x777777U;
+            bool selected = stop_auto ? (i == 3) : (i == current_stop_idx);
+            if (selected) { bg = 0x004400U; brd = 0x00FF00U; }
+            if (i == 3) { bg = stop_auto ? 0x004400U : 0x222244U; brd = stop_auto ? 0x00FF00U : 0x6666FFU; }
+            _spr_text.fillRoundRect(x + 6, y + 4, cell_w - 12, cell_h - 8, 8, bg);
+            _spr_text.drawRoundRect(x + 6, y + 4, cell_w - 12, cell_h - 8, 8, brd);
             _spr_text.setTextColor(0xFFFFFFU, bg);
             _spr_text.drawString(labels[i], x + cell_w / 2, y + cell_h / 2);
         }
