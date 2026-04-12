@@ -203,10 +203,20 @@ void core1_main() {
         }
         
         if (new_data_ready) {
-            memcpy(local_ts, (void*)shared_fft_ts, sizeof(local_ts));
-            memcpy(local_wave, (void*)shared_adc_waveform, sizeof(local_wave));
-            memcpy(local_mag_m, (void*)shared_mag_m, sizeof(local_mag_m));
-            memcpy(local_mag_s, (void*)shared_mag_s, sizeof(local_mag_s));
+            // Seqlock read: retry up to 3× if Core 0 writes mid-read.
+            // Consistent snapshot when seq1 == seq2 and both even.
+            uint32_t s1, s2;
+            int retries = 0;
+            do {
+                s1 = shared_dsp_seq;
+                __dmb();
+                memcpy(local_ts, (void*)shared_fft_ts, sizeof(local_ts));
+                memcpy(local_wave, (void*)shared_adc_waveform, sizeof(local_wave));
+                memcpy(local_mag_m, (void*)shared_mag_m, sizeof(local_mag_m));
+                memcpy(local_mag_s, (void*)shared_mag_s, sizeof(local_mag_s));
+                __dmb();
+                s2 = shared_dsp_seq;
+            } while (((s1 & 1) || s1 != s2) && ++retries < 3);
             new_data_ready = false;
 
             float sq=0.0f; for(int i=0; i<FFT_SIZE; i++) sq+=local_ts[i]*local_ts[i];

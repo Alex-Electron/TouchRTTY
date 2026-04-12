@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Build 221] - 2026-04-12
+### Added
+- **Seqlock для shared DSP data**: Core 0 оборачивает запись `shared_fft_ts/adc_waveform/mag_m/mag_s` в инкремент `shared_dsp_seq` с `__dmb()` барьерами. Core 1 читает с retry-циклом (до 3 попыток) — если seq изменилась между началом и концом memcpy, данные считаются рваными и перечитываются. Задел под будущий перенос FFT на Core 0 (частота shared-обновлений вырастет).
+- **SAVE flash serial indicator**: `[SAVE] writing flash (DSP paused ~45ms)...` + `[SAVE] done in X us`. Кнопка SAVE в UI уже меняет цвет визуально.
+
+### Changed
+- Memory barriers `__dmb()` добавлены в Core 0 writer и Core 1 reader для корректной работы seqlock на двухъядерном ARM.
+
+## [Build 220] - 2026-04-12
+### Optimized
+- **FIR 63-tap симметричный**: буфер power-of-2 (64) для bitmask-индексации вместо `% 63`. Использована симметрия коэффициентов (`fir_coeffs[i] == fir_coeffs[62-i]`) — 32 умножения + 31 сложение пар вместо 63 умножений. Forward iteration убирает reverse branch.
+- FIR ~50% быстрее, освобождает ~0.5% Core 0.
+
+## [Build 219] - 2026-04-12
+### Added
+- **PIO Waterfall LUT**: предвычисленная `waterfall_pio_lut[256]` таблица rainbow-gradient (uint8 → 32-bit PIO-ready RGB666). Rainbow-расчёт теперь O(1) lookup вместо 6 float-операций + color565 + byte swap на каждый из 480×64 = 30720 пикселей в кадре.
+- **Circular history buffer**: `wf_history[64][480]` uint8 (30 KB) вместо RGB565 sprite (61 KB). Скролл = декремент `wf_offset` без memcpy.
+- Новая функция `ili9488_push_waterfall_lut()` — рендер через history + LUT + ping-pong DMA.
+
+### Changed
+- Core 1 нижняя граница загрузки: 60% → **39%**. FPS водопада: стабильно 22 → 20-25.
+- Reference идея из `c:\YandexDisk\DIY\RP2350_RTTY\TouchRTTY\` портирована (там та же схема PIO LUT + history buffer).
+
+### Documented
+- `docs/ROADMAP_OPTIMIZATION.md` раздел 8: гибридный декодер RTTY (цель — **лучше 2Tone**, порог ~−15..−16 дБ SNR). 4 этапа: Goertzel matched filter → Multi-phase Goertzel → Character-level ML → Bayesian prior + Viterbi + noise blanker + spectral sub + temporal diversity + tiny NN fallback + soft confidence UI.
+- `docs/20260412/` — детальный анализ алгоритмов (RTTY_DECODER_ALGORITHMS_COMPARISON, IQ_VS_GOERTZEL_ML_ANALYSIS, OPTIMIZATION_AND_INTERFERENCE_MITIGATION).
+
 ## [Build 218] - 2026-04-12
 ### Added
 - **Chain BAUD→STOP detection** (Build 217): STOP-DET now waits for BAUD-DET to complete before starting. New flag `shared_chain_stop_after_baud` ensures STOP gap classification uses the correct baud rate instead of a stale default.

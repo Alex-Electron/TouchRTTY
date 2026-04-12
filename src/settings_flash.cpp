@@ -1,6 +1,7 @@
 #include "settings_flash.hpp"
 #include "app_state.hpp"
 #include "pico/multicore.h"
+#include "pico/time.h"
 #include "hardware/flash.h"
 #include "hardware/sync.h"
 #include <stdio.h>
@@ -55,12 +56,15 @@ void settings_build_from_state(AppSettings& s, int display_mode, bool auto_scale
 void settings_write_to_flash(const AppSettings& s) {
     uint8_t page_buf[FLASH_PAGE_SIZE] = {0};
     memcpy(page_buf, &s, sizeof(AppSettings));
+    uint32_t t0 = time_us_32();
+    printf("[SAVE] writing flash (DSP paused ~45ms)...\n");
     multicore_lockout_start_blocking();
     uint32_t ints = save_and_disable_interrupts();
     flash_range_erase(SETTINGS_FLASH_OFFSET, FLASH_SECTOR_SIZE);
     flash_range_program(SETTINGS_FLASH_OFFSET, page_buf, FLASH_PAGE_SIZE);
     restore_interrupts(ints);
     multicore_lockout_end_blocking();
+    printf("[SAVE] done in %lu us\n", time_us_32() - t0);
 }
 
 void settings_save_now(int display_mode, bool auto_scale) {

@@ -6,6 +6,7 @@
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "hardware/adc.h"
+#include "hardware/sync.h"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -434,10 +435,16 @@ void core0_dsp_loop() {
         }
 
         if(sc==FFT_SIZE) {
+            // Seqlock: mark writing (odd seq) → write → mark done (even seq).
+            // Memory barriers ensure Core 1 sees ordered writes.
+            shared_dsp_seq++;  // becomes odd → "writing"
+            __dmb();
             memcpy((void*)shared_fft_ts, ts, sizeof(ts));
             memcpy((void*)shared_adc_waveform, tw, sizeof(tw));
             memcpy((void*)shared_mag_m, tw_m, sizeof(tw_m));
             memcpy((void*)shared_mag_s, tw_s, sizeof(tw_s));
+            __dmb();
+            shared_dsp_seq++;  // becomes even → "stable snapshot"
             new_data_ready=true;
 
             wi=0; memmove(ts, &ts[480], (FFT_SIZE-480)*sizeof(float)); sc=FFT_SIZE-480;

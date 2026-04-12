@@ -23,6 +23,7 @@ volatile float shared_fft_mag[FFT_SIZE / 2];
 volatile float shared_adc_waveform[480];
 volatile float shared_fft_ts[FFT_SIZE];
 volatile bool  new_data_ready = false;
+volatile uint32_t shared_dsp_seq = 0;
 
 volatile float shared_adc_v        = 0.0f;
 volatile float shared_signal_db    = -80.0f;

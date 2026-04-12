@@ -63,6 +63,9 @@ extern volatile float shared_fft_mag[FFT_SIZE / 2];
 extern volatile float shared_adc_waveform[480];
 extern volatile float shared_fft_ts[FFT_SIZE];
 extern volatile bool  new_data_ready;
+// Seqlock for torn-read protection: Core 0 increments around write (odd=writing, even=stable).
+// Core 1 captures seq before and after read; matching even value = consistent snapshot.
+extern volatile uint32_t shared_dsp_seq;
 
 // Signal metrics
 extern volatile float shared_adc_v;
