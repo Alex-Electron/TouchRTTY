@@ -1,215 +1,205 @@
 # Roadmap: Оптимизация и Улучшение (Phase 3+)
 
-Этот документ фиксирует стратегические цели по оптимизации производительности и улучшению пользовательского интерфейса проекта TouchRTTY на базе RP2350.
+*Обновлено: 2026-04-12, Build 218*
+
+## 0. Рефакторинг кода (Build 189-206)
+
+### Разделение main.cpp на модули
+
+До Build 189 весь код (DSP, UI, serial, touch, state machines) находился в одном файле `main.cpp` (~1843 строки). В процессе развития проект был разбит на модули:
+
+| Файл | Строк | Назначение |
+|------|-------|-----------|
+| `main.cpp` | 55 | Точка входа, инициализация HW, запуск Core 1 |
+| `dsp_pipeline.cpp` | 703 | Core 0: ADC→AGC→I/Q→LPF→ATC→DPLL→Baudot→BAUD-DET→STOP-DET→auto-INV→auto-recovery |
+| `ui_loop.cpp` | 915 | Core 1: FFT, SEARCH, спектр/водопад, touch, serial parser |
+| `serial_commands.cpp` | 156 | Обработка 18+ serial-команд (BAUD, SHIFT, STOP, SEARCH и др.) |
+| `settings_flash.cpp` | 103 | Чтение/запись AppSettings во Flash (2MB offset) |
+| `app_state.hpp/.cpp` | 141+95 | Все shared volatile переменные и константы |
+| `ui/UIManager.hpp` | 718 | Отрисовка: спектр, водопад, текстовая зона, top/bottom bar, попапы |
+| **Итого** | **2745** | |
+
+### Ключевые принципы рефакторинга
+
+1. **Разделение по ядрам:** `dsp_pipeline.cpp` исполняется строго на Core 0, `ui_loop.cpp` — на Core 1. Это гарантирует отсутствие взаимных блокировок.
+
+2. **Shared state как единая точка:** Все межъядерные переменные собраны в `app_state.hpp/cpp`. Volatile semantics, без mutex.
+
+3. **State machines изолированы:** BAUD-DET, STOP-DET, auto-INV, auto-recovery — каждый со своими фазами и local state, все внутри `dsp_pipeline.cpp`.
+
+4. **UI отделён от логики:** `UIManager.hpp` — чистая отрисовка, принимает параметры через аргументы, не читает shared state напрямую (кроме отрисовки баров).
+
+## 0a. Оптимизация производительности (Build 189-194)
+
+### Снижение загрузки Core 0 (DSP)
+
+**До оптимизации (Build 188):** Core 0 = ~30%, Core 1 = ~70%.
+**После оптимизации (Build 191+):** Core 0 = ~7%, Core 1 = ~25-35%.
+
+Ключевые оптимизации:
+
+1. **Strict Float Policy (Build 189):**
+   - Полный аудит: все `double` → `float`, `sin()` → `sinf()`, `log10()` → `log10f()`
+   - RP2350 имеет single-precision FPU; double-precision эмулируется софтово (~10x медленнее)
+   - Эффект: Core 0 с ~30% до ~15%
+
+2. **Compiler flags (Build 189):**
+   ```cmake
+   -O3 -ffast-math -funroll-loops
+   -mfloat-abi=hard -mfpu=fpv5-sp-d16
+   ```
+   `-flto` **не** используется — несовместим с Pico SDK `__wrap_` символами.
+
+3. **Hardware ADC FIFO (Build 190):**
+   - `adc_fifo_setup()` + `adc_run(true)` для 10kHz без джиттера
+   - `tight_loop_contents()` вместо `__wfe()` (WFE теряет сэмплы без ADC IRQ)
+
+4. **fast_log2f() (Build 190):**
+   - IEEE 754 bit-trick для логарифма
+   - ~4x быстрее стандартного `log10f()`
+   - Используется в расчёте dB для сигнала и SNR
+
+5. **AGC precompute (Build 190):**
+   - `1.0f / release` вычисляется один раз → умножение вместо деления в inner loop
+
+6. **FFT на Core 1 (Build 191):**
+   - FFT перенесён с Core 0 на Core 1 — он нужен только для отрисовки спектра и SEARCH
+   - Core 0 освобождён от 1024-point FFT (~2ms per frame)
+   - Эффект: Core 0 с ~15% до ~7%
+
+7. **Ping-Pong DMA Buffers (Build 190):**
+   - Двойная буферизация для SPI дисплея
+   - Одна полоска рисуется пока вторая передаётся
+
+### Снижение загрузки Core 1 (UI)
+
+1. **Спрайтовая отрисовка (LovyanGFX):**
+   - Top bar, bottom bar, текстовая зона — каждый в отдельном спрайте
+   - Перерисовка только при изменении данных (not every frame)
+
+2. **Waterfall оптимизация:**
+   - Прямой SPI DMA для полосок водопада
+   - 480px × 1 строка за один DMA transfer
+
+3. **FFT rate limiting:**
+   - FFT считается не на каждый frame, а при `new_data_ready` (каждые ~48ms = 480 сэмплов)
+
+### Текущая загрузка (Build 218)
+- **Core 0:** 5-8% (DSP idle) / 10-15% (BAUD-DET active, histogram + scoring)
+- **Core 1:** 25-35% (зависит от display mode: спектр+водопад vs tuning lab)
 
 ## 1. Шрифтовая система (Roadmap Item #1)
 
 ### Этап 1: 4 режима шрифтов — DONE (Build 195)
-- [x] Отказ от дробного масштабирования. Все шрифты нативные (1:1 пиксель).
-- [x] BIG: Spleen 8×16 (импортирован из BDF, 9 строк, 55 символов)
-- [x] MED: Bitocra 7×13 (импортирован из BDF, 11 строк, 62 символа)
-- [x] SMALL: Font0 6×8 (встроенный LovyanGFX, 15 строк, 73 символа)
-- [x] TINY: Spleen 5×8 (импортирован из BDF, моноширинный, 17 строк, 90 символов) — Build 199
-- [x] Конвертер `tools/bdf2gfx.py` (BDF → Adafruit GFX header)
+- [x] BIG: Spleen 8×16 (9 строк, 55 символов)
+- [x] MED: Bitocra 7×13 (11 строк, 62 символа)
+- [x] SMALL: Font0 6×8 (15 строк, 73 символа)
+- [x] TINY: Spleen 5×8 (17 строк, 90 символов) — Build 199
+- [x] Конвертер `tools/bdf2gfx.py`
 - [x] Автоматический line_width при переключении шрифта
-- [x] Сохранение выбора шрифта в flash
-- [x] Упрощение DIAG экрана: убраны DUMP, W-/W+ (дублировали Tuning Lab), оставлены FONT + RST
+- [x] Сохранение в flash
 
-### Этап 2: Font Lab (подменю настройки шрифтов) — TODO
-Отдельный экран (аналог Tuning Lab), вызывается через DIAG → FONT (долгое нажатие) или MENU → FONT LAB.
-Цель: полная гибкость визуальных настроек текстовой зоны без перепрошивки.
-
-**Вход в Font Lab:**
-- [ ] Кнопка входа из DIAG экрана (долгое нажатие на FONT) или из меню
-- [ ] Выход кнопкой BACK → возврат к основному экрану
-
-**Выбор шрифтов:**
-- [ ] Список всех импортированных шрифтов (Spleen 8x16, Bitocra 7x13, Font0 6x8, Spleen 5x8 + будущие)
-- [ ] Привязка шрифта к каждому слоту: BIG / MED / SMALL / TINY
-- [ ] Возможность назначить любой шрифт на любой слот
-- [ ] Тач-кнопки: SLOT (переключение BIG→MED→SMALL→TINY), FONT (переключение шрифта внутри слота)
-
-**Параметры отображения (для каждого слота):**
-- [ ] Масштабирование по X (0.5x — 3.0x, шаг 0.25)
-- [ ] Масштабирование по Y (0.5x — 3.0x, шаг 0.25)
-- [ ] Межстрочный интервал line_h (авто или ручной, px)
-- [ ] Горизонтальный отступ текста (padding_x, 0-20 px)
-- [ ] Вертикальный отступ текста (padding_y, 0-10 px)
-- [ ] Количество символов в строке (line_width, 30-120)
-- [ ] Тач-кнопки: ←/→ для выбора параметра, ▲/▼ для изменения значения
-
-**Предпросмотр:**
-- [ ] Тестовая строка: `ABCDE 12345 THE QUICK BROWN FOX JUMPS`
-- [ ] Отображается в реальном времени в текстовой зоне (160px) при каждом изменении
-- [ ] Показ текущих параметров: шрифт, размер, line_h, line_width, padding
-
-**Пресеты и сохранение:**
-- [ ] Структура `FontPreset` для каждого слота: font_id, scale_x, scale_y, line_h, padding_x, padding_y, line_width
-- [ ] Массив из 4 пресетов (BIG/MED/SMALL/TINY) в AppSettings
-- [ ] Сохранение в flash через общий механизм (SAVE или авто-save)
-- [ ] Серийные команды: `FONT <slot> <font_id>`, `FONTSCALE <slot> <x> <y>`, `FONTPAD <slot> <px> <py>`
-
-**Кандидаты на импорт (расширение библиотеки):**
-- [ ] Terminus 8×14/8×16 — терминальная классика
-- [ ] Proggy Clean 7×11 — программистский
-- [ ] Unscii 8×8/8×16 — retro/pixel-art
-- [ ] Creep 4×6 — ультрамелкий (для будущего ILI9341 320×240)
+### Этап 2: Font Lab — TODO
+Отдельный экран для тонкой настройки шрифтов (размер, spacing, line_height).
 
 ### Этап 3: Скины и цветовые схемы — TODO
+- Classic Green (текущая)
+- SDR Warm (тёмно-синий фон, тёплая палитра водопада)
 
-**Тема 1 (текущая): Classic Green**
-- Фон: чёрный, спектр: зелёный, водопад: зелёная палитра
-- Текст: зелёный на чёрном
+## 2. Интеллектуальная автоматика приёма — DONE
 
-**Тема 2: SDR Warm (референс — SDR-приёмник)**
-- Фон: тёмно-синий (#000020)
-- Спектр: заливка градиентом синий→голубой→жёлтый→белый (от основания к пику)
-- Водопад: синий→голубой→жёлтый→оранжевый→белый (тёплая палитра)
-- Маркер центральной частоты: красная вертикальная линия
-- Текст: белый/голубой на тёмно-синем
+### Авто-инверсия Mark/Space — DONE (Build 196-202)
+- [x] Сравнительный алгоритм (ERR before/after flip, ±3% порог)
+- [x] Индикатор NOR?/INV? при неопределённости
+- [x] SEARCH сбрасывает INV → NOR
 
-**Реализация:**
-- [ ] Структура `ColorTheme` с палитрами для каждого элемента UI
-- [ ] Функция генерации waterfall LUT по 5-6 anchor-цветам
-- [ ] Переключение темы в меню или серийной командой (`THEME 0|1`)
-- [ ] Сохранение выбранной темы в flash
-- [ ] Импорт скинов с SD-карты (JSON/INI формат) — будущее
+### SEARCH (автопоиск) — DONE (Build 198-216)
+- [x] FFT-based, все 8 шифтов, multi-signal (до 8)
+- [x] Parabolic peak interpolation (Build 216)
+- [x] Shift-proportional dedup tolerance (Build 216)
+- [x] dist_penalty = 2.5 (Build 216)
+- [x] Cycling (< 10s между нажатиями)
 
-### Кандидаты на импорт шрифтов (оценены визуально):
-| Шрифт | Размер | Стиль | Ссылка |
-|-------|--------|-------|--------|
-| Terminus | 8×14, 8×16 | Терминальная классика | terminus-font.sourceforge.net |
-| Proggy Clean | 7×11 | Программистский | github.com/bluescan/proggyfonts |
-| Dina | 8×10..8×16 | Чистый, компактный | dcmembers.com/jibsen |
-| Spleen | 5×8..32×64 | Современный bitmap | github.com/fcambus/spleen |
-| Bitocra | 7×13 | Мелкий, чёткий | github.com/ninjaaron/bitocra |
-| Creep | 4×6 | Ультрамелкий | github.com/romeovs/creep |
-| Scientifica | 5×11 | Научный стиль | github.com/NerdyPepper/scientifica |
-| Unscii | 8×8, 8×16 | Retro/pixel-art | viznut.fi/unscii |
-| Robey 4×6 | 4×6 | Экстра-компактный | robey.lag.net |
+### Авто-определение шифта — DONE (Build 200-203)
+- [x] 8 стандартных шифтов, режим SHIFT AUTO (idx=8)
+- [x] Popup 3×3
 
-## 2. Аппаратное Ускорение Рендеринга (Roadmap Item #2)
-- [ ] **Hardware Scroll (ILI9488):** Использование регистров `VSCRSADD` (37h) для водопада.
-- [ ] **SIO INTERP Colormap:** Мгновенное преобразование `float -> RGB565`.
-- [x] **Ping-Pong DMA Buffers:** Двойная буферизация для SPI (Build 190).
+### BAUD-DET (автоопределение скорости) — DONE (Build 206)
+- [x] Symbol Duration Histogram + Harmonic Scoring
+- [x] Fallback: ERR verify (sequential test)
+- [x] 4 baud rates: 45.45 / 50 / 75 / 100
+- [x] Popup 3×2
 
-## 3. Оптимизация под архитектуру RP2350 (Cortex-M33)
-- [x] **Strict Float Policy:** Тотальный аудит. Все double→float, sin→sinf (Build 189).
-- [x] **Hardware ADC FIFO:** `adc_fifo_setup()` + `adc_run(true)` для 10kHz без джиттера (Build 190).
-  - **Важно:** `__wfe()` нельзя использовать без ADC IRQ — приводит к потере сэмплов. Использовать `tight_loop_contents()`.
-- [ ] **Memory Barriers:** `__dmb()` для гарантированной целостности при межъядерном обмене.
-- [ ] **Vectorized DSP (CMSIS-DSP):** `arm_fir_f32` и `arm_biquad_f32` для замены скалярных циклов.
+### STOP-DET (автоопределение стоп-бита) — DONE (Build 205-218)
+- [x] Direct gap measurement (state-7-end → next start-bit)
+- [x] Warmup 1.5s, idle filter 1.25T, bin boundaries 0.25/0.85T (Build 218)
+- [x] Chain BAUD→STOP через shared_chain_stop_after_baud (Build 217)
+- [x] Popup 2×2
 
-## 4. Оптимизация UI и Интерфейса (Roadmap Item #3)
-- [ ] **Selective Redraw:** Перерисовка только изменившихся элементов.
-- [ ] **Widget Framework:** Рефакторинг UI с переходом на структуры объектов.
-- [ ] **Вертикальный скролл текста:** Оптимизация прокрутки с LovyanGFX спрайтами.
-- [x] **Глазковая диаграмма (Eye Diagram):** Phosphor persistence, DPLL-синхронизированная X-ось, 240x64 в Tuning Lab (Build 194).
-- [x] **Error Rate Indicator:** 100-символьное скользящее окно, бар ERR в верхней панели (Build 191).
-- [x] **3 тонких бара:** SIG, AGC, ERR в верхней панели (Build 191).
+### Полный pipeline — DONE (Build 217)
+- [x] SEARCH → SHIFT → BAUD (chain) → STOP → INV
+- [x] Автоматическая цепочка, STOP ждёт завершения BAUD
+- [ ] Итоговый экран "Found: 50 Baud, 450 Hz shift, 1.5 stop"
 
-## 5. Глубокая оптимизация DSP
-- [ ] **CMSIS-DSP:** Переход на `arm_fir_f32` и `arm_biquad_cascade_df2T_f32`.
-- [ ] **NCO Interp:** Аппаратная генерация синусоид на `interp0`.
-- [x] **fast_log2f():** IEEE 754 bit-trick, ~4x быстрее log10f (Build 190).
-- [x] **AGC precompute:** 1/release (умножение вместо деления) (Build 190).
+### Auto-Recovery — DONE (Build 217)
+- [x] ERR > 15% для 3s → BAUD-DET → chain → STOP-DET
+- [x] Защита от конфликта с auto-INV
 
-## 6. CMake & Compiler Flags
-- [x] `-O3`, `-ffast-math`, `-funroll-loops` (Build 189).
-- [x] `-mfloat-abi=hard`, `-mfpu=fpv5-sp-d16` (Build 189).
-- **Примечание:** `-flto` несовместим с Pico SDK `__wrap_` символами. Не использовать.
+### Clipping Indicator — DONE (Build 216)
+- [x] SIG bar мигает red/white при ADC clipping
+- [x] Текст "CLIP!" мигает синим
+- [x] Latch 1.5 секунды
 
-## 7. Serial Command Interface (Build 194+)
-- [x] 18 команд дистанционного управления: ALPHA, BW, SQ, FREQ, BAUD, SHIFT, STOP, INV, AFC, AGC, SCALE, WIDTH, DIAG, SEARCH, STATUS, SAVE, CLEAR, HELP.
-- [x] Компактный диагностический поток `[D]` каждые ~500мс.
-- [x] Python autotune.py: автоподстройка ALPHA/BW/SQ через serial (Phase 1 + Phase 2 fine-tuning).
+## 3. Аппаратное Ускорение Рендеринга
+- [ ] Hardware Scroll (ILI9488 VSCRSADD)
+- [ ] SIO INTERP Colormap
+- [x] Ping-Pong DMA Buffers (Build 190)
 
-## 7a. Интеллектуальная автоматика приёма
+## 4. Оптимизация под RP2350
+- [x] Strict Float Policy (Build 189)
+- [x] Hardware ADC FIFO (Build 190)
+- [x] fast_log2f() IEEE 754 bit-trick (Build 190)
+- [x] AGC precompute (Build 190)
+- [x] FFT на Core 1 (Build 191)
+- [ ] Memory Barriers (__dmb())
+- [ ] CMSIS-DSP (arm_fir_f32, arm_biquad_f32)
 
-### Авто-инверсия Mark/Space — DONE (Build 196, улучшена Build 202)
-- [x] Сравнительный алгоритм: запоминает ERR до переключения, сравнивает после
-- [x] Если ERR упал >3% → оставляем, вырос >3% → откат, ±3% → откат + индикатор `?`
-- [x] Пороги: триггер ERR>12%, время 0.8с обнаружение + 0.8с замер (~1.6с цикл)
-- [x] Индикатор `NOR?`/`INV?` в top bar когда не определяется (гаснет при ERR<5%)
-- [x] SEARCH сбрасывает INV→NOR и включает AFC автоматически
-- [x] Режимы: `INV AUTO` (по умолчанию), `INV NOR`/`INV INV` (ручные, отключают авто)
-- [x] Сброс счётчика ошибок при каждой попытке для чистого замера
+## 5. UI оптимизация
+- [ ] Selective Redraw
+- [ ] Widget Framework
+- [x] Eye Diagram с phosphor persistence (Build 194)
+- [x] Error Rate Indicator, 3 thin bars (Build 191)
 
-### Автопоиск сигнала (по кнопке SEARCH) — DONE (Build 198)
-Запускается кнопкой, не работает постоянно. AFC остаётся на постоянной основе.
-- [x] Кнопка **SEARCH** в нижней панели (заменила INV)
-- [x] Сканирование FFT: поиск пары пиков с расстоянием = текущий шифт
-- [x] Критерий: оба пика SNR > 4dB, баланс Mark/Space < 10dB, оба — локальные максимумы
-- [x] При нахождении: установка центральной частоты
-- [x] Визуальная обратная связь: SRCH.. / FOUND! / NONE (автосброс 2 сек)
-- [x] Серийная команда `SEARCH`
-- [x] Индикатор NOR/INV в верхней панели (кнопка INV убрана, команда `INV ON|OFF` сохранена)
-- [x] Мульти-сигнальный поиск + cycling (Build 205)
+## 6. Compiler Flags
+- [x] `-O3`, `-ffast-math`, `-funroll-loops` (Build 189)
+- [x] `-mfloat-abi=hard`, `-mfpu=fpv5-sp-d16` (Build 189)
+- **Примечание:** `-flto` несовместим с Pico SDK `__wrap_`
 
-### Авто-определение шифта (по FFT пикам) — DONE (Build 200, улучшен Build 203)
-- [x] 8 стандартных шифтов: 85/170/200/340/425/450/500/850 Гц (было 5)
-- [x] Режим SHIFT AUTO (idx=8): при SEARCH перебирает все 8 шифтов, выбирает лучшую пару
-- [x] Кнопка SHIFT в нижней панели: popup-сетка 3×3 (toggle по кнопке S)
-- [x] Серийная команда `SHIFT AUTO` или `SHIFT 8`
-- [x] При AUTO detected shift используется для демодуляции через shared_active_shift
-- [x] Приоритет стандартных шифтов (170/450/850): tie-breaker ±2dB при близких scores
-- [x] Один проход по всем шифтам, затем сравнение с приоритетными если лучший — нестандартный
+## 7. Serial Command Interface
+- [x] 18+ команд (Build 194-206)
+- [x] Диагностический поток `[D]` (Build 194)
+- [x] serial_cmd.ps1 с try/finally/Dispose + DTR/RTS (Build 217)
 
-### Авто-определение скорости (Baud) — DONE (Build 206)
-- [x] Symbol Duration Histogram: D-sign transitions → interval histogram (3s accumulation)
-- [x] Scoring: peaks at multiples of bit_period ± 8 samples, distance decay + harmonic weight
-- [x] Clear winner (>1.5× second): immediate apply; ambiguous → sequential ERR verify (2s/baud)
-- [x] 4 baud rates: 45.45 / 50 / 75 / 100 Baud
-- [x] Popup 3×2: 45/50/75/100/AUTO
-- [x] BD indicator: Row 3 top bar (BD:45 cyan, BD:50(A) green, BD:.. yellow)
-- [x] Serial: `BAUD 0-3` (manual), `BAUD 4`/`BAUD AUTO` (auto-detect)
+## 8. Планируемые фичи
 
-### Авто-определение стоп-бита — DONE (Build 205)
-- [x] Popup-меню 2×2: 1.0 / 1.5 / 2.0 / AUTO (кнопка ST в нижней панели)
-- [x] Последовательный тест 1.0→1.5→2.0 (3с на каждый), выбор по минимальному ERR%
-- [x] Индикация в top bar: ST:1.5 (голубой=ручной), ST:1.5(A) (зелёный=авто), ST:.. (жёлтый=детекция)
-- [x] Серийные команды: `STOP AUTO`, `STOP 0/1/2`
-- [x] SEARCH автоматически запускает stop-bit detection
+### SITOR-B / NAVTEX FEC — TODO (приоритет)
+- [ ] Framer: 7 data bits + 1 stop
+- [ ] CCIR 476 lookup (35 valid codewords, ratio 4:3)
+- [ ] Time diversity buffer (5 символов)
+- [ ] Phasing sync (DX/RX signals)
+- [ ] Auto-detect: 100/170 → try SITOR-B
 
-### Мульти-сигнальный SEARCH — DONE (Build 205)
-- [x] Поиск ВСЕХ RTTY сигналов на спектре (до 8 одновременно)
-- [x] Первое нажатие: полный поиск, выбор по лучшему score
-- [x] Повторное нажатие (<10с): циклический переход по сохранённому списку
-- [x] Кандидаты: массив 128 с вытеснением слабых, адаптивный порог 40% от лучшего
-- [x] Pipeline: SEARCH → STOP AUTO → INV AUTO (автодетект после каждого переключения)
+### Встроенный автотюнинг — TODO
+- [ ] Кнопка AUTO в Tuning Lab
+- [ ] Hill-climb: ALPHA → BW → SQ
+- [ ] Score = -5×ERR + SNR - 1000×|FE| + SQ_bonus
 
-### Полный автодетект (SEARCH pipeline) — PARTIAL (Build 205)
-SEARCH уже запускает: поиск сигнала → определение шифта → стоп-бита → инверсии.
-- [x] Pipeline: SEARCH → SHIFT → STOP → INV (работает автоматически)
-- [x] Прогресс: индикаторы ST:.. и NOR?/INV? в top bar
-- [x] Авто-определение скорости (BAUD) — DONE (Build 206), histogram + ERR verify
-- [ ] Итоговый экран "Found: 50 Baud, 450 Hz shift, 1.5 stop, LSB"
-
-## 7b. Встроенный автотюнинг на приборе — TODO
-Автоподстройка DSP параметров без ПК, прямо на экране устройства.
-- [ ] Кнопка **AUTO** в Tuning Lab запускает встроенный автотюнинг
-- [ ] Алгоритм: hill-climb sweep ALPHA → BW → SQ (аналог autotune.py)
-- [ ] Метрика качества (Score): `-5×ERR + SNR - 1000×|DPLL_FE| + SQ_bonus`
-- [ ] Диапазон Score: -999 (нет данных) .. 70+ (идеально, ERR~0%)
-- [ ] Прогресс на экране: текущий параметр, значение, прогресс-бар, лучший Score
-- [ ] Замер ~3 сек на точку (настраиваемо)
-- [ ] Все данные уже доступны через shared-переменные (ERR, SNR, DPLL_FE, SQ) — serial не нужен
-- [ ] По завершении: показать результат (было→стало), автосохранение в flash
-- [ ] Возможность прервать тачем (кнопка STOP)
-- [ ] Опционально: fine-tuning (Phase 2) с половинным шагом вокруг лучших значений
-
-## 8. Мультиплатформенность дисплеев — TODO
-- [ ] **ILI9341 320×240:** Вариант прошивки для меньшего экрана
-- [ ] Условная компиляция (`#ifdef DISPLAY_320x240`) или автоопределение по ID чипа
-- [ ] Адаптация UI зон: top bar, DSP zone, text zone, bottom bar — пропорционально
-- [ ] TINY шрифт как основной для 320×240 (максимум информации на маленьком экране)
-- [ ] Адаптация touch-зон и размеров кнопок меню
-
-## 9. SDR и DRM (Phase 9 - Future)
-- [ ] **Dual-Channel ADC (I/Q Input):** Для Belka-DX 40 kHz.
-- [ ] **Complex FFT & Panorama:** Широкополосный водопад.
-- [ ] **I2S DAC Audio Output:** PCM5102 для вывода звука.
-- [ ] **AAC Audio Decoding:** HE-AAC v2 / xHE-AAC (FDK AAC).
+### Прочее
+- [ ] Итоговый экран "Found: ..." после SEARCH
+- [ ] Мультиплатформенность (ILI9341 320×240)
+- [ ] SD карта (DWD SYNOP parser)
+- [ ] CW Декодер (K-Means)
+- [ ] I2S DAC Audio Output
 
 ---
-*Статус: В разработке (Ветка feat/alex-cl-dev, Build 205)*
+*Статус: Build 218, ветка feat/alex-cl-dev*

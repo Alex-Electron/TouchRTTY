@@ -25,6 +25,11 @@ add_subdirectory(lib/LovyanGFX)
 
 add_executable(TouchRTTY
     src/main.cpp
+    src/app_state.cpp
+    src/serial_commands.cpp
+    src/settings_flash.cpp
+    src/dsp_pipeline.cpp
+    src/ui_loop.cpp
     src/display/ili9488_driver.c
 )
 

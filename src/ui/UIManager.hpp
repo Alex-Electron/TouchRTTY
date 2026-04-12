@@ -302,10 +302,18 @@ public:
         _spr_top.drawString("SIG", 2, 5);
         _spr_top.drawRect(bar_x, 0, bar_w, bar_h, COLOR_GRID);
         int lw = (int)((signal_db+80)*(bar_w/70.0f)); if(lw<0) lw=0; if(lw>bar_w) lw=bar_w;
-        uint32_t sig_color = 0x00FF00U; if (clipping) sig_color = 0x0000FFU; else if (signal_db > -30.0f) sig_color = 0xFF0000U;
-        _spr_top.fillRect(bar_x, 0, lw, bar_h, sig_color);
-        _spr_top.setTextColor(0x00FFFFU, COLOR_BG);
-        snprintf(buf, sizeof(buf), "%3.0fdB", signal_db); _spr_top.drawString(buf, bar_x+bar_w+4, 5);
+        bool clip_blink = ((time_us_32() / 200000) & 1) != 0;
+        uint32_t sig_color = 0x00FF00U;
+        if (clipping) sig_color = clip_blink ? 0x0000FFU : 0xFFFFFFU;
+        else if (signal_db > -30.0f) sig_color = 0xFF0000U;
+        _spr_top.fillRect(bar_x, 0, clipping ? bar_w : lw, bar_h, sig_color);
+        if (clipping && clip_blink) {
+            _spr_top.setTextColor(0x0000FFU, COLOR_BG);
+            _spr_top.drawString("CLIP!", bar_x+bar_w+4, 5);
+        } else {
+            _spr_top.setTextColor(0x00FFFFU, COLOR_BG);
+            snprintf(buf, sizeof(buf), "%3.0fdB", signal_db); _spr_top.drawString(buf, bar_x+bar_w+4, 5);
+        }
         snprintf(buf, sizeof(buf), "M:%.0f S:%.0f", m_freq, s_freq); _spr_top.drawString(buf, 170, 5);
         if (squelch_open) { _spr_top.setTextColor(0x00FF00U, COLOR_BG); _spr_top.drawString("SYNC", 280, 5); }
         else { _spr_top.setTextColor(0x777777U, COLOR_BG); _spr_top.drawString("WAIT", 280, 5); }

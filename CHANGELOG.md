@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Build 218] - 2026-04-12
+### Added
+- **Chain BAUD→STOP detection** (Build 217): STOP-DET now waits for BAUD-DET to complete before starting. New flag `shared_chain_stop_after_baud` ensures STOP gap classification uses the correct baud rate instead of a stale default.
+- **STOP-DET warmup** (Build 218): first 1.5s of gap measurements are discarded — DPLL phase noise is too high immediately after framer switches to permissive mode.
+- **STOP-DET idle filter** (Build 218): gaps > 1.25T are rejected as inter-frame pauses (previously counted as bin=2 votes, corrupting results).
+- **Parabolic peak interpolation** (Build 216): sub-bin FFT precision for SEARCH frequency measurement. Center frequency accuracy improved from ±10 Hz to ±2-5 Hz.
+- **Shift-proportional dedup tolerance** (Build 216): `max(3, shift_bins/8)` — prevents FSK spectral smearing from generating multiple false candidates for wide shifts (850 Hz: 6→1 candidate).
+- **Clipping indicator** (Build 216): SIG bar blinks red/white with "CLIP!" text when ADC clips. 1.5s latch.
+- **Auto-recovery chain** (Build 217): ERR > 15% for 3s triggers BAUD-DET → STOP-DET re-measurement.
+- **Simulator Mark frequency mode** (Build 216): `rtty_simulator.html` now accepts both Center and Mark frequency as input.
+- **serial_cmd.ps1 improvements** (Build 217): try/finally/Dispose for proper COM port cleanup; DTR/RTS enabled for USB CDC reads.
+
+### Changed
+- **STOP-DET bin boundaries** (Build 218): adjusted from 0.25/0.75 to 0.25/0.85 based on empirical gap measurements across all baud rates. 2.0 stop bits now correctly detected (gap ≈ 1.0T → bin 2).
+- **SEARCH dist_penalty** increased from 1.5 to 2.5 for better shift discrimination (425 vs 450 Hz).
+- **SEARCH pipeline**: when both BAUD and STOP are AUTO, only BAUD-DET fires; STOP-DET chains after completion (was: both fired in parallel, causing stale-baud misclassification).
+
+### Fixed
+- **STOP-DET wrong on 100 baud**: gap_fraction was computed with default baud (45.45) instead of detected baud. Fixed by chain logic.
+- **STOP-DET always voting 2.0 for inter-frame pauses**: 54ms idle gaps (5.5T) were not filtered, all landed in bin=2. Fixed by 1.25T upper filter.
+- **SEARCH cycle-leak** (Build 215): `found_current` from previous test caused entry into cycle path instead of full rescan. Removed cycle-by-frequency path after full rescan.
+- **COM port phantom locks**: serial_cmd.ps1 had no try/finally, killed processes left phantom port locks.
+
+### Documentation
+- Full rewrite of `DEVELOPMENT_CONTEXT.md` — all algorithms, architecture, test results
+- Full rewrite of `PHASE3_RTTY_DSP_FINAL.md` — detailed DSP/DPLL/SEARCH/BAUD-DET/STOP-DET
+- Updated `ROADMAP_OPTIMIZATION.md` — refactoring history, performance optimizations, current status
+
+### Tested
+- **Simulator matrix (8/8 pass)**: 45/170, 50/450, 75/425, 100/850 × stop 1.0, 1.5, 2.0
+- **Real signals via WebSDR (3/3 pass)**:
+  - 4583 kHz DWD: 50/450/1.5 — clean decode
+  - 10100 kHz DWD: 50/425/1.5 — correct with noise
+  - 7646 kHz DWD: 50/450/1.5 — noisy but correct
+  - 12579 kHz SITOR-B: 100/170 detected correctly (Baudot decoder N/A for FEC)
+
 ## [Build 206] - 2026-04-05
 ### Added
 - **Baud rate auto-detection**: symbol duration histogram approach (like PhosphorRTTY)

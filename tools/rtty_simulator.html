@@ -56,10 +56,16 @@
         <option value="custom">Custom...</option>
     </select>
 
-    <label>Center Frequency (Hz):</label>
-    <input type="number" id="centerFreq" value="1535" onchange="updateFreqs()">
+    <label>Input mode:</label>
+    <select id="freqMode" onchange="updateFreqs()">
+        <option value="center" selected>Center frequency</option>
+        <option value="mark">Mark frequency (direct)</option>
+    </select>
 
-    <div class="freq-computed" id="freqDisplay">Mark: 1450 Hz &nbsp;|&nbsp; Space: 1620 Hz</div>
+    <label id="freqLabel">Center Frequency (Hz):</label>
+    <input type="number" id="freqInput" value="1500" onchange="updateFreqs()">
+
+    <div class="freq-computed" id="freqDisplay">Mark: 1415 Hz &nbsp;|&nbsp; Space: 1585 Hz</div>
 
     <div class="checkbox-group">
         <input type="checkbox" id="invertTones">
@@ -89,34 +95,44 @@
         let isPlaying = false;
         let scheduleTimer;
 
-        function updateFreqs() {
+        function getShiftHz() {
             const shiftSel = document.getElementById('shift');
-            const center = parseFloat(document.getElementById('centerFreq').value);
-            let shift;
-            if (shiftSel.value === 'custom') {
-                shift = 170; // default for custom
+            return shiftSel.value === 'custom' ? 170 : parseFloat(shiftSel.value);
+        }
+
+        function updateFreqs() {
+            const mode = document.getElementById('freqMode').value;
+            const val = parseFloat(document.getElementById('freqInput').value);
+            const shift = getShiftHz();
+            let mark, space;
+            if (mode === 'mark') {
+                mark = val;
+                space = val + shift;
+                document.getElementById('freqLabel').innerText = 'Mark Frequency (Hz):';
             } else {
-                shift = parseFloat(shiftSel.value);
+                mark = val - shift / 2;
+                space = val + shift / 2;
+                document.getElementById('freqLabel').innerText = 'Center Frequency (Hz):';
             }
-            const mark = center - shift / 2;
-            const space = center + shift / 2;
             document.getElementById('freqDisplay').innerHTML =
-                'Mark: ' + mark.toFixed(0) + ' Hz &nbsp;|&nbsp; Space: ' + space.toFixed(0) + ' Hz';
+                'Mark: ' + mark.toFixed(0) + ' Hz &nbsp;|&nbsp; Space: ' + space.toFixed(0) + ' Hz' +
+                ' &nbsp;|&nbsp; Center: ' + ((mark + space) / 2).toFixed(0) + ' Hz';
         }
         updateFreqs();
 
         function getFreqs() {
-            const shiftSel = document.getElementById('shift');
-            const center = parseFloat(document.getElementById('centerFreq').value);
-            let shift;
-            if (shiftSel.value === 'custom') {
-                shift = 170;
+            const mode = document.getElementById('freqMode').value;
+            const val = parseFloat(document.getElementById('freqInput').value);
+            const shift = getShiftHz();
+            let mark, space;
+            if (mode === 'mark') {
+                mark = val;
+                space = val + shift;
             } else {
-                shift = parseFloat(shiftSel.value);
+                mark = val - shift / 2;
+                space = val + shift / 2;
             }
             const invert = document.getElementById('invertTones').checked;
-            let mark = center - shift / 2;
-            let space = center + shift / 2;
             if (invert) { let tmp = mark; mark = space; space = tmp; }
             return { mark, space };
         }
