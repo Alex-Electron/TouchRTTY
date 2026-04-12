@@ -180,7 +180,121 @@
 - [x] Диагностический поток `[D]` (Build 194)
 - [x] serial_cmd.ps1 с try/finally/Dispose + DTR/RTS (Build 217)
 
-## 8. Планируемые фичи
+## 8. Гибридный декодер RTTY (ЦЕЛЬ: лучше 2Tone)
+
+**Стратегическая цель:** Порог декодирования **−15..−16 дБ SNR** — лучше, чем у любого существующего декодера RTTY в мире (2Tone: ~−13 дБ, MMTTY: ~−9 дБ, fldigi: ~−5 дБ).
+
+**Подход:** Не заменяем I/Q+DPLL, а **дополняем** параллельной цепочкой Goertzel Matched Filter + Character-level ML + контекстный приор. I/Q остаётся для визуализации (waterfall, Lissajous, tuning) и fallback при drift.
+
+Детальный анализ: `docs/20260412/IQ_VS_GOERTZEL_ML_ANALYSIS.md`, `docs/20260412/RTTY_DECODER_ALGORITHMS_COMPARISON.md`.
+
+### Архитектура
+
+```
+                    ┌─ I/Q + DPLL ─→ Waterfall, Lissajous, tuning UI
+ADC → FIR → AGC ───┤                  Fallback (drift >2%, freq >5 Гц)
+                    │
+                    └─ Goertzel Matched ─→ Character ML ─→ Context Prior
+                                                                   │
+                                                                   ▼
+                                                          Символ + confidence
+```
+
+### Этап 1: Dual-Goertzel Matched Filter (параллельно I/Q) — TODO
+- [ ] Goertzel Mark + Space (2 МАС/сэмпл)
+- [ ] Побитовое решение на выходе Goertzel
+- [ ] Сравнение BER с I/Q на идентичных записях (WebSDR)
+- [ ] **Ожидаемый выигрыш: +1-2 дБ vs текущего I/Q**
+- [ ] Serial command: `DECODER GOERTZEL|IQ|HYBRID`
+
+### Этап 2: Multi-phase Goertzel (MMTTY-style) — TODO
+- [ ] 8 фаз × 2 тона = 16 Goertzel параллельно
+- [ ] Early-late gate синхронизация без DPLL
+- [ ] Замена zero-crossing sync для Goertzel pipeline
+- [ ] **Ожидаемый выигрыш: +1 дБ дополнительно**
+
+### Этап 3: Character-level ML (2Tone-style) — TODO
+- [ ] 32 Baudot символа × 8 фаз = 256 корреляций на символ
+- [ ] Matched filter за полный 7.5-битный символ (start+5data+1.5stop)
+- [ ] Предвычисленные шаблоны (пересчёт при смене baud/shift/stop)
+- [ ] Soft output: метрика уверенности для каждого символа
+- [ ] **Ожидаемый выигрыш: +2-3 дБ дополнительно**
+
+### Этап 4: Улучшения сверх 2Tone — TODO
+
+Это то, чего у 2Tone **нет** — наш путь к best-in-world:
+
+#### 4a. Контекстный языковой приор (Bayesian n-gram) — TODO
+- [ ] Таблица частот букв ITA2 (EN + RU)
+- [ ] Биграммы/триграммы для топ-500 паттернов
+- [ ] Высокоприоритетные последовательности: "CQ CQ", "DE", "TU", "73", "RY RY" (tuning)
+- [ ] Bayes: `P(char | correlation) × P(char | context)`
+- [ ] **+0.5-1 дБ**
+
+#### 4b. FIGS/LTRS Viterbi state machine — TODO
+- [ ] State machine: LTRS-mode / FIGS-mode
+- [ ] В FIGS-mode — только цифры и знаки валидны
+- [ ] В LTRS-mode — только буквы валидны
+- [ ] Невозможные последовательности автокорректируются
+- [ ] **+0.3-0.5 дБ**
+
+#### 4c. Adaptive Noise Blanker + Spectral Subtraction — TODO
+- [ ] Noise blanker: импульсные помехи (>3σ over 100ms) → муте 5 мс
+- [ ] Spectral subtraction: FFT noise floor, вычитание из bin'ов Mark/Space
+- [ ] Работает на уровне ADC→FIR, до Goertzel
+- [ ] **+0.5-1 дБ в реальных HF-условиях**
+
+#### 4d. Temporal Diversity (Sliding Correlation) — TODO
+- [ ] Скользящее окно корреляции (50% overlap)
+- [ ] Накопление confidence по 2-3 попыткам
+- [ ] Консенсусное решение
+- [ ] **+0.3-0.5 дБ**
+
+#### 4e. Multi-band Goertzel (для SEARCH) — TODO
+- [ ] Параллельные Goertzel для всех 8 shift
+- [ ] Автовыбор лучшего по контрасту Mark/Space
+- [ ] Мгновенный lock-on без повторного сканирования
+- [ ] Ускорение SEARCH в 2-3 раза
+
+#### 4f. Tiny Neural Net (fallback для ambiguous) — TODO
+- [ ] 3-layer MLP: 60 input (7.5 бит × 8 фаз корреляции) → 32 hidden → 32 output
+- [ ] ~8KB параметров, fixed-point Q15
+- [ ] Активируется при ML confidence 40-60%
+- [ ] Тренировка на датасете WebSDR DWD (50+ часов)
+- [ ] Script обучения — отдельно, на PC
+- [ ] **+0.3-0.5 дБ при маргинальном SNR**
+
+#### 4g. Soft Confidence UI — TODO
+- [ ] Зелёный текст: ML confidence >80%
+- [ ] Жёлтый: 40-80%
+- [ ] Красный: fallback на I/Q / неуверен
+- [ ] Информация о текущем decoder mode в top bar: `[ML:94%]`
+
+### Итоговый бюджет CPU (Core 0 @ 300 МГц)
+
+| Компонент | CPU |
+|---|---|
+| Текущий I/Q + DPLL | 5-8% |
+| Goertzel × 16 (multi-phase) | +0.5% |
+| Character ML × 256 | +0.9% |
+| Language prior (Bayes) | +0.1% |
+| Viterbi FIGS/LTRS | +0.1% |
+| Noise blanker + spectral sub | +0.6% |
+| Tiny NN fallback (редкий) | +0.2% |
+| **Итого** | **~7.5-10%** |
+
+Запас ~90% Core 0 для будущих режимов (CW, FT8, DRM).
+
+### Итоговая позиция
+
+| Декодер | Порог SNR |
+|---|---|
+| fldigi | ~−5 дБ |
+| MMTTY | ~−9 дБ |
+| 2Tone (current best) | ~−13 дБ |
+| **TouchRTTY hybrid (цель)** | **~−15..−16 дБ** |
+
+## 9. Планируемые фичи
 
 ### SITOR-B / NAVTEX FEC — TODO (приоритет)
 - [ ] Framer: 7 data bits + 1 stop
@@ -202,4 +316,6 @@
 - [ ] I2S DAC Audio Output
 
 ---
-*Статус: Build 218, ветка feat/alex-cl-dev*
+*Статус: Build 219, ветка feat/alex-cl-dev*
+
+*Build 219: Waterfall LUT + circular history buffer (480×64 uint8, 30KB вместо 61KB sprite). Core 1 нижняя граница загрузки 60%→39%.*

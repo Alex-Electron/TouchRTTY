@@ -23,7 +23,7 @@ void core1_main() {
 
     load_or_calibrate(tft, shared_force_cal);
 
-    ili9488_init();    ili9488_fill_screen(0x0000);
+    ili9488_init();    ili9488_init_waterfall_lut();    ili9488_fill_screen(0x0000);
     UIManager ui(&tft); ui.init();
     
     bool auto_scale = true;
@@ -82,6 +82,10 @@ void core1_main() {
 
     LGFX_Sprite spectrum(&tft); spectrum.setColorDepth(16); spectrum.createSprite(480, UI_DSP_ZONE_H);
     LGFX_Sprite marker_spr(&tft); marker_spr.setColorDepth(16); marker_spr.createSprite(480, UI_MARKER_H);
+
+    // Waterfall circular history buffer: uint8 magnitudes (0-255), LUT converts to color
+    static uint8_t wf_history[UI_DSP_ZONE_H * 480] = {0};
+    int wf_offset = UI_DSP_ZONE_H - 1;
     
     const int bin_start = 5, bin_end = 358;
     const float bin_per_pixel = (float)(bin_end - bin_start) / 480.0f;
@@ -565,23 +569,18 @@ void core1_main() {
                 ui.drawEyeDiagram(spectrum, 240, UI_DSP_ZONE_H);
                 ili9488_push_colors(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer());
             } else if (display_mode == 0) {
-                spectrum.scroll(0, 1);
-                uint16_t* line_ptr = (uint16_t*)spectrum.getBuffer();
+                // Write normalized magnitudes into circular history buffer (uint8, 0-255)
+                uint8_t* hist_ptr = wf_history + wf_offset * 480;
                 for (int x = 0; x < 480; x++) {
                     float eb = bin_start + x * bin_per_pixel; int b0 = (int)eb; float db = smooth_mag[b0] * (1.0f-(eb-b0)) + smooth_mag[std::min(b0+1,FFT_SIZE/2-1)] * (eb-b0);
                     float norm = (db + ui_gain - ui_noise_floor) / 50.0f;
                     norm = std::clamp(norm, 0.0f, 1.0f); if (shared_exp_scale) norm *= norm;
-                    
-                    uint8_t r=0, g=0, b=0; // r=visual_B, g=visual_G, b=visual_R
-                    if (norm < 0.25f) { r = (uint8_t)(norm * 4.0f * 255.0f); }
-                    else if (norm < 0.5f) { r = 255; g = (uint8_t)((norm - 0.25f) * 4.0f * 255.0f); }
-                    else if (norm < 0.75f) { g = 255; b = (uint8_t)((norm - 0.5f) * 4.0f * 255.0f); r = 255 - b; }
-                    else { b = 255; g = 255 - (uint8_t)((norm - 0.75f) * 4.0f * 255.0f); }
-                    
-                    uint16_t c = lgfx::color565(r, g, b); // b goes to blue physically, r goes to red physically
-                    line_ptr[x] = (c >> 8) | (c << 8); // Swap for SPI DMA
+                    hist_ptr[x] = (uint8_t)(norm * 255.0f);
                 }
-                ili9488_push_waterfall(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, (uint16_t*)spectrum.getBuffer(), tune_x, half_shift);
+                // Render entire waterfall from history via LUT — no sprite needed
+                ili9488_push_waterfall_lut(0, UI_Y_DSP, 480, UI_DSP_ZONE_H, wf_history, tune_x, half_shift, wf_offset);
+                wf_offset--;
+                if (wf_offset < 0) wf_offset = UI_DSP_ZONE_H - 1;
             } else if (display_mode == 1) { 
                 spectrum.fillSprite(PAL_BG);
                 for (int x = 0; x < 480; x++) {

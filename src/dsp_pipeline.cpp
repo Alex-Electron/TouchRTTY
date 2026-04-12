@@ -40,8 +40,10 @@ void core0_dsp_loop() {
         cos_table[i] = cosf(2.0f * (float)M_PI * (float)i / 1024.0f);
     }
 
-    static float ts[FFT_SIZE], tw[480], tw_m[480], tw_s[480], fb[63]={0.0f};
+    // FIR buffer: power-of-2 size (64) for mask-based indexing instead of modulo
+    static float ts[FFT_SIZE], tw[480], tw_m[480], tw_s[480], fb[64]={0.0f};
     int sc=0, wi=0, fi=0;
+    static const int FIR_MASK = 63;
 
     // Hardware-paced ADC via FIFO (replaces blocking adc_read)
     // ADC runs free at exact 10kHz from hardware timer — zero jitter
@@ -147,9 +149,15 @@ void core0_dsp_loop() {
         if(rv<50 || rv>4045) shared_adc_clipping=true;
         float v = ((float)rv / 4095.0f) * 3.3f; shared_adc_v=v;
         float s = ((float)rv - 2048.0f) / 2048.0f;
-        dc = dc * 0.99f + s * 0.01f; s -= dc; fb[fi]=s; float f_out=0.0f; int bi=fi;
-        for(int i=0; i<63; i++) { f_out += fir_coeffs[i] * fb[bi]; bi--; if(bi<0) bi=62; }
-        fi = (fi + 1) % 63;
+        dc = dc * 0.99f + s * 0.01f; s -= dc;
+        fb[fi] = s;
+        // Symmetric FIR: coeff[i] == coeff[62-i], fold pairs → 32 MACs instead of 63
+        // Buffer power-of-2 (64) lets us use bitmask instead of modulo
+        float f_out = fir_coeffs[31] * fb[(fi - 31) & FIR_MASK];
+        for (int i = 0; i < 31; i++) {
+            f_out += fir_coeffs[i] * (fb[(fi - i) & FIR_MASK] + fb[(fi - 62 + i) & FIR_MASK]);
+        }
+        fi = (fi + 1) & FIR_MASK;
 
         float agc_out = agc_process(&agc, f_out);
         shared_agc_gain = agc.gain;

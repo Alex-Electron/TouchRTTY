@@ -8,6 +8,9 @@ static dma_channel_config dma_conf;
 static PIO pio_inst = pio0;
 static uint pio_sm = 0;
 
+// Pre-computed LUT: uint8 magnitude index → 32-bit PIO-ready RGB666 color
+static uint32_t waterfall_pio_lut[256];
+
 static void write_command(uint8_t cmd) {
     gpio_put(PIN_DC, 0); gpio_put(PIN_CS, 0);
     spi_write_blocking(SPI_PORT, &cmd, 1);
@@ -202,6 +205,76 @@ void ili9488_push_waterfall(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint
         current_buf = next_buf;
     }
     
+    switch_to_spi();
+    gpio_put(PIN_CS, 1);
+}
+
+void ili9488_init_waterfall_lut(void) {
+    for (int i = 0; i < 256; i++) {
+        float norm = i / 255.0f;
+        uint8_t r = 0, g = 0, b = 0;
+        if (norm < 0.25f) {
+            r = (uint8_t)(norm * 4.0f * 255.0f);
+        } else if (norm < 0.5f) {
+            r = 255; g = (uint8_t)((norm - 0.25f) * 4.0f * 255.0f);
+        } else if (norm < 0.75f) {
+            g = 255; b = (uint8_t)((norm - 0.5f) * 4.0f * 255.0f); r = 255 - b;
+        } else {
+            b = 255; g = 255 - (uint8_t)((norm - 0.75f) * 4.0f * 255.0f);
+        }
+        // Pack as 24-bit PIO-ready: [B|G|R|0] (same layout as expand_color_dynamic)
+        waterfall_pio_lut[i] = ((uint32_t)b << 24) | ((uint32_t)g << 16) | ((uint32_t)r << 8);
+    }
+}
+
+void ili9488_push_waterfall_lut(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint8_t* history, int16_t tune_x, int16_t shift, int wf_offset) {
+    if (!history || x > 479 || y > 319 || w == 0 || h == 0) return;
+    if (x + w > 480) w = 480 - x;
+    if (y + h > 320) h = 320 - y;
+
+    ili9488_set_window(x, y, x + w - 1, y + h - 1);
+
+    static uint32_t buf[2][480];
+    int current_buf = 0;
+
+    uint32_t c_space = expand_color_dynamic(0x00FFU);
+    uint32_t c_mark  = expand_color_dynamic(0x07E0U);
+
+    // Pre-fill first row from circular history buffer via LUT
+    if (h > 0) {
+        int buffer_row = wf_offset % h;
+        uint8_t* row_ptr = history + buffer_row * w;
+        for (int col = 0; col < w; col++) {
+            if ((0 % 4 < 2) && (col == tune_x - shift))       buf[0][col] = c_space;
+            else if ((0 % 4 < 2) && (col == tune_x + shift))  buf[0][col] = c_mark;
+            else buf[0][col] = waterfall_pio_lut[row_ptr[col]];
+        }
+    }
+
+    gpio_put(PIN_DC, 1);
+    gpio_put(PIN_CS, 0);
+    switch_to_pio();
+
+    for (int row = 0; row < h; row++) {
+        dma_channel_configure(dma_chan, &dma_conf, &pio_inst->txf[pio_sm], buf[current_buf], w, true);
+
+        int next_row = row + 1;
+        int next_buf = current_buf ^ 1;
+
+        if (next_row < h) {
+            int buffer_row = (wf_offset + next_row) % h;
+            uint8_t* row_ptr = history + buffer_row * w;
+            for (int col = 0; col < w; col++) {
+                if ((next_row % 4 < 2) && (col == tune_x - shift))       buf[next_buf][col] = c_space;
+                else if ((next_row % 4 < 2) && (col == tune_x + shift))  buf[next_buf][col] = c_mark;
+                else buf[next_buf][col] = waterfall_pio_lut[row_ptr[col]];
+            }
+        }
+
+        dma_channel_wait_for_finish_blocking(dma_chan);
+        current_buf = next_buf;
+    }
+
     switch_to_spi();
     gpio_put(PIN_CS, 1);
 }
