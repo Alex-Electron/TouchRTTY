@@ -69,7 +69,7 @@ inline bool dpll_process(dpll_t *p, float disc, float *bit_out) {
     // Решение в конце символа:
     if (p->phase >= 1.0f) {
         p->phase -= 1.0f;
-        *bit_out = (p->integrate_count > 0) ? (p->integrate_acc / p->integrate_count) : disc;
+        *bit_out = (p->integrate_count > 0) ? (p->integrate_acc / (float)p->integrate_count) : disc;
         p->integrate_acc = 0.0f;
         p->integrate_count = 0;
         p->bit_ready = true;
@@ -86,95 +86,113 @@ typedef enum {
 
 typedef struct {
     frame_state_t state;
-    uint8_t       shift_reg;
     int           bit_count;
     bool          figs_mode;
-    float         stop_acc;
+    // Soft storage: raw bit_value LLRs from dpll per bit.
+    float         data_soft[5];   // 5 data bits (LSB first)
+    float         start_soft;     // start bit (expected: negative / space)
+    float         stop_acc;       // accumulated stop-bit soft (expected: positive / mark)
     int           stop_samples;
     int           stop_needed;
     float         stop_bits;
     bool          unshift_on_space;
+    // Running EMA of |bit_value| — proxy for signal level. Adaptive thresholds
+    // normalize to this so rejection survives AGC drift and Mark/Space imbalance.
+    float         sig_level;
 } baudot_framer_t;
 
 inline void baudot_framer_init(baudot_framer_t *f, float stop_bits) {
     f->state     = FRAME_WAIT_START;
-    f->shift_reg = 0;
     f->bit_count = 0;
     f->figs_mode = false;
+    for (int i = 0; i < 5; i++) f->data_soft[i] = 0.0f;
+    f->start_soft = 0.0f;
     f->stop_acc  = 0.0f;
     f->stop_samples = 0;
-    f->stop_needed = (stop_bits >= 1.5f) ? 2 : 1; // Number of sample bits to wait during stop
+    f->stop_needed = (stop_bits >= 1.5f) ? 2 : 1;
     f->stop_bits = stop_bits;
     f->unshift_on_space = true;
+    f->sig_level = 0.1f;  // bootstrap
+}
+
+// Emit final char from collected soft values. Called when stop-window full.
+// Applies soft-LLR: hard-slice happens only at frame boundary, and the
+// decision is rejected if stop magnitude is tiny relative to signal level
+// (adaptive threshold beats the old fixed −0.1 check at varying SNR/AGC).
+static inline char _baudot_frame_emit(baudot_framer_t *f) {
+    f->state = FRAME_WAIT_START;
+
+    float stop_mean = f->stop_acc / (float)f->stop_samples;
+
+    // Soft-Viterbi frame validation (B242 + B243):
+    //  (1) stop must look like MARK (positive), magnitude ≥ 25% of signal level.
+    //  (2) start must look like SPACE (negative), magnitude ≥ 15% of signal level.
+    //  (3) B243: weakest data-bit confidence ≥ 20% of signal level.
+    //  (4) B243: frame-average confidence ≥ 30% of signal level.
+    const float STOP_MIN_FRAC  = 0.25f;
+    const float START_MIN_FRAC = 0.15f;
+    const float DATA_MIN_FRAC  = 0.10f;
+    const float FRAME_AVG_FRAC = 0.15f;
+    if (stop_mean < STOP_MIN_FRAC * f->sig_level)            return '?';
+    if (-f->start_soft < START_MIN_FRAC * f->sig_level)      return '?';
+
+    // Soft-bit confidence check: reject if any data bit is near zero.
+    float data_min = fabsf(f->data_soft[0]);
+    float frame_sum = fabsf(f->start_soft) + stop_mean;
+    for (int i = 0; i < 5; i++) {
+        float a = fabsf(f->data_soft[i]);
+        if (a < data_min) data_min = a;
+        frame_sum += a;
+    }
+    if (data_min < DATA_MIN_FRAC * f->sig_level)             return '?';
+    if ((frame_sum / 7.0f) < FRAME_AVG_FRAC * f->sig_level)  return '?';
+
+    // Hard-slice 5 data bits from soft values (LSB first).
+    uint8_t code = 0;
+    for (int i = 0; i < 5; i++) {
+        if (f->data_soft[i] > 0.0f) code |= (1 << i);
+    }
+
+    if (code == 31) { f->figs_mode = false; return 0; }
+    if (code == 27) { f->figs_mode = true;  return 0; }
+
+    char ch = f->figs_mode ? ita2_figs[code] : ita2_ltrs[code];
+    if (f->unshift_on_space && ch == ' ') f->figs_mode = false;
+    return ch ? ch : 0;
 }
 
 inline char baudot_framer_push(baudot_framer_t *f, float bit_value) {
-    int bit = (bit_value > 0.0f) ? 1 : 0;
+    // Track running signal level (mean absolute) for adaptive thresholds.
+    float abs_bv = fabsf(bit_value);
+    f->sig_level = 0.98f * f->sig_level + 0.02f * abs_bv;
 
     switch (f->state) {
         case FRAME_WAIT_START:
-            if (bit == 0) { // Start bit (Space)
+            if (bit_value < 0.0f) { // start bit = Space
                 f->state = FRAME_RECV_DATA;
-                f->shift_reg = 0;
+                f->start_soft = bit_value;
                 f->bit_count = 0;
-                f->stop_acc = 0;
+                f->stop_acc = 0.0f;
                 f->stop_samples = 0;
             }
             break;
 
         case FRAME_RECV_DATA:
-            f->shift_reg |= (bit << f->bit_count);
+            f->data_soft[f->bit_count] = bit_value;
             if (++f->bit_count >= 5) {
                 f->state = FRAME_RECV_STOP;
                 f->stop_needed = (f->stop_bits >= 1.5f) ? 2 : 1;
-                f->stop_acc = bit_value;
+                f->stop_acc = bit_value;       // first post-data sample IS a stop sample
                 f->stop_samples = 1;
-                
-                // Fast path for 1.0 stop bits - if the bit was 0, it means it already crashed into the next start bit!
-                if (f->stop_needed == 1) {
-                    f->state = FRAME_WAIT_START;
-                    if (f->stop_acc < 0.0f) {
-                        return '?'; // Framing error
-                    }
-                    uint8_t code = f->shift_reg & 0x1F;
-                    if (code == 31) { f->figs_mode = false; return 0; }
-                    if (code == 27) { f->figs_mode = true; return 0; }
-                    char ch = f->figs_mode ? ita2_figs[code] : ita2_ltrs[code];
-                    if (f->unshift_on_space && ch == ' ') f->figs_mode = false;
-                    return ch ? ch : 0;
-                }
+                if (f->stop_needed == 1) return _baudot_frame_emit(f);
             }
             break;
 
         case FRAME_RECV_STOP:
             f->stop_acc += bit_value;
             f->stop_samples++;
-
             if (f->stop_samples < f->stop_needed) break;
-
-            f->state = FRAME_WAIT_START;
-
-            if (f->stop_acc / f->stop_samples < -0.1f) {
-                return '?'; // Framing error
-            }
-
-            uint8_t code = f->shift_reg & 0x1F;
-
-            if (code == 31) {
-                f->figs_mode = false;
-                return 0;  
-            }
-            if (code == 27) {
-                f->figs_mode = true;
-                return 0;
-            }
-
-            char ch = f->figs_mode ? ita2_figs[code] : ita2_ltrs[code];
-
-            if (f->unshift_on_space && ch == ' ')
-                f->figs_mode = false;
-
-            return ch ? ch : 0;
+            return _baudot_frame_emit(f);
     }
     return 0;
 }

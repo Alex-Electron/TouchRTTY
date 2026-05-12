@@ -1,4 +1,4 @@
-# CMake & Build artifacts
+# ── Build artifacts ──────────────────────────────────────────────
 build/
 out/
 bin/
@@ -7,21 +7,84 @@ CMakeFiles/
 Makefile
 *.cmake
 
-# Pico SDK binaries
+# ── Pico SDK binaries (release .uf2 stays in repo root by intent) ─
 *.elf
-*.uf2
 *.hex
 *.bin
 *.map
+# uf2 — allow only in repo root for releases, ignore elsewhere
+**/*.uf2
+!/TouchRTTY_*.uf2
 
-# VS Code settings (локальные пути)
+# ── Editor / OS ──────────────────────────────────────────────────
 .vscode/
 *.code-workspace
-
-# OS generated files
 .DS_Store
 Thumbs.db
+**/__pycache__/
 
+# ── Internal development scratch ─────────────────────────────────
 pictures/
 examples/
-.vscode/
+SESSION_CONTEXT.md
+screen/
+tools/.tg_secrets
+tools/.tg_state
+
+# ── Private user automation (kept locally, never in public branch) ─
+tools/tg_notify.py
+tools/tg_poll.py
+tools/night_queue.py
+tools/session_stats.py
+tools/queue_chain.py
+tools/update_docs.py
+tools/patch_cpp.py
+tools/autotune.py
+tools/bw_experiment.py
+tools/error_pattern_analysis.py
+
+# ── Internal research directories ───────────────────────────────
+tools/orchestrators/
+tools/archive/
+tools/ngram_lm/
+
+# ── 2Tone reverse-engineering scratch (kept locally) ──────────────
+tools/two_tone/probe_*.py
+tools/two_tone/disasm_*.py
+tools/two_tone/find_route*.py
+tools/two_tone/poc_handshake.py
+tools/two_tone/patch_2tone.py
+tools/two_tone/inspect_menu.py
+tools/two_tone/argv_sniffer.py
+tools/two_tone/capture_2tone.py
+tools/two_tone/bench_2tone.py
+tools/two_tone/bench_2tone_audio.py
+tools/two_tone/bench_combined.py
+tools/two_tone/two_tone_logger.py
+tools/two_tone/read_2tone_window.py
+
+# ── Generated / transient artefacts ──────────────────────────────
+datasets/generated/*.wav
+datasets/generated/*.log
+datasets/real/*.wav
+datasets/logs/
+datasets/recs_mono/
+tools/recs/
+tools/2Tone 26.01a/
+
+# ── Negative-result NN weight archives (preserved locally) ────────
+datasets/nn_archive/nn_weights_v5*.h
+datasets/nn_archive/nn_weights_v6*.h
+datasets/nn_archive/nn_weights_v7*.h
+datasets/nn_archive/nn_weights_v8*.h
+datasets/nn_archive/nn_weights_v9*.h
+datasets/nn_archive/nn_weights_v10*.h
+datasets/nn_archive/nn_weights_v11*.h
+datasets/nn_archive/nn_weights_v12*.h
+datasets/nn_archive/nn_weights_v14*.h
+datasets/nn_archive/nn_weights_v15*.h
+datasets/nn_archive/nn_weights_v16*.h
+datasets/nn_archive/nn_weights_v17*.h
+datasets/nn_archive/nn_weights_v18*.h
+datasets/nn_archive/nn_weights_noise040.h
+datasets/nn_archive/nn_weights_ultra_regressed.h

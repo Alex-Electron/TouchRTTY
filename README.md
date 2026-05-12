@@ -1,161 +1,243 @@
-# TouchRTTY (RP2350 / Raspberry Pi Pico 2)
-**Professional-grade Radioteletype (RTTY) Decoder exclusively for the RP2350 microcontroller.**
+# TouchRTTY
+
+A pocket-sized RTTY decoder you can actually trust on weak signals.
 
 <p align="center">
   <img src="docs/images/device_view_1.jpg" width="48%" />
   <img src="docs/images/device_view_2.jpg" width="48%" />
 </p>
 
-This project implements a high-performance, software-defined radio (SDR) style RTTY decoder on the **dual-core RP2350 (ARM Cortex-M33)**. It utilizes the advanced DSP capabilities of the RP2350 to achieve highly stable reception even under severe selective fading and noise.
+This is a Raspberry Pi Pico 2 (RP2350) running a from-scratch SDR-style
+demodulator and a small neural net that kicks in when the signal gets
+ugly. On the same audio where 2Tone collapses into random letters, you
+still get readable telegraphy. We benched it. The numbers below are real.
 
 > [!IMPORTANT]
-> **Hardware Requirement:** This project is specifically designed for the **Raspberry Pi Pico 2 (RP2350)**. It will NOT run on the original RP2040 due to higher memory and DSP requirements.
+> You need the **Pico 2 (RP2350)** — not the original RP2040. We lean on
+> the M33's FPU and need more SRAM than the older chip has. Save yourself
+> the headache.
 
-## 🚀 Key Features (Phase 3 Complete)
+---
 
-*   **RP2350 Dual-Core Optimization:**
-    *   **Core 0 (DSP Engine):** Dedicated strictly to hard-real-time audio processing at exactly 10,000 Hz using RP2350's floating-point unit (FPU).
-    *   **Core 1 (UI & Rendering):** Handles the 3.5" ILI9488 TFT touch display via 60MHz PIO DMA, rendering a 30+ FPS Waterfall, Spectrum, and Lissajous (XY) tuning scope without interrupting the DSP.
-*   **Professional DSP Pipeline (Build 172):**
-    *   **63-Tap FIR Bandpass Filter:** Pre-filters the 10kHz ADC stream.
-    *   **Quadrature (I/Q) Demodulator:** Baseband mixing with hardware-generated sine/cosine tables, followed by Biquad Low-Pass Filters (Extended Raised Cosine). Eliminates Inter-Symbol Interference (ISI).
-    *   **Automatic Threshold Correction (ATC):** Fast-attack, slow-release (FASR) envelope detectors independently track Mark and Space fading, dynamically adjusting the decision threshold.
-    *   **Digital Phase-Locked Loop (DPLL):** A full Proportional-Integral (PI) synchronous loop tracks the zero-crossings of the bitstream, correcting both phase (timing jitter) and frequency error (baud rate mismatch). Allows continuous, gapless reception of 1.0 stop-bit streams without framing errors.
-    *   **Automatic Frequency Control (AFC):** 512-point FFT-based peak detection locks onto wandering signals within a ±100Hz window.
-    *   **Strict Squelch:** Intelligent noise-floor and SNR tracking ensures the decoder remains totally silent until a valid RTTY signal (SNR > 4dB) is present.
-*   **Hardware Compatibility:**
-    *   Optimized for the **ILI9488** display quirk (Mode 11: 16-bit Endian Swapped, BGR out), rendering pure, artifact-free colors via native RGB565 manipulation.
+## Where we are right now
 
-## 📅 Development Roadmap
+The latest release is **v2.0.0** (firmware build B265, NN weights v13).
+If you flash nothing else and just want the best decoder we've shipped,
+grab [`TouchRTTY_v2.0.0.uf2`](TouchRTTY_v2.0.0.uf2) from the repo root.
 
-*   **PHASE 4:** SD-Card Integration (exFAT) & Data Logging.
-*   **PHASE 5:** CW (Morse Code) Decoder & APF Filter.
-*   **PHASE 6:** FT8 / FT4 Mode Implementation.
-*   **PHASE 7:** WEFAX Decoder (HF Weather Fax).
+Full release notes: [`RELEASE_v2.0.0.md`](RELEASE_v2.0.0.md).
 
-## 📡 WebSDR / Real-World Testing Guide
+What's interesting about this build:
 
-You can now test this decoder with real over-the-air signals using a WebSDR (like the University of Twente WebSDR)!
+* **NN actually helps now.** Earlier versions of the NN were a wash —
+  better at threshold, worse at comfortable signal levels. v13 fixed
+  that. NN-ON is at least as good as NN-OFF at every SNR we tested, and
+  much better below −14 dB.
+* **You can see what the NN is thinking.** New serial command
+  `DUMP FRAMES ON` streams every Baudot frame's seven soft-bit values
+  plus the hard-decision label. Drop a WAV through the decoder, capture
+  the stream, and you have labeled training data — the same loop we used
+  to build v13.
+* **The UI got simpler.** NOTCH and VIT are now toggles right in the
+  main menu instead of being buried in a popup, and frame-rejection
+  errors show up as a single red `*` in the on-screen text instead of
+  the full `[ERR]` token. Cleaner reading.
 
-### Setup
-1.  Open a WebSDR in your browser.
-2.  Tune to a known RTTY frequency (e.g., German Weather Service DWD on `10100.8 kHz`).
-3.  Set the WebSDR modulation to **USB** (Upper Sideband).
-    *   *Note: DWD transmits in F1B/LSB. If you tune in USB, the Mark frequency will be higher than the Space frequency. You must press the `INV` button on the Pico's screen to swap them, OR tune the WebSDR to LSB and leave the Pico in Normal mode.*
-4.  Connect your PC's headphone output using the audio adapter (read about it below) to the Pico's ADC input (GPIO 26) using an audio cable. 
-    *   *Ensure your audio level is correct. Watch the top-left `SIG` meter on the screen; it should peak around `-15 dB` to `-5 dB` without triggering the red clipping indicator.*
+Full release notes live in [`CHANGELOG_B265.md`](CHANGELOG_B265.md).
 
-### Tuning on the Pico
-1.  **DWD SYNOP (Weather):** 
-    *   Select **B 50** (50 Baud).
-    *   Select **S 450** (450 Hz Shift).
-    *   Select **ST 1.5** (1.5 Stop bits).
-2.  **Amateur Radio (Ham):**
-    *   Select **B 45** (45.45 Baud).
-    *   Select **S 170** (170 Hz Shift).
-    *   Select **ST 1.5** (1.5 Stop bits).
-3.  Tap the Waterfall to place the yellow/cyan markers over the two visible peaks.
-4.  The `RTTY: WAIT` indicator should turn green and say `RTTY: SYNC`.
-5.  Text will begin printing on the screen!
+---
 
-## 🔌 Hardware Wiring Guide
+## How it stacks up against 2Tone
 
-The project utilizes the Raspberry Pi Pico 2 (RP2350) and a 3.5" ILI9488 TFT Display with an XPT2046 touch controller. Below is the required pinout mapping.
+We benchmarked against [2Tone 26.01a](http://www.tonemap.com/Software.html)
+(David G3YYD's well-regarded decoder), averaged over three random seeds,
+sweeping SNR from −4 to −22 dB in 2 dB steps with 30 seconds of dwell
+per bin. Same audio fed into both decoders through the same Voicemeeter
+loopback.
 
-### Display (ILI9488) - SPI0
-| Display Pin | Pico GPIO | Physical Pin | Function |
-| :--- | :--- | :--- | :--- |
-| **VCC** | - | Pin 36 | 3.3V Power (3V3_OUT) |
-| **GND** | - | Pin 38 | Ground (GND) |
-| **CS**  | GP17 | Pin 22 | LCD Chip Select |
-| **RESET**| GP21 | Pin 27 | Hardware Reset |
-| **DC/RS**| GP20 | Pin 26 | Data / Command |
-| **SDI (MOSI)**| GP19 | Pin 25 | SPI Data In |
-| **SCK** | GP18 | Pin 24 | SPI Clock (60 MHz) |
-| **SDO (MISO)**| GP16 | Pin 21 | Define in code, physically disconnect to reduce bus noise |
-| **LED** | - | Pin 36 | Backlight Power (3V3_OUT) |
+| SNR | TouchRTTY NN-OFF | TouchRTTY NN-ON (v13) | What 2Tone does there |
+|---:|---:|---:|---|
+| −12 | 16.2 % | **15.5 %** | Starts breaking; ~22 pp real errors |
+| −14 | 32.2 % | **23.4 %** (σ 1.5) | Mostly noise |
+| −16 | 77.7 % | **55.3 %** (σ 3.2) | ~58 pp real errors — random letters |
+| −20 | 88.2 % | **80.4 %** (σ 2.3) | Long dead |
 
-### Touch Controller (XPT2046) - SPI1
-| Touch Pin | Pico GPIO | Physical Pin | Function |
-| :--- | :--- | :--- | :--- |
-| **T_CLK** | GP10 | Pin 14 | SPI Clock (2.5 MHz) |
-| **T_CS**  | GP15 | Pin 20 | Touch Chip Select |
-| **T_DIN** | GP11 | Pin 15 | SPI TX (MOSI) |
-| **T_DO**  | GP12 | Pin 16 | SPI RX (MISO) |
-| **T_IRQ** | GP14 | Pin 19 | Interrupt (Boot Calibration) |
+Anything ≤ 14 % on TouchRTTY is mostly cer_analyze's cyclic-rotation
+artifact — the actual decoded text reads clean. Below the artifact
+baseline, **TouchRTTY produces readable telegraphy at SNR levels where
+2Tone's output is random gibberish.** The honest reference run lives at
+[`datasets/logs/bench_auto_v2/`](datasets/logs/bench_auto_v2/) (commit
+`af4bdd0`).
 
-### Audio Input
-| Component | Pico GPIO | Physical Pin | Function |
-| :--- | :--- | :--- | :--- |
-| **Audio Signal** | GP26 | Pin 31 | ADC0 (Biased Audio Input) |
-| **Audio Ground** | - | Pin 33 | Analog Ground (AGND) |
+The low standard deviation on NN-ON (1.5–3.2 pp at the key SNRs) matters
+more than the raw numbers — it means the improvement is reproducible
+across seeds, not a lucky run.
 
-### Rotary Encoder (Future UI Expansion)
-*Currently, only the push-button (SW) is implemented to serve as a Hard Reset and UI interaction. Full rotary tuning (A/B pins) will be added in future phases.*
-| Encoder Pin | Pico GPIO | Physical Pin | Function |
-| :--- | :--- | :--- | :--- |
-| **SW (Switch)** | GP4 | Pin 6 | Push Button to GND (Hold on boot to Factory Reset) |
-| **CLK / A** | *TBD* | - | *Reserved for future use* |
-| **DT / B**  | *TBD* | - | *Reserved for future use* |
-| **GND** | - | Any GND | Ground |
+---
 
-### SD Card Module - SPI1 (Phase 5 Logging)
-*The SD Card shares the **SPI1 bus** with the Touch Controller, but requires its own dedicated Chip Select (CS) pin.*
-| SD Card Pin | Pico GPIO | Physical Pin | Function |
-| :--- | :--- | :--- | :--- |
-| **MOSI / CMD** | GP11 | Pin 15 | SPI1 TX (Shared with Touch T_DIN) |
-| **MISO / D0**  | GP12 | Pin 16 | SPI1 RX (Shared with Touch T_DO) |
-| **SCK / CLK**  | GP10 | Pin 14 | SPI1 Clock (Shared with Touch T_CLK) |
-| **CS / DAT3**  | GP13 | Pin 17 | Dedicated SD Chip Select |
-| **VCC** | - | Pin 36 or 40 | 3.3V or 5V (Depends on your SD module) |
-| **GND** | - | Any GND | Ground |
+## Pick your starting point
 
-## 🔌 Hardware Audio Input Adapter
-To safely feed audio from a PC, radio, or WebSDR into the RP2350's ADC (Analog-to-Digital Converter), a simple DC-biasing circuit is required. The Pico's ADC reads voltages between **0V and 3.3V**, so an AC audio signal centered around 0V will clip and potentially damage the pin if negative voltages are applied.
+| If you want to … | Open |
+|---|---|
+| Wire up the hardware | [Hardware setup](docs/HARDWARE_SETUP.md) |
+| Drive it over USB | [Serial commands](docs/SERIAL_COMMANDS.md) |
+| Use the touchscreen | [Menu guide](docs/MENU_GUIDE.md) |
+| Train your own NN | [NN training](docs/NN_TRAINING.md) |
+| Run benchmarks | [Bench tooling](docs/BENCH_TOOLING.md) |
+| Just generate test signal in a browser | [`tools/rtty_simulator.html`](tools/rtty_simulator.html) |
 
-**Required Circuit:**
+---
 
-![Hardware Audio Adapter Schematic](docs/images/adc_input_adapter.png)
+## How the signal flows through the box
 
-1. **R1 (Input Level):** A 10kΩ potentiometer to adjust the audio volume from your source.
-2. **C1 (DC Blocking):** A 4.7µF capacitor to block any DC offset from the PC or radio.
-3. **R2 (Bias Voltage):** A 10kΩ trimpot connected between 3.3V (Pin 36) and AGND to pull the ADC's resting voltage to exactly **1.65V** (the center of the ADC's range).
-4. **R3 + C2 (Low-Pass Filter):** A 1kΩ resistor and 47nF capacitor forming a simple RC low-pass filter. This suppresses high-frequency RF noise and anti-aliases the signal before it hits the ADC.
-
-*Important:* For the cleanest reception with the lowest noise floor, connect all ground lines of this circuit to the Pico's **AGND (Analog Ground, Pin 33)** rather than a regular digital ground.
-
-*Connect the biased output to **GPIO 26 (Pin 31)**.*
-
-## 🛠️ USB Serial Diagnostics (Tuning Mode)
-
-By connecting the Pico via USB to a PC terminal (9600 baud), you gain access to the raw DSP telemetry every 500ms:
+You feed ground-referenced audio (1.65 V biased, line level) into GP26.
+From there:
 
 ```
---- TUNING DIAGNOSTICS ---
-Step 1 (ADC): V=1.94V (Range: 1585-2524)
-Step 2 (ATC Level): Mark_Env=0.0974 Space_Env=0.0894
-Step 3 (FFT Peaks): SNR=67.8 dB, Signal=-10.3 dB
-Step 4 (RTTY Status): Squelch=OPEN DPLL_Phase=0.95
-Params: Baud=45.45 ALPHA=0.0350 K=0.75 SQ=4.0
----------------------------------
+ADC0 @ 10 kHz, 1.65 V biased
+        │
+        ▼
+63-tap FIR bandpass, centred on FREQ
+        │
+        ▼
+Quadrature (I/Q) demod → biquad LPF
+        │
+   ┌────┴────┐
+   ▼         ▼
+Path A     Path B            ← narrow / wide; either alone or…
+   │         │
+   └────┬────┘
+        ▼
+   LLR fusion (HYB)          ← we run this by default
+        │
+        ▼
+   DPLL with PI loop          ← controlled by ALPHA
+        │
+        ▼
+   Bit slicing → 7 soft bits
+        │
+   ┌────┴───────────┐
+   ▼                ▼
+ Hard decision    B264 gate
+ (sign)           if data_min/sig < 0.20 → NN gets a vote
+        │                │
+        └────┬───────────┘
+             ▼
+       32 Baudot codes
+             │
+             ▼
+       ITA-2 → ASCII
 ```
 
-You can send commands via the terminal to adjust the DSP on the fly:
-*   `ALPHA 0.05` - Adjust DPLL tracking width (default 0.035).
-*   `K 0.6` - Adjust Biquad LPF bandwidth multiplier (default 0.75).
-*   `SQ 6.0` - Adjust Squelch SNR threshold (default 4.0).
-*   `CLEAR` - Hard reset the DSP state, AFC, and DPLL phase.
+Core 0 owns the 10 kHz hard-real-time loop (about 7 % CPU). Core 1
+handles the UI, the 1024-point FFT for the waterfall, touch input, and
+the USB serial console (around 20 % CPU). Plenty of headroom both
+sides.
 
-## 📜 Release History
+The dual-IQ paths with LLR fusion are the bones that survived from
+Phase 9 of the project — same fundamental decoder. What changed
+recently is the NN (now optional, gated, retrained) and the on-screen
+ergonomics.
 
-*   **[v1.72](https://github.com/Alex-Electron/TouchRTTY/releases/tag/v1.72)** (2026-03-31): **Phase 3 Final.** Professional DSP demodulator stability, build 172, ili9488 driver refactoring.
+---
 
-## 🏗️ Build Instructions
-Compiled via the standard Raspberry Pi Pico SDK (v2.2.0+) and CMake.
+## Building it yourself
 
 ```bash
+git clone --recurse-submodules https://github.com/Alex-Electron/TouchRTTY.git
+cd TouchRTTY
 mkdir build && cd build
-cmake -G Ninja ..
+cmake -G Ninja -DPICO_SDK_PATH=/path/to/pico-sdk ..
 ninja
-picotool load TouchRTTY.uf2
+picotool load -f TouchRTTY.uf2
 ```
+
+Needs Pico SDK 2.x and an ARM toolchain. The `build/` directory is
+gitignored, so cmake regenerates everything on first run. The PIO and
+LovyanGFX submodules come along with `--recurse-submodules`.
+
+If your computer doesn't have `picotool` set up, copy the resulting
+`.uf2` onto the `RPI-RP2` mass-storage drive the old-school way — hold
+BOOTSEL while plugging the Pico in.
+
+---
+
+## Quick start, signal to text
+
+1. Wire up display, touch and the audio bias network — see
+   [Hardware setup](docs/HARDWARE_SETUP.md) for the actual GPIO pins.
+2. Flash `TouchRTTY_v2.0.0.uf2`.
+3. Feed audio in — PC line out, a real radio's AF jack, or a WebSDR
+   in a browser through a virtual audio cable.
+4. Tap **SEARCH** on the screen. It scans 300–3000 Hz and locks onto
+   the strongest RTTY-looking peak.
+5. Pick Baud / Shift / Polarity on the bottom bar:
+   * Amateur RTTY → `B 45` `S 170` `NOR`
+   * DWD weather → `B 50` `S 450` `NOR` (when tuned USB)
+   * SITOR / NAVTEX → `B 75` `S 170`
+6. Turn `AFC` on.
+7. Open `MENU` → cycle `PATH` to `HYB+NN`.
+
+Text starts flowing into the middle of the screen. The serial console
+mirrors it with `[ERR]` tokens at the positions where the decoder
+rejected a frame.
+
+---
+
+## What's where in the repo
+
+```
+.
+├── README.md                  ← this file
+├── CHANGELOG_B265.md          ← what's new in B265
+├── TouchRTTY_v2.0.0.uf2     ← ready-to-flash firmware
+├── src/
+│   ├── display/               ← ILI9488 + PIO
+│   ├── dsp_pipeline.{cpp,hpp} ← Core 0, the 10 kHz loop
+│   ├── dsp/nn_weights.h       ← v13 production weights
+│   ├── serial_commands.cpp    ← the CLI parser
+│   └── ui/                    ← waterfall / menu / eye-diagram rendering
+├── tools/
+│   ├── train_nn_torch.py      ← PyTorch trainer (recipe that gave us v13)
+│   ├── bench_replay.py        ← play WAV, log serial decode
+│   ├── nn_sweep_compare.py    ← AWGN sweep NN-OFF vs NN-ON
+│   ├── overnight_runner.sh    ← chain train+sweep cycles unattended
+│   ├── parse_dump_frames.py   ← B265 dump stream → npz for training
+│   └── rtty_simulator.html    ← in-browser RTTY generator
+├── datasets/
+│   ├── nn_archive/            ← every weight blob we trained, archived
+│   └── logs/                  ← bench evidence (compare tables, summaries)
+└── docs/                      ← the five long-form docs
+```
+
+Each NN experiment we ran is committed with its multi-seed evidence
+in `datasets/logs/nn_compare_v*_s{42,43,44}/`. If a future change ever
+regresses, you can roll back to any earlier weight blob with a single
+`cp` because everything is archived.
+
+---
+
+## A note about contributing
+
+The DSP code is the kind that benefits from people actually using it on
+the air and complaining. If something's worse on your antenna than on
+ours, file an issue with a short audio clip — that's far more useful
+than a generic "doesn't work" report.
+
+For NN improvements, run a multi-seed bench (3 seeds minimum) before
+proposing a recipe change. Single-run improvements at SNR ≤ −16 dB are
+almost always noise — we burned a lot of compute proving that to
+ourselves.
+
+---
+
+## Credits
+
+* Raspberry Pi Pico SDK, BSD-3-Clause.
+* [LovyanGFX](https://github.com/lovyan03/LovyanGFX) — TFT graphics, FreeBSD.
+* G3YYD's 2Tone, referenced only as a benchmark — not redistributed.
+* The DWD weather service for being a reliable, predictable, 24/7 source
+  of test signal.
+
+If you build this and put it on the air, send me a screenshot of the
+decoded text. I'd love to see what stations you pick up.

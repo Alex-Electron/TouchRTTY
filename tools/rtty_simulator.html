@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RTTY Advanced Test Bench</title>
     <style>
-        body { font-family: Arial, sans-serif; padding: 20px; max-width: 500px; margin: auto; background-color: #f4f4f9;}
+        body { font-family: Arial, sans-serif; padding: 20px 50px 20px 16px; max-width: 440px; margin: 0 auto; background-color: #f4f4f9;}
         h2 { text-align: center; color: #333; }
         label { font-weight: bold; margin-top: 10px; display: block; }
         input[type="number"], select { font-size: 16px; padding: 10px; width: 100%; box-sizing: border-box; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 5px;}
@@ -19,119 +19,944 @@
         .btn-stop { background-color: #dc3545; }
         .btn-stop:active { background-color: #c82333; }
         .status { text-align: center; margin-top: 15px; font-weight: bold; color: #555; }
+        .freq-row { display: flex; gap: 10px; align-items: end; }
+        .freq-row > div { flex: 1; }
+        .freq-computed { font-size: 13px; color: #666; margin-bottom: 10px; }
+        .slider-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        .slider-row input[type="range"] { flex: 1; margin: 0; }
+        .slider-row .val { min-width: 70px; text-align: right; font-family: monospace; font-size: 15px; color: #222; }
+        fieldset { border: 1px solid #bbb; border-radius: 6px; padding: 10px 12px; margin-top: 12px; }
+        legend { font-weight: bold; color: #444; padding: 0 6px; }
     </style>
 </head>
 <body>
 
     <h2>RTTY Test Bench</h2>
 
+    <fieldset>
+        <legend>Audio output</legend>
+        <label for="audioSink">Output device:</label>
+        <select id="audioSink" onchange="applySinkId();">
+            <option value="">System default</option>
+        </select>
+        <div class="btn-group" style="margin-top:6px;">
+            <button type="button" style="background:#6c757d;" onclick="refreshAudioDevices(true)">Show device names</button>
+        </div>
+        <div class="freq-computed" id="audioSinkStatus">Default output.</div>
+        <div class="freq-computed" style="font-style:italic; color:#888;">
+            Chrome скрывает имена выходов без аудио-разрешения. Кнопка выше просит доступ к микрофону
+            на 1 мс (stream сразу останавливается), чтобы показать реальные названия карт вместо id.
+            Выбирай любой микрофон — запись не ведётся.
+        </div>
+    </fieldset>
+
     <label>Baud Rate:</label>
     <select id="baud">
         <option value="45.45" selected>45.45 Baud (Amateur Radio)</option>
         <option value="50">50 Baud (Commercial/Weather)</option>
         <option value="75">75 Baud</option>
+        <option value="100">100 Baud (NAVTEX/SITOR)</option>
     </select>
 
     <label>Stop Bits:</label>
     <select id="stopBits">
-        <option value="1.0" selected>1.0 (Fastest / Target)</option>
-        <option value="1.5">1.5 (Standard ITA2)</option>
+        <option value="1.0">1.0 (Fastest / Target)</option>
+        <option value="1.5" selected>1.5 (Standard ITA2)</option>
         <option value="2.0">2.0 (Slow / Stable)</option>
     </select>
 
-    <label>Mark Frequency (Hz):</label>
-    <input type="number" id="freqMark" value="1450">
+    <label>Shift:</label>
+    <select id="shift" onchange="updateFreqs()">
+        <option value="85">85 Hz</option>
+        <option value="170" selected>170 Hz (Amateur)</option>
+        <option value="200">200 Hz</option>
+        <option value="340">340 Hz</option>
+        <option value="425">425 Hz</option>
+        <option value="450">450 Hz (Commercial)</option>
+        <option value="500">500 Hz</option>
+        <option value="850">850 Hz (Military)</option>
+        <option value="custom">Custom...</option>
+    </select>
 
-    <label>Space Frequency (Hz):</label>
-    <input type="number" id="freqSpace" value="1620">
+    <label>Input mode:</label>
+    <select id="freqMode" onchange="updateFreqs()">
+        <option value="center" selected>Center frequency</option>
+        <option value="mark">Mark frequency (direct)</option>
+    </select>
+
+    <label id="freqLabel">Center Frequency (Hz):</label>
+    <input type="number" id="freqInput" value="1500" onchange="updateFreqs()">
+
+    <div class="freq-computed" id="freqDisplay">Mark: 1415 Hz &nbsp;|&nbsp; Space: 1585 Hz</div>
 
     <div class="checkbox-group">
         <input type="checkbox" id="invertTones">
         <label for="invertTones" style="margin-top: 0;">Invert Tones (Swap Mark/Space)</label>
     </div>
 
+    <fieldset>
+        <legend>Channel impairments</legend>
+
+        <div class="checkbox-group">
+            <input type="checkbox" id="noiseEnable">
+            <label for="noiseEnable" style="margin-top: 0;">AWGN (white noise)</label>
+        </div>
+
+        <label>SNR (dB, audio-band):</label>
+        <div class="slider-row">
+            <input type="range" id="snrSlider" min="-25" max="30" step="1" value="20" oninput="updateSNRLabel(); updateNoiseGain();">
+            <span class="val" id="snrVal">+20 dB</span>
+        </div>
+        <div style="font-size:12px; color:#777; margin-bottom:8px;">
+            Low SNR = больше шума. Цель гибридного декодера: работа на −15..−16 дБ.
+        </div>
+
+        <hr style="border:none; border-top:1px dashed #ccc; margin:12px 0;">
+
+        <div class="checkbox-group">
+            <input type="checkbox" id="cwEnable">
+            <label for="cwEnable" style="margin-top: 0;">QRM: CW carrier (непрерывный тон)</label>
+        </div>
+        <label>CW frequency (Hz):</label>
+        <div class="slider-row">
+            <input type="range" id="cwFreq" min="300" max="3000" step="10" value="1800" oninput="updateCWLabels(); updateCWParams();">
+            <span class="val" id="cwFreqVal">1800 Hz</span>
+        </div>
+        <label>CW level (dB vs signal):</label>
+        <div class="slider-row">
+            <input type="range" id="cwLevel" min="-30" max="20" step="1" value="-6" oninput="updateCWLabels(); updateCWParams();">
+            <span class="val" id="cwLevelVal">−6 dB</span>
+        </div>
+        <label>CW mode:</label>
+        <select id="cwMode" onchange="cwCharIndex=0;">
+            <option value="carrier">Continuous carrier (тон)</option>
+            <option value="keyed" selected>Keyed morse (ручной ключ)</option>
+        </select>
+        <label>CW speed (WPM):</label>
+        <div class="slider-row">
+            <input type="range" id="cwWPM" min="10" max="40" step="1" value="18" oninput="updateCWLabels();">
+            <span class="val" id="cwWPMVal">18 WPM</span>
+        </div>
+        <label>Hand-keyed jitter (%):</label>
+        <div class="slider-row">
+            <input type="range" id="cwJitter" min="0" max="50" step="1" value="20" oninput="updateCWLabels();">
+            <span class="val" id="cwJitterVal">20 %</span>
+        </div>
+
+        <hr style="border:none; border-top:1px dashed #ccc; margin:12px 0;">
+
+        <div class="checkbox-group">
+            <input type="checkbox" id="qrmRttyEnable">
+            <label for="qrmRttyEnable" style="margin-top: 0;">QRM: второй RTTY (45.45/170)</label>
+        </div>
+        <label>QRM RTTY center freq (Hz):</label>
+        <div class="slider-row">
+            <input type="range" id="qrmRttyFreq" min="400" max="2800" step="10" value="1200" oninput="updateQRMRttyLabels(); updateQRMRttyParams();">
+            <span class="val" id="qrmRttyFreqVal">1200 Hz</span>
+        </div>
+        <label>QRM RTTY level (dB vs signal):</label>
+        <div class="slider-row">
+            <input type="range" id="qrmRttyLevel" min="-30" max="20" step="1" value="-6" oninput="updateQRMRttyLabels(); updateQRMRttyParams();">
+            <span class="val" id="qrmRttyLevelVal">−6 dB</span>
+        </div>
+
+        <hr style="border:none; border-top:1px dashed #ccc; margin:12px 0;">
+
+        <div class="checkbox-group">
+            <input type="checkbox" id="driftLinEnable">
+            <label for="driftLinEnable" style="margin-top: 0;">Linear freq drift (тепловой уход TRX)</label>
+        </div>
+        <label>Drift rate (Hz/s):</label>
+        <div class="slider-row">
+            <input type="range" id="driftRate" min="-10" max="10" step="0.1" value="0.5" oninput="updateDriftLabels(); updateDriftParams();">
+            <span class="val" id="driftRateVal">+0.5 Hz/s</span>
+        </div>
+
+        <div class="checkbox-group">
+            <input type="checkbox" id="driftSinEnable">
+            <label for="driftSinEnable" style="margin-top: 0;">Sinusoidal drift (Doppler/QSB wobble)</label>
+        </div>
+        <label>Amplitude (Hz peak):</label>
+        <div class="slider-row">
+            <input type="range" id="driftSinAmp" min="0" max="50" step="1" value="10" oninput="updateDriftLabels(); updateDriftParams();">
+            <span class="val" id="driftSinAmpVal">10 Hz</span>
+        </div>
+        <label>Period (s):</label>
+        <div class="slider-row">
+            <input type="range" id="driftSinPer" min="1" max="60" step="1" value="10" oninput="updateDriftLabels(); updateDriftParams();">
+            <span class="val" id="driftSinPerVal">10 s</span>
+        </div>
+
+        <hr style="border:none; border-top:1px dashed #ccc; margin:12px 0;">
+
+        <div class="checkbox-group">
+            <input type="checkbox" id="qsbEnable">
+            <label for="qsbEnable" style="margin-top: 0;">QSB — flat amplitude fading</label>
+        </div>
+        <label>Depth (dB):</label>
+        <div class="slider-row">
+            <input type="range" id="qsbDepth" min="0" max="40" step="1" value="15" oninput="updateFadingLabels();">
+            <span class="val" id="qsbDepthVal">15 dB</span>
+        </div>
+        <label>Period (s):</label>
+        <div class="slider-row">
+            <input type="range" id="qsbPeriod" min="1" max="60" step="1" value="8" oninput="updateFadingLabels();">
+            <span class="val" id="qsbPeriodVal">8 s</span>
+        </div>
+
+        <div class="checkbox-group">
+            <input type="checkbox" id="selFadeEnable">
+            <label for="selFadeEnable" style="margin-top: 0;">Selective fading (Mark/Space независимо, KB-multipath)</label>
+        </div>
+        <label>Selective depth (dB):</label>
+        <div class="slider-row">
+            <input type="range" id="selFadeDepth" min="0" max="40" step="1" value="20" oninput="updateFadingLabels();">
+            <span class="val" id="selFadeDepthVal">20 dB</span>
+        </div>
+        <label>Selective period (s):</label>
+        <div class="slider-row">
+            <input type="range" id="selFadePeriod" min="1" max="30" step="1" value="4" oninput="updateFadingLabels();">
+            <span class="val" id="selFadePeriodVal">4 s</span>
+        </div>
+
+        <hr style="border:none; border-top:1px dashed #ccc; margin:12px 0;">
+
+        <div class="checkbox-group">
+            <input type="checkbox" id="impEnable">
+            <label for="impEnable" style="margin-top: 0;">Impulse noise (атмосферики / QRN)</label>
+        </div>
+        <label>Rate (clicks/min):</label>
+        <div class="slider-row">
+            <input type="range" id="impRate" min="0" max="300" step="5" value="120" oninput="updateImpLabels();">
+            <span class="val" id="impRateVal">120/min</span>
+        </div>
+        <label>Amplitude (peak relative):</label>
+        <div class="slider-row">
+            <input type="range" id="impAmp" min="0" max="20" step="1" value="10" oninput="updateImpLabels();">
+            <span class="val" id="impAmpVal">×10</span>
+        </div>
+        <label>Tone (Hz):</label>
+        <div class="slider-row">
+            <input type="range" id="impTone" min="100" max="4000" step="50" value="800" oninput="updateImpLabels();">
+            <span class="val" id="impToneVal">800 Hz</span>
+        </div>
+        <label>Duration (ms):</label>
+        <div class="slider-row">
+            <input type="range" id="impDur" min="1" max="40" step="1" value="10" oninput="updateImpLabels();">
+            <span class="val" id="impDurVal">10 ms</span>
+        </div>
+        <div class="checkbox-group">
+            <input type="checkbox" id="impRandom">
+            <label for="impRandom" style="margin-top: 0;">Random tone + duration per burst</label>
+        </div>
+    </fieldset>
+
     <label>Text to Transmit (Loops infinitely):</label>
-    <textarea id="textInput">RYRYRY </textarea>
+    <textarea id="textInput">RYRYRY THE QUICK BROWN FOX JUMPS OVER 1234567890 </textarea>
 
     <div class="btn-group">
-        <button class="btn-start" onclick="startRTTY()">START</button>
+        <button class="btn-start" onclick="startRTTY(false)">START (TX)</button>
+        <button class="btn-start" style="background:#ffc107;color:#000;" onclick="startRTTY(true)">NOISE ONLY</button>
         <button class="btn-stop" onclick="stopRTTY()">STOP</button>
+        <button style="background:#17a2b8;color:#fff;" onclick="injectTestMarker()">INJECT TEST MARKER</button>
     </div>
+    <div id="markerCounter" style="font-size:12px;color:#666;margin-top:4px;">markers: queued=0 consumed=0</div>
 
     <div class="status" id="statusText">Status: IDLE</div>
+
+    <fieldset>
+        <legend>Batch SNR sweep</legend>
+        <div style="font-size:12px; color:#666; margin-bottom:8px;">
+            Автопроход по SNR-точкам с заданным dwell. Лог печатает таймстемп каждой точки — параллельно пишешь serial-вывод устройства, потом сопоставляешь по времени для CER(SNR).
+        </div>
+        <label>SNR from (dB):</label>
+        <div class="slider-row">
+            <input type="range" id="sweepFrom" min="-25" max="30" step="1" value="20" oninput="document.getElementById('sweepFromVal').innerText = this.value + ' dB';">
+            <span class="val" id="sweepFromVal">20 dB</span>
+        </div>
+        <label>SNR to (dB):</label>
+        <div class="slider-row">
+            <input type="range" id="sweepTo" min="-25" max="30" step="1" value="-15" oninput="document.getElementById('sweepToVal').innerText = this.value + ' dB';">
+            <span class="val" id="sweepToVal">−15 dB</span>
+        </div>
+        <label>Step (dB):</label>
+        <div class="slider-row">
+            <input type="range" id="sweepStep" min="1" max="5" step="1" value="2" oninput="document.getElementById('sweepStepVal').innerText = this.value + ' dB';">
+            <span class="val" id="sweepStepVal">2 dB</span>
+        </div>
+        <label>Dwell per point (sec):</label>
+        <div class="slider-row">
+            <input type="range" id="sweepDwell" min="5" max="120" step="5" value="30" oninput="document.getElementById('sweepDwellVal').innerText = this.value + ' s';">
+            <span class="val" id="sweepDwellVal">30 s</span>
+        </div>
+        <div class="btn-group" style="margin-top:10px;">
+            <button class="btn-start" onclick="startSweep()" id="sweepStartBtn">SWEEP</button>
+            <button class="btn-stop" onclick="stopSweep()">CANCEL</button>
+        </div>
+        <div style="margin-top:10px;">
+            <div id="sweepStatus" style="font-weight:bold; color:#444; font-family:monospace; font-size:13px;">Sweep: idle</div>
+            <textarea id="sweepLog" readonly style="height:140px; font-family:monospace; font-size:12px; margin-top:6px;"></textarea>
+        </div>
+    </fieldset>
 
     <script>
         // Standard ITA2 Baudot lookup tables
         const LETTERS = "\0E\nA SIU\rDRJNFCKTZLWHYPQOBG\0MXV\0";
-        const FIGURES = "\03\n- \u000787\r$4',!:(5\")2#6019?&\0./\0";
+        const FIGURES = "\x003\n- \u000787\r$4',!:(5\")2#6019?&\x00./=\x00";
         const SHIFT_LETTERS = 0x1F;
         const SHIFT_FIGURES = 0x1B;
 
         let audioCtx;
         let osc;
         let gain;
+        let noiseSource;
+        let noiseGain;
+        let cwOsc;
+        let cwGain;
+        let driftLinSource;  // ConstantSourceNode — linear drift offset Hz
+        let driftSinOsc;     // OscillatorNode — sine drift generator
+        let driftSinGain;    // GainNode — sine drift amplitude Hz
+        // Dual-tone refactor — independent Mark/Space branches (for selective fading)
+        let markOsc, markBitGain, markFadeGain;
+        let spaceOsc, spaceBitGain, spaceFadeGain;
+        let fadeTimer;       // JS setInterval for QSB + selective fading envelope updates
+        let impulseTimer;    // JS setTimeout for next impulse burst
+        let tStart = 0;      // audioCtx-time reference for fading phase
+        let masterBus;       // central output bus — everything connects here
+        let streamDest;      // MediaStreamAudioDestinationNode (used when a sink is selected)
+        let sinkAudioEl;     // hidden <audio> element bound to streamDest for setSinkId routing
+        let qrmOsc;
+        let qrmGain;
+        let qrmScheduleTimer;
+        let qrmTime = 0;
+        let qrmShift = 'LETTERS';
+        let qrmCharIndex = 0;
         let isPlaying = false;
         let scheduleTimer;
 
-        function startRTTY() {
+        const QRM_TEXT = "CQCQCQ DE TEST RYRYRY 73 ";
+        const CW_TEXT  = "CQ CQ DE UA3TEST K  ";
+        const MORSE = {
+            'A':'.-','B':'-...','C':'-.-.','D':'-..','E':'.','F':'..-.','G':'--.',
+            'H':'....','I':'..','J':'.---','K':'-.-','L':'.-..','M':'--','N':'-.',
+            'O':'---','P':'.--.','Q':'--.-','R':'.-.','S':'...','T':'-','U':'..-',
+            'V':'...-','W':'.--','X':'-..-','Y':'-.--','Z':'--..',
+            '0':'-----','1':'.----','2':'..---','3':'...--','4':'....-',
+            '5':'.....','6':'-....','7':'--...','8':'---..','9':'----.',
+            '/':'-..-.','.':'.-.-.-',',':'--..--','?':'..--..','=':'-...-',
+            '+':'.-.-.','-':'-....-'
+        };
+        let cwTime = 0;
+        let cwCharIndex = 0;
+        let cwScheduleTimer;
+
+        // Signal amplitude convention: sine peak = 0.5 → RMS = 0.5/√2 ≈ 0.3536.
+        // White-noise buffer uses Gaussian-ish samples (sum of 3 uniforms) scaled so RMS ≈ 1.0.
+        // Therefore: noiseGain = signalRMS · 10^(−SNR/20).
+        const SIGNAL_PEAK = 0.5;
+        const SIGNAL_RMS  = SIGNAL_PEAK / Math.SQRT2;
+
+        function currentSNRdB() {
+            return parseFloat(document.getElementById('snrSlider').value);
+        }
+
+        function updateSNRLabel() {
+            const v = currentSNRdB();
+            const sign = v >= 0 ? '+' : '';
+            document.getElementById('snrVal').innerText = sign + v + ' dB';
+        }
+        updateSNRLabel();
+
+        function updateNoiseGain() {
+            if (!noiseGain || !audioCtx) return;
+            const enabled = document.getElementById('noiseEnable').checked;
+            if (!enabled) {
+                noiseGain.gain.setTargetAtTime(0.0, audioCtx.currentTime, 0.01);
+                return;
+            }
+            const snr = currentSNRdB();
+            const g = SIGNAL_RMS * Math.pow(10, -snr / 20);
+            noiseGain.gain.setTargetAtTime(g, audioCtx.currentTime, 0.01);
+        }
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('noiseEnable').addEventListener('change', updateNoiseGain);
+        });
+
+        function dBtoGain(db) { return SIGNAL_PEAK * Math.pow(10, db / 20); }
+
+        function updateCWLabels() {
+            const f = parseFloat(document.getElementById('cwFreq').value);
+            const lv = parseFloat(document.getElementById('cwLevel').value);
+            document.getElementById('cwFreqVal').innerText = f.toFixed(0) + ' Hz';
+            const sign = lv >= 0 ? '+' : '−';
+            document.getElementById('cwLevelVal').innerText = sign + Math.abs(lv) + ' dB';
+            document.getElementById('cwWPMVal').innerText = document.getElementById('cwWPM').value + ' WPM';
+            document.getElementById('cwJitterVal').innerText = document.getElementById('cwJitter').value + ' %';
+        }
+        updateCWLabels();
+
+        function jit(jitPercent) {
+            const j = jitPercent / 100.0;
+            return 1.0 + (Math.random() * 2 - 1) * j;
+        }
+
+        function scheduleCWChunk() {
+            if (!isPlaying || !cwGain || !audioCtx) return;
+            const enabled = document.getElementById('cwEnable').checked;
+            const mode = document.getElementById('cwMode').value;
+            if (!enabled || mode !== 'keyed') {
+                cwScheduleTimer = setTimeout(scheduleCWChunk, 200);
+                return;
+            }
+            const wpm = parseFloat(document.getElementById('cwWPM').value);
+            const jitter = parseFloat(document.getElementById('cwJitter').value);
+            const lvDB = parseFloat(document.getElementById('cwLevel').value);
+            const dot = 1.2 / wpm; // PARIS-based: dot = 1.2/WPM seconds
+
+            if (cwTime < audioCtx.currentTime + 0.2) cwTime = audioCtx.currentTime + 0.2;
+
+            while (cwTime < audioCtx.currentTime + 1.5) {
+                const ch = CW_TEXT[cwCharIndex].toUpperCase();
+                cwCharIndex = (cwCharIndex + 1) % CW_TEXT.length;
+                if (ch === ' ') {
+                    cwTime += dot * 7 * jit(jitter * 0.5); // word gap ~7 dots
+                    continue;
+                }
+                const code = MORSE[ch];
+                if (!code) continue;
+                const RAMP = 0.005; // 5 ms envelope — realistic soft keying
+                for (let i = 0; i < code.length; i++) {
+                    const elLen = dot * (code[i] === '.' ? 1 : 3) * jit(jitter);
+                    cwGain.gain.setValueAtTime(0, cwTime);
+                    cwGain.gain.linearRampToValueAtTime(dBtoGain(lvDB), cwTime + RAMP);
+                    cwGain.gain.setValueAtTime(dBtoGain(lvDB), cwTime + elLen - RAMP);
+                    cwGain.gain.linearRampToValueAtTime(0, cwTime + elLen);
+                    cwTime += elLen;
+                    cwTime += dot * jit(jitter); // intra-char gap = 1 dot
+                }
+                cwTime += dot * 2 * jit(jitter * 0.7); // inter-char gap (total 3 dots)
+            }
+            cwScheduleTimer = setTimeout(scheduleCWChunk, 300);
+        }
+
+        function updateCWParams() {
+            if (!cwGain || !cwOsc || !audioCtx) return;
+            const enabled = document.getElementById('cwEnable').checked;
+            const mode = document.getElementById('cwMode').value;
+            const f = parseFloat(document.getElementById('cwFreq').value);
+            const lv = parseFloat(document.getElementById('cwLevel').value);
+            cwOsc.frequency.setTargetAtTime(f, audioCtx.currentTime, 0.01);
+            if (mode === 'keyed') {
+                // Keyed-mode: scheduler сам управляет cwGain. Если отключаем — опустить в 0.
+                if (!enabled) {
+                    cwGain.gain.cancelScheduledValues(audioCtx.currentTime);
+                    cwGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.02);
+                }
+            } else {
+                // Continuous carrier — постоянный уровень.
+                cwGain.gain.cancelScheduledValues(audioCtx.currentTime);
+                cwGain.gain.setTargetAtTime(enabled ? dBtoGain(lv) : 0, audioCtx.currentTime, 0.02);
+            }
+        }
+
+        function updateQRMRttyLabels() {
+            const f = parseFloat(document.getElementById('qrmRttyFreq').value);
+            const lv = parseFloat(document.getElementById('qrmRttyLevel').value);
+            document.getElementById('qrmRttyFreqVal').innerText = f.toFixed(0) + ' Hz';
+            const sign = lv >= 0 ? '+' : '−';
+            document.getElementById('qrmRttyLevelVal').innerText = sign + Math.abs(lv) + ' dB';
+        }
+        updateQRMRttyLabels();
+
+        function updateQRMRttyParams() {
+            if (!qrmGain || !audioCtx) return;
+            const enabled = document.getElementById('qrmRttyEnable').checked;
+            const lv = parseFloat(document.getElementById('qrmRttyLevel').value);
+            qrmGain.gain.setTargetAtTime(enabled ? dBtoGain(lv) : 0, audioCtx.currentTime, 0.02);
+        }
+
+        function updateDriftLabels() {
+            const r = parseFloat(document.getElementById('driftRate').value);
+            const a = parseFloat(document.getElementById('driftSinAmp').value);
+            const p = parseFloat(document.getElementById('driftSinPer').value);
+            const rs = r >= 0 ? '+' : '−';
+            document.getElementById('driftRateVal').innerText = rs + Math.abs(r).toFixed(1) + ' Hz/s';
+            document.getElementById('driftSinAmpVal').innerText = a.toFixed(0) + ' Hz';
+            document.getElementById('driftSinPerVal').innerText = p.toFixed(0) + ' s';
+        }
+        updateDriftLabels();
+
+        function updateDriftParams() {
+            if (!audioCtx || !driftLinSource) return;
+            const now = audioCtx.currentTime;
+            // Linear drift — offset = rate * (t - now). Schedule long ramp.
+            const linEnabled = document.getElementById('driftLinEnable').checked;
+            const rate = linEnabled ? parseFloat(document.getElementById('driftRate').value) : 0;
+            driftLinSource.offset.cancelScheduledValues(now);
+            // Read current value as starting point (approx: don't know exact, use 0 ramp-restart)
+            driftLinSource.offset.setValueAtTime(0, now);
+            driftLinSource.offset.linearRampToValueAtTime(rate * 3600, now + 3600);
+
+            const sinEnabled = document.getElementById('driftSinEnable').checked;
+            const amp = sinEnabled ? parseFloat(document.getElementById('driftSinAmp').value) : 0;
+            const per = Math.max(1, parseFloat(document.getElementById('driftSinPer').value));
+            driftSinOsc.frequency.setTargetAtTime(1.0 / per, now, 0.05);
+            driftSinGain.gain.setTargetAtTime(amp, now, 0.05);
+        }
+
+        function updateFadingLabels() {
+            document.getElementById('qsbDepthVal').innerText = document.getElementById('qsbDepth').value + ' dB';
+            document.getElementById('qsbPeriodVal').innerText = document.getElementById('qsbPeriod').value + ' s';
+            document.getElementById('selFadeDepthVal').innerText = document.getElementById('selFadeDepth').value + ' dB';
+            document.getElementById('selFadePeriodVal').innerText = document.getElementById('selFadePeriod').value + ' s';
+        }
+        updateFadingLabels();
+
+        function updateImpLabels() {
+            document.getElementById('impRateVal').innerText = document.getElementById('impRate').value + '/min';
+            document.getElementById('impAmpVal').innerText = '×' + document.getElementById('impAmp').value;
+            document.getElementById('impToneVal').innerText = document.getElementById('impTone').value + ' Hz';
+            document.getElementById('impDurVal').innerText  = document.getElementById('impDur').value + ' ms';
+        }
+        updateImpLabels();
+
+        // Convert linear fading depth (dB) + sinusoidal phase → linear multiplier.
+        // fade = 10^((−depth/2 · (1 − cos(2π·t/period)))/20) ∈ [10^(−depth/20), 1]
+        function fadeMult(tSec, periodSec, depthDB, phaseOffset) {
+            if (depthDB <= 0 || periodSec <= 0) return 1.0;
+            const ph = 2 * Math.PI * tSec / periodSec + phaseOffset;
+            const attenDB = (depthDB / 2) * (1 - Math.cos(ph));
+            return Math.pow(10, -attenDB / 20);
+        }
+
+        function fadingTick() {
+            if (!audioCtx || !markFadeGain || !spaceFadeGain) return;
+            const t = audioCtx.currentTime - tStart;
+            const qsbOn = document.getElementById('qsbEnable').checked;
+            const qsbDepth = parseFloat(document.getElementById('qsbDepth').value);
+            const qsbPer = parseFloat(document.getElementById('qsbPeriod').value);
+            const selOn = document.getElementById('selFadeEnable').checked;
+            const selDepth = parseFloat(document.getElementById('selFadeDepth').value);
+            const selPer = parseFloat(document.getElementById('selFadePeriod').value);
+
+            const flat = qsbOn ? fadeMult(t, qsbPer, qsbDepth, 0) : 1.0;
+            const selMark  = selOn ? fadeMult(t, selPer, selDepth, 0)        : 1.0;
+            const selSpace = selOn ? fadeMult(t, selPer, selDepth, Math.PI * 0.7) : 1.0;
+
+            const now = audioCtx.currentTime;
+            markFadeGain.gain.setTargetAtTime(flat * selMark, now, 0.05);
+            spaceFadeGain.gain.setTargetAtTime(flat * selSpace, now, 0.05);
+        }
+
+        function scheduleImpulse() {
+            if (!isPlaying || !audioCtx) return;
+            const on = document.getElementById('impEnable').checked;
+            const rate = parseFloat(document.getElementById('impRate').value);  // per minute
+            if (!on || rate <= 0) {
+                impulseTimer = setTimeout(scheduleImpulse, 500);
+                return;
+            }
+            // Exponential inter-arrival, mean = 60/rate seconds.
+            const meanSec = 60.0 / rate;
+            const delay = -Math.log(1 - Math.random()) * meanSec;
+
+            impulseTimer = setTimeout(() => {
+                if (!isPlaying || !audioCtx) return;
+                const amp = parseFloat(document.getElementById('impAmp').value);
+                const rnd = document.getElementById('impRandom').checked;
+                let toneHz = parseFloat(document.getElementById('impTone').value);
+                let durMs  = parseFloat(document.getElementById('impDur').value);
+                if (rnd) {
+                    toneHz = 150 + Math.random() * 3500;   // 150..3650 Hz
+                    durMs  = 1 + Math.random() * 15;        // 1..16 ms
+                }
+                const sr = audioCtx.sampleRate;
+                const len = Math.max(32, Math.floor(sr * durMs / 1000));
+                const buf = audioCtx.createBuffer(1, len, sr);
+                const d = buf.getChannelData(0);
+                const tau = len * 0.25;                     // decay time const
+                const w = 2 * Math.PI * toneHz / sr;
+                const phase0 = Math.random() * 2 * Math.PI;
+                // Damped sine + 30% noise for natural "crack" timbre.
+                for (let i = 0; i < len; i++) {
+                    const env = Math.exp(-i / tau);
+                    d[i] = env * (0.7 * Math.sin(phase0 + w * i) + 0.3 * (Math.random() * 2 - 1));
+                }
+                const src = audioCtx.createBufferSource();
+                src.buffer = buf;
+                const g = audioCtx.createGain();
+                g.gain.value = amp * SIGNAL_PEAK;
+                src.connect(g);
+                g.connect(masterBus || audioCtx.destination);
+                src.start();
+                scheduleImpulse();
+            }, delay * 1000);
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('cwEnable').addEventListener('change', updateCWParams);
+            document.getElementById('cwMode').addEventListener('change', updateCWParams);
+            document.getElementById('qrmRttyEnable').addEventListener('change', updateQRMRttyParams);
+            document.getElementById('driftLinEnable').addEventListener('change', updateDriftParams);
+            document.getElementById('driftSinEnable').addEventListener('change', updateDriftParams);
+            refreshAudioDevices(false);
+            if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+                navigator.mediaDevices.addEventListener('devicechange', () => refreshAudioDevices(false));
+            }
+        });
+
+        async function refreshAudioDevices(requestPermission) {
+            const sel = document.getElementById('audioSink');
+            const status = document.getElementById('audioSinkStatus');
+            if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+                status.innerText = 'enumerateDevices not supported by this browser.';
+                return;
+            }
+            try {
+                if (requestPermission) {
+                    // Briefly open audio input to unlock device labels.
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    stream.getTracks().forEach(t => t.stop());
+                }
+                const prev = sel.value;
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const outs = devices.filter(d => d.kind === 'audiooutput');
+                sel.innerHTML = '<option value="">System default</option>';
+                outs.forEach((d, i) => {
+                    const opt = document.createElement('option');
+                    opt.value = d.deviceId;
+                    opt.textContent = d.label || `Output ${i+1} (${d.deviceId.slice(0,8)})`;
+                    sel.appendChild(opt);
+                });
+                // Restore selection if still present.
+                if (prev && Array.from(sel.options).some(o => o.value === prev)) sel.value = prev;
+                const labelsVisible = outs.some(d => d.label);
+                status.innerText = labelsVisible
+                    ? `${outs.length} output device(s) listed.`
+                    : `${outs.length} output device(s) found — labels hidden, click "Grant permission".`;
+                applySinkId();
+            } catch (e) {
+                status.innerText = 'Enumerate error: ' + (e.message || e);
+            }
+        }
+
+        async function applySinkId() {
+            const sel = document.getElementById('audioSink');
+            const status = document.getElementById('audioSinkStatus');
+            const id = sel.value;
+            if (!audioCtx) {
+                status.innerText = id ? `Will use "${sel.options[sel.selectedIndex].text}" on next START.` : 'Default output (applied on START).';
+                return;
+            }
+            try {
+                await setupOutputRouting(id);
+                status.innerText = id ? `Routed to "${sel.options[sel.selectedIndex].text}".` : 'Routed to system default.';
+            } catch (e) {
+                status.innerText = 'Routing failed: ' + (e.message || e);
+            }
+        }
+
+        // All source nodes connect to masterBus. masterBus either goes directly
+        // to audioCtx.destination (default output) or via a
+        // MediaStreamDestination → <audio>.setSinkId() to a specific device.
+        // HTMLAudioElement.setSinkId works in Chrome and Firefox 116+.
+        async function setupOutputRouting(sinkId) {
+            if (!audioCtx) return;
+            if (!masterBus) {
+                masterBus = audioCtx.createGain();
+                masterBus.gain.value = 1.0;
+            }
+            try { masterBus.disconnect(); } catch (_) {}
+            if (!sinkId) {
+                masterBus.connect(audioCtx.destination);
+                if (sinkAudioEl) { try { sinkAudioEl.pause(); } catch (_) {} }
+                return;
+            }
+            if (!streamDest) streamDest = audioCtx.createMediaStreamDestination();
+            masterBus.connect(streamDest);
+            if (!sinkAudioEl) {
+                sinkAudioEl = document.createElement('audio');
+                sinkAudioEl.autoplay = true;
+                sinkAudioEl.style.display = 'none';
+                document.body.appendChild(sinkAudioEl);
+            }
+            if (typeof sinkAudioEl.setSinkId !== 'function') {
+                throw new Error('setSinkId not supported — use Firefox 116+ or Chrome');
+            }
+            sinkAudioEl.srcObject = streamDest.stream;
+            await sinkAudioEl.setSinkId(sinkId);
+            await sinkAudioEl.play().catch(() => {});
+        }
+
+        function scheduleQRMChar(code) {
+            const baud = 45.45;
+            const bitTime = 1.0 / baud;
+            const center = parseFloat(document.getElementById('qrmRttyFreq').value);
+            const fMark = center - 85;
+            const fSpace = center + 85;
+            qrmOsc.frequency.setValueAtTime(fSpace, qrmTime);
+            qrmTime += bitTime;
+            for (let i = 0; i < 5; i++) {
+                const bit = (code >> i) & 1;
+                qrmOsc.frequency.setValueAtTime(bit ? fMark : fSpace, qrmTime);
+                qrmTime += bitTime;
+            }
+            qrmOsc.frequency.setValueAtTime(fMark, qrmTime);
+            qrmTime += bitTime * 1.5;
+        }
+
+        function scheduleQRMChunk() {
+            if (!isPlaying || !qrmOsc) return;
+            while (qrmTime < audioCtx.currentTime + 1.0) {
+                const ch = QRM_TEXT[qrmCharIndex];
+                let code = -1;
+                let li = LETTERS.indexOf(ch);
+                if (li !== -1) {
+                    if (qrmShift !== 'LETTERS' && ch !== ' ' && ch !== '\r' && ch !== '\n') {
+                        scheduleQRMChar(SHIFT_LETTERS); qrmShift = 'LETTERS';
+                    }
+                    code = li;
+                } else {
+                    let fi = FIGURES.indexOf(ch);
+                    if (fi !== -1) {
+                        if (qrmShift !== 'FIGURES' && ch !== ' ' && ch !== '\r' && ch !== '\n') {
+                            scheduleQRMChar(SHIFT_FIGURES); qrmShift = 'FIGURES';
+                        }
+                        code = fi;
+                    }
+                }
+                if (code !== -1) scheduleQRMChar(code);
+                qrmCharIndex = (qrmCharIndex + 1) % QRM_TEXT.length;
+            }
+            qrmScheduleTimer = setTimeout(scheduleQRMChunk, 250);
+        }
+
+        function createNoiseBuffer(ctx, seconds) {
+            const len = Math.floor(ctx.sampleRate * seconds);
+            const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+            const data = buf.getChannelData(0);
+            // Pseudo-Gaussian via sum of 3 uniforms — RMS ≈ 1.0, peak ≈ ±3.
+            for (let i = 0; i < len; i++) {
+                const u = (Math.random() + Math.random() + Math.random() - 1.5) * Math.sqrt(4);
+                data[i] = u;
+            }
+            return buf;
+        }
+
+        function getShiftHz() {
+            const shiftSel = document.getElementById('shift');
+            return shiftSel.value === 'custom' ? 170 : parseFloat(shiftSel.value);
+        }
+
+        function updateFreqs() {
+            const mode = document.getElementById('freqMode').value;
+            const val = parseFloat(document.getElementById('freqInput').value);
+            const shift = getShiftHz();
+            let mark, space;
+            if (mode === 'mark') {
+                mark = val;
+                space = val + shift;
+                document.getElementById('freqLabel').innerText = 'Mark Frequency (Hz):';
+            } else {
+                mark = val - shift / 2;
+                space = val + shift / 2;
+                document.getElementById('freqLabel').innerText = 'Center Frequency (Hz):';
+            }
+            document.getElementById('freqDisplay').innerHTML =
+                'Mark: ' + mark.toFixed(0) + ' Hz &nbsp;|&nbsp; Space: ' + space.toFixed(0) + ' Hz' +
+                ' &nbsp;|&nbsp; Center: ' + ((mark + space) / 2).toFixed(0) + ' Hz';
+        }
+        updateFreqs();
+
+        function getFreqs() {
+            const mode = document.getElementById('freqMode').value;
+            const val = parseFloat(document.getElementById('freqInput').value);
+            const shift = getShiftHz();
+            let mark, space;
+            if (mode === 'mark') {
+                mark = val;
+                space = val + shift;
+            } else {
+                mark = val - shift / 2;
+                space = val + shift / 2;
+            }
+            const invert = document.getElementById('invertTones').checked;
+            if (invert) { let tmp = mark; mark = space; space = tmp; }
+            return { mark, space };
+        }
+
+        let rttyMuted = false;
+        let markerQueue = '';  // sync-markers injected by sweep; consumed by scheduleChunk ahead of main text
+        let markerQueued = 0, markerConsumed = 0;
+        function updateMarkerCounter() {
+            const el = document.getElementById('markerCounter');
+            if (el) el.innerText = `markers: queued=${markerQueued} consumed=${markerConsumed} queue=${markerQueue.length}`;
+        }
+        function injectTestMarker() {
+            markerQueue += '\n=99=\n';
+            markerQueued += 8;
+            updateMarkerCounter();
+            console.log('[sim] injected test marker =99=, queue now:', JSON.stringify(markerQueue));
+        }
+        async function startRTTY(muteMain) {
             if (isPlaying) return;
+            rttyMuted = !!muteMain;
 
             // Re-initialize AudioContext
             if (!audioCtx || audioCtx.state === 'closed') {
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                masterBus = null;   // rebuild for new context
+                streamDest = null;
             }
+            await setupOutputRouting(document.getElementById('audioSink').value);
 
             const rawText = document.getElementById('textInput').value.toUpperCase();
-            const text = rawText.length > 0 ? rawText : "RYRYRY "; 
-            
+            const text = rawText.length > 0 ? rawText : "RYRYRY ";
+
             const baud = parseFloat(document.getElementById('baud').value);
             const stopBits = parseFloat(document.getElementById('stopBits').value);
-            const invert = document.getElementById('invertTones').checked;
-            
-            // Assign frequencies based on invert checkbox
-            const freqMark = invert ? parseFloat(document.getElementById('freqSpace').value) : parseFloat(document.getElementById('freqMark').value);
-            const freqSpace = invert ? parseFloat(document.getElementById('freqMark').value) : parseFloat(document.getElementById('freqSpace').value);
+            const { mark: freqMark, space: freqSpace } = getFreqs();
 
-            const bitTime = 1.0 / baud; 
-            
-            osc = audioCtx.createOscillator();
+            const bitTime = 1.0 / baud;
+
             gain = audioCtx.createGain();
-            
-            osc.type = 'sine';
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
+            gain.gain.value = 1.0;
+            gain.connect(masterBus);
 
-            osc.start();
+            // Dual-tone branches: markOsc → markBitGain → markFadeGain → gain
+            markOsc       = audioCtx.createOscillator();
+            markBitGain   = audioCtx.createGain();
+            markFadeGain  = audioCtx.createGain();
+            markOsc.type  = 'sine';
+            markOsc.frequency.value = freqMark;
+            markBitGain.gain.value  = 0;
+            markFadeGain.gain.value = 1;
+            markOsc.connect(markBitGain);
+            markBitGain.connect(markFadeGain);
+            markFadeGain.connect(gain);
+
+            spaceOsc      = audioCtx.createOscillator();
+            spaceBitGain  = audioCtx.createGain();
+            spaceFadeGain = audioCtx.createGain();
+            spaceOsc.type = 'sine';
+            spaceOsc.frequency.value = freqSpace;
+            spaceBitGain.gain.value  = 0;
+            spaceFadeGain.gain.value = 1;
+            spaceOsc.connect(spaceBitGain);
+            spaceBitGain.connect(spaceFadeGain);
+            spaceFadeGain.connect(gain);
+
+            // Legacy alias so stop() code works.
+            osc = markOsc;
+
+            // Frequency drift branches — connected to BOTH osc.frequency params.
+            driftLinSource = audioCtx.createConstantSource();
+            driftLinSource.offset.value = 0;
+            driftLinSource.connect(markOsc.frequency);
+            driftLinSource.connect(spaceOsc.frequency);
+            driftLinSource.start();
+            driftSinOsc = audioCtx.createOscillator();
+            driftSinOsc.type = 'sine';
+            driftSinOsc.frequency.value = 0.1;
+            driftSinGain = audioCtx.createGain();
+            driftSinGain.gain.value = 0;
+            driftSinOsc.connect(driftSinGain);
+            driftSinGain.connect(markOsc.frequency);
+            driftSinGain.connect(spaceOsc.frequency);
+            driftSinOsc.start();
+            updateDriftParams();
+
+            tStart = audioCtx.currentTime;
+            fadeTimer = setInterval(fadingTick, 50);
+            // NOTE: scheduleImpulse() вызывается ниже, после isPlaying = true
+
+            // Noise branch — parallel to signal, summed at destination.
+            const nbuf = createNoiseBuffer(audioCtx, 10);
+            noiseSource = audioCtx.createBufferSource();
+            noiseSource.buffer = nbuf;
+            noiseSource.loop = true;
+            noiseGain = audioCtx.createGain();
+            noiseGain.gain.value = 0.0;
+            noiseSource.connect(noiseGain);
+            noiseGain.connect(masterBus);
+            noiseSource.start();
+
+            // CW-carrier branch (continuous tone)
+            cwOsc = audioCtx.createOscillator();
+            cwOsc.type = 'sine';
+            cwOsc.frequency.value = parseFloat(document.getElementById('cwFreq').value);
+            cwGain = audioCtx.createGain();
+            cwGain.gain.value = 0.0;
+            cwOsc.connect(cwGain);
+            cwGain.connect(masterBus);
+            cwOsc.start();
+            updateCWParams();
+
+            // Second RTTY QRM branch (scheduled separately, fixed 45.45/170/1.5)
+            qrmOsc = audioCtx.createOscillator();
+            qrmOsc.type = 'sine';
+            qrmGain = audioCtx.createGain();
+            qrmGain.gain.value = 0.0;
+            qrmOsc.connect(qrmGain);
+            qrmGain.connect(masterBus);
+            const qrmCenter = parseFloat(document.getElementById('qrmRttyFreq').value);
+            qrmOsc.frequency.setValueAtTime(qrmCenter - 85, audioCtx.currentTime); // mark = center - 85 (shift 170)
+            qrmOsc.start();
+            qrmTime = audioCtx.currentTime + 0.5;
+            qrmShift = 'LETTERS';
+            qrmCharIndex = 0;
+            updateQRMRttyParams();
+            // NOTE: scheduleQRMChunk() вызывается ниже, после isPlaying = true
+
+            markOsc.start();
+            spaceOsc.start();
             isPlaying = true;
-            document.getElementById('statusText').innerText = "Status: TRANSMITTING...";
+            cwTime = audioCtx.currentTime + 0.3;
+            cwCharIndex = 0;
+            scheduleQRMChunk();
+            scheduleCWChunk();
+            scheduleImpulse();
+            document.getElementById('statusText').innerText =
+                "TX: " + baud + " Bd, " + stopBits + " stop, M:" +
+                freqMark.toFixed(0) + " S:" + freqSpace.toFixed(0);
             document.getElementById('statusText').style.color = "#28a745";
 
             let time = audioCtx.currentTime;
-            
-            // Start with Mark tone (idle state)
-            osc.frequency.setValueAtTime(freqMark, time);
-            gain.gain.setValueAtTime(0, time);
-            gain.gain.linearRampToValueAtTime(1, time + 0.05);
-            time += 0.5; // Idle tone before transmission
+
+            // Main RTTY idle — mark on, unless noise-only mode.
+            markBitGain.gain.setValueAtTime(0, time);
+            if (!rttyMuted) {
+                markBitGain.gain.linearRampToValueAtTime(SIGNAL_PEAK, time + 0.05);
+            }
+            spaceBitGain.gain.setValueAtTime(0, time);
+            updateNoiseGain();
+            time += 0.5;
 
             let currentShift = 'LETTERS';
             let charIndex = 0;
 
-        // Function to schedule a single Baudot character
-        function scheduleChar(code) {
-            // 1. Start Bit (Space tone)
-            osc.frequency.setTargetAtTime(freqSpace, time, 0.0001);
-            time += bitTime;
+        // Bit-level helper: set markBitGain=mark, spaceBitGain=1−mark with a tiny ramp
+        // to suppress switching clicks. `markOn` ∈ {0,1}.
+        function setBitAt(t, markOn) {
+            const RAMP = 0.0005;
+            markBitGain.gain.setValueAtTime(markBitGain.gain.value, t);
+            spaceBitGain.gain.setValueAtTime(spaceBitGain.gain.value, t);
+            markBitGain.gain.linearRampToValueAtTime(markOn ? SIGNAL_PEAK : 0, t + RAMP);
+            spaceBitGain.gain.linearRampToValueAtTime(markOn ? 0 : SIGNAL_PEAK, t + RAMP);
+        }
 
-            // 2. Data Bits (5 bits, LSB first)
+        function scheduleChar(code) {
+            // Start bit = Space
+            setBitAt(time, 0);
+            time += bitTime;
+            // Data bits (LSB first)
             for (let i = 0; i < 5; i++) {
-                let bit = (code >> i) & 1;
-                osc.frequency.setTargetAtTime(bit ? freqMark : freqSpace, time, 0.0001);
+                const bit = (code >> i) & 1;
+                setBitAt(time, bit);
                 time += bitTime;
             }
-
-            // 3. Stop Bit(s) (Mark tone) - Variable length based on user input
-            osc.frequency.setTargetAtTime(freqMark, time, 0.0001);
+            // Stop bit = Mark
+            setBitAt(time, 1);
             time += bitTime * stopBits;
         }
 
@@ -140,8 +965,18 @@
                 if (!isPlaying) return;
 
                 // Schedule audio slightly ahead to ensure seamless playback
-                while (time < audioCtx.currentTime + 1.0) { 
-                    let char = text[charIndex];
+                while (time < audioCtx.currentTime + 1.0) {
+                    let char, fromMarker = false;
+                    if (markerQueue.length > 0) {
+                        char = markerQueue[0];
+                        markerQueue = markerQueue.slice(1);
+                        fromMarker = true;
+                        markerConsumed++;
+                        updateMarkerCounter();
+                        console.log('[sim] consume marker char', JSON.stringify(char));
+                    } else {
+                        char = text[charIndex];
+                    }
                     let code = -1;
 
                     let lIdx = LETTERS.indexOf(char);
@@ -169,30 +1004,137 @@
                     }
 
                     // Loop text
-                    charIndex = (charIndex + 1) % text.length; 
+                    if (!fromMarker) charIndex = (charIndex + 1) % text.length;
                 }
 
                 // Recursive timeout for the next chunk
-                scheduleTimer = setTimeout(scheduleChunk, 250); 
+                scheduleTimer = setTimeout(scheduleChunk, 250);
             }
 
-            scheduleChunk();
+            if (!rttyMuted) scheduleChunk();
+            if (rttyMuted) {
+                document.getElementById('statusText').innerText = "NOISE ONLY (main RTTY muted)";
+                document.getElementById('statusText').style.color = "#b8860b";
+            }
+        }
+
+        let sweepTimer = null;
+        let sweepActive = false;
+
+        function sweepLog(msg) {
+            const ta = document.getElementById('sweepLog');
+            ta.value += msg + '\n';
+            ta.scrollTop = ta.scrollHeight;
+        }
+
+        function setSNR(db) {
+            const s = document.getElementById('snrSlider');
+            s.value = db;
+            updateSNRLabel();
+            // Включаем AWGN автоматически во время sweep.
+            document.getElementById('noiseEnable').checked = true;
+            updateNoiseGain();
+        }
+
+        function startSweep() {
+            if (sweepActive) return;
+            if (!isPlaying) { alert('Сначала нажми START (TX).'); return; }
+            const from = parseFloat(document.getElementById('sweepFrom').value);
+            const to = parseFloat(document.getElementById('sweepTo').value);
+            const step = parseFloat(document.getElementById('sweepStep').value);
+            const dwellMs = parseFloat(document.getElementById('sweepDwell').value) * 1000;
+            const dir = (to >= from) ? +1 : -1;
+            const points = [];
+            for (let s = from; (dir > 0 ? s <= to : s >= to); s += dir * step) points.push(s);
+            if (points.length === 0) return;
+
+            sweepActive = true;
+            document.getElementById('sweepStartBtn').disabled = true;
+            document.getElementById('sweepLog').value = '';
+            const isoStart = new Date().toISOString();
+            sweepLog(`=== SWEEP START ${isoStart} ===`);
+            sweepLog(`from=${from} to=${to} step=${step} dwell=${dwellMs/1000}s points=${points.length}`);
+
+            let idx = 0;
+            function next() {
+                if (!sweepActive) return;
+                if (idx >= points.length) {
+                    sweepLog(`=== SWEEP DONE ${new Date().toISOString()} ===`);
+                    document.getElementById('sweepStatus').innerText = 'Sweep: done';
+                    document.getElementById('sweepStartBtn').disabled = false;
+                    sweepActive = false;
+                    return;
+                }
+                const snr = points[idx];
+                setSNR(snr);
+                const tag = String(idx + 1).padStart(2, '0');
+                // Inject sync marker into main RTTY stream for post-hoc CER binning.
+                // Format: `=NN==NN==NN==NN==NN=` — 5 repeats, all FIGS chars (no LTRS
+                // toggles), so only one FIGS-shift overhead. At very low SNR (-12..-14)
+                // a single marker often gets shredded — with 5 copies, even 80% char-loss
+                // still leaves one recognizable `=NN=` to locate the bin.
+                // Analyzer uses FIRST hit as segment start; duplicates inside the segment
+                // are stripped by marker_re.sub() → no CER bias.
+                let rep = '';
+                for (let k = 0; k < 5; k++) rep += '=' + tag + '=';
+                markerQueue += '\n' + rep + '\n';
+                markerQueued += rep.length + 2;
+                updateMarkerCounter();
+                const ts = new Date().toISOString();
+                sweepLog(`${ts}  SNR=${snr >= 0 ? '+' : ''}${snr} dB  [${idx+1}/${points.length}]  MARK==${tag}=`);
+                document.getElementById('sweepStatus').innerText =
+                    `Sweep: ${idx+1}/${points.length}  SNR=${snr >= 0 ? '+' : ''}${snr} dB`;
+                idx++;
+                sweepTimer = setTimeout(next, dwellMs);
+            }
+            next();
+        }
+
+        function stopSweep() {
+            if (!sweepActive) return;
+            clearTimeout(sweepTimer);
+            sweepActive = false;
+            sweepLog(`=== SWEEP CANCELLED ${new Date().toISOString()} ===`);
+            document.getElementById('sweepStatus').innerText = 'Sweep: cancelled';
+            document.getElementById('sweepStartBtn').disabled = false;
         }
 
         function stopRTTY() {
             if (!isPlaying) return;
-            
+            if (sweepActive) stopSweep();
+
             clearTimeout(scheduleTimer);
+            clearTimeout(qrmScheduleTimer);
+            clearTimeout(cwScheduleTimer);
+            clearTimeout(impulseTimer);
+            clearInterval(fadeTimer);
             isPlaying = false;
-            
-            if (gain && osc) {
+
+            if (gain) {
                 let time = audioCtx.currentTime;
-                gain.gain.setValueAtTime(1, time);
-                // Smooth fade out to prevent clicks
+                gain.gain.setValueAtTime(gain.gain.value, time);
                 gain.gain.linearRampToValueAtTime(0, time + 0.05);
-                osc.stop(time + 0.1);
             }
-            
+            if (markOsc)  { try { markOsc.stop(audioCtx.currentTime + 0.1); }  catch(e) {} }
+            if (spaceOsc) { try { spaceOsc.stop(audioCtx.currentTime + 0.1); } catch(e) {} }
+            if (noiseGain && noiseSource) {
+                let time = audioCtx.currentTime;
+                noiseGain.gain.linearRampToValueAtTime(0, time + 0.05);
+                try { noiseSource.stop(time + 0.1); } catch(e) {}
+            }
+            if (cwGain && cwOsc) {
+                let time = audioCtx.currentTime;
+                cwGain.gain.linearRampToValueAtTime(0, time + 0.05);
+                try { cwOsc.stop(time + 0.1); } catch(e) {}
+            }
+            if (qrmGain && qrmOsc) {
+                let time = audioCtx.currentTime;
+                qrmGain.gain.linearRampToValueAtTime(0, time + 0.05);
+                try { qrmOsc.stop(time + 0.1); } catch(e) {}
+            }
+            if (driftLinSource) { try { driftLinSource.stop(audioCtx.currentTime + 0.1); } catch(e) {} }
+            if (driftSinOsc)    { try { driftSinOsc.stop(audioCtx.currentTime + 0.1); } catch(e) {} }
+
             document.getElementById('statusText').innerText = "Status: IDLE";
             document.getElementById('statusText').style.color = "#555";
         }
