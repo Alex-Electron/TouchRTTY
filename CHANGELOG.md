@@ -373,7 +373,6 @@ AWGN-нейтрально по threshold, как и ожидалось для ф
 реальный выигрыш BPF раскроется при QRM/noise-floor тестах и как чистый
 вход для Stage 3 (fusion).
 
-Артефакт: `datasets/logs/b245_inputbpf_awgn_{sweep.txt,cer.csv,*.log}`.
 
 ### Next
 Stage 3: Fusion двух IQ-веток (narrow LPF + wide raised-cosine) с weighted
@@ -414,12 +413,10 @@ Phase 9, Stage 2.1. В чистом AWGN gain ≈ 0 (notch'у не на что �
 
 **AWGN-only (sanity)**: threshold −10 dB (как B243.1). Мелкий шум на +14 дБ
 из-за cold-start notch (мало времени на convergence перед высоким SNR).
-Артефакт: `datasets/logs/b244_lmsnotch_awgn_{sweep.txt,cer.csv,*.log}`.
 
 **AWGN + CW QRM** (уровень оператора, частота вне RTTY band):
 threshold −10 dB **тот же**, от +20 до −8 дБ везде ≤2% CER. Notch успешно
 нулифицирует QRM — без него CW обычно разваливает декодер даже на высоком SNR.
-Артефакт: `datasets/logs/b244_lmsnotch_qrm_{sweep.txt,cer.csv,*.log}`.
 
 Subjectively +1-2 дБ gain в QRM-условиях, как и планировалось.
 
@@ -474,7 +471,6 @@ Phase 9, Stage 1.2 — вторая половина soft-решения. B242 �
 **Главный win**: ложные фреймы на −8 дБ (6.0% B242 → 0.00% B243.1) вычищены
 weakest-link гейтом. Это что и должен был дать Stage 1.2.
 
-Артефакты: `datasets/logs/b243_1_softviterbi_lenient_{sweep.txt,cer.csv,*.log}`.
 
 ### Next
 Stage 1.2 закрыт. Переходим к Stage 2 — шумовая обстановка:
@@ -518,7 +514,6 @@ Soft-LLR с адаптивным порогом на границе фрейма
 - Но на −8 странный всплеск 6% — в preview `QWERTYUIOP RYRYRY...`, похоже на ложный фрейм, проскочивший через ослабленный порог.
 - Без soft-Viterbi (Stage 1.2) одних адаптивных порогов не хватает — больше символов, но и больше мусора.
 
-Артефакты: `datasets/logs/b242_softllr_{sweep.txt,cer.csv}`, serial `b242_softllr_20260415_224405.log`.
 
 ### Next
 - Stage 1.2: Soft-Viterbi framer с stop-bit как constraint — должен отфильтровать мусорные фреймы за счёт мягких решений по 5 data-битам.
@@ -594,8 +589,6 @@ Baseline-замер B230 показал: serial-вывод устройства 
 ## [Build 238] - 2026-04-13
 ### Added (testbench — Python tools)
 - **`tools/serial_logger.py`**: timestamped логгер serial-вывода устройства. Каждая пришедшая строка пишется как `<ISO8601>\t<line>`, совместимо с таймстемпами HTML sweep-лога. Используется в паре с sweep из `rtty_simulator.html` → потом `cer_analyze.py` (следующий билд) сопоставит по времени.
-- CLI: `--port COM27 --baud 115200 --out datasets/logs/session.log [--raw] [--echo]`.
-- Папка `datasets/logs/` создаётся автоматически. Маркеры `=== LOG START/END ===` на границах сессии.
 - Зависимость: `pyserial` (уже установлен).
 
 ## [Build 237] - 2026-04-13

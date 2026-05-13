@@ -228,7 +228,6 @@ ADC 10 kHz
 - k ∈ {0.40, 0.50, 0.60, 0.75, 0.90}, SNR −10..−18, dwell 60s, 3 run.
 - Оркестратор: `tools/bw_sweep_orchestrator.py`.
 - Ожидается: победитель в k=0.50..0.60 по Path A (по ранним данным lead у k=0.50 на верхних SNR, k=0.60 на −16).
-- Artefacts: `datasets/logs/b258_bw/`.
 
 **P1. Plan B — revalidate baseline + Stage 3.3 (task #38)**
 - DYN ON/OFF A/B через `serial_logger --cmd-cycle 10 --cmd-seq "ON=DYN ON|OFF=DYN OFF"`, SNR −10..−18, 3 run.
@@ -253,7 +252,7 @@ ADC 10 kHz
 
 **P4. Real-air dataset (task #16)**
 - Записи с веб-SDR и реального RX: AWGN, QSB, QRM, drift сценарии.
-- Формат: 48 kHz / 16-bit mono (см. `datasets/RECORDING_GUIDE.md`).
+- Формат: 48 kHz / 16-bit mono.
 - Нужно для: (a) валидация в реальных условиях, (b) обучение ML-классификатора (task #23).
 
 **P5. Stage 5 var.3 — ML post-classifier (task #23)**

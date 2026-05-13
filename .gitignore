@@ -72,31 +72,12 @@ datasets/recs_mono/
 tools/recs/
 tools/2Tone 26.01a/
 
-# ── Negative-result NN weight archives (preserved locally) ────────
-datasets/nn_archive/nn_weights_v5*.h
-datasets/nn_archive/nn_weights_v6*.h
-datasets/nn_archive/nn_weights_v7*.h
-datasets/nn_archive/nn_weights_v8*.h
-datasets/nn_archive/nn_weights_v9*.h
-datasets/nn_archive/nn_weights_v10*.h
-datasets/nn_archive/nn_weights_v11*.h
-datasets/nn_archive/nn_weights_v12*.h
-datasets/nn_archive/nn_weights_v14*.h
-datasets/nn_archive/nn_weights_v15*.h
-datasets/nn_archive/nn_weights_v16*.h
-datasets/nn_archive/nn_weights_v17*.h
-datasets/nn_archive/nn_weights_v18*.h
-datasets/nn_archive/nn_weights_noise040.h
-datasets/nn_archive/nn_weights_ultra_regressed.h
-
 # ── Internal working drafts (not for the public branch) ─────────────
 docs/nano_banana_prompts.md
 docs/NEIGHBOR_IDEAS.md
 docs/NEIGHBOR_IDEAS.ru.md
 
-# ── Bench artefacts: local-machine specific, regenerable via tools/ ──
-datasets/logs/
-datasets/nn_archive/
-datasets/training_real*.npz
-datasets/recs_mono/
-datasets/real_air/
+# ── Datasets dir: local-machine bench artefacts, weights archive,
+#    recordings, training npz, RECORDING_GUIDE — kept off the repo.
+#    Regeneration is documented in docs/BENCH_TOOLING.md.
+datasets/

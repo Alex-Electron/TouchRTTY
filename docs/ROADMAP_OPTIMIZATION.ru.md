@@ -234,7 +234,7 @@ ADC → AGC → BPF → LMS notch ─┤                                     ├
 | 2Tone (current best) | ~−13 dB | **~58 pp real errors** |
 | **TouchRTTY v2.0.0** | ~**−16 dB** | **~9 pp real errors** ✓ |
 
-См. `RELEASE_v2.0.0.md` и `datasets/logs/multirun_summary.md`.
+См. `RELEASE_v2.0.0.md`.
 
 ### Этап 1: Dual-Goertzel Matched Filter — **N/A** (architecture changed)
 

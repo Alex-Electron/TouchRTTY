@@ -282,7 +282,6 @@ in the orchestrator, dwell 60 s.
 - Orchestrator: `tools/bw_sweep_orchestrator.py`.
 - Expected: winner at k = 0.50..0.60 on Path A (early data shows lead
   at k = 0.50 on high SNR, k = 0.60 at −16).
-- Artefacts: `datasets/logs/b258_bw/`.
 
 **P1. Plan B — revalidate baseline + Stage 3.3 (task #38)**
 
@@ -318,7 +317,7 @@ in the orchestrator, dwell 60 s.
 **P4. Real-air dataset (task #16)**
 
 - WebSDR and real-RX recordings: AWGN, QSB, QRM, drift scenarios.
-- Format: 48 kHz / 16-bit mono (see `datasets/RECORDING_GUIDE.md`).
+- Format: 48 kHz / 16-bit mono.
 - Needed for: (a) real-condition validation, (b) ML classifier
   training (task #23).
 
