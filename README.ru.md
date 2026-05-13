@@ -51,7 +51,7 @@
 
 ## Как смотрится против 2Tone
 
-Сравнивал с [2Tone 26.01a](http://www.tonemap.com/Software.html)
+Сравнивал с [2Tone 26.01a](https://www.rttycontesting.com/downloads/2tone/)
 (уважаемый декодер David'а G3YYD), усредняли по трём random seeds,
 SNR-лесенка от −4 до −22 dB шагом 2 dB по 30 секунд на бин. То же
 самое аудио в обоих декодерах через один Voicemeeter loopback.

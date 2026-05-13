@@ -21,7 +21,7 @@ still get readable telegraphy. I benched it. The numbers below are real.
 
 ---
 
-## Where I are right now
+## Where things stand right now
 
 The latest release is **v2.0.0** (firmware build B265, NN weights v13).
 If you flash nothing else and just want the best decoder I've shipped,
@@ -51,7 +51,7 @@ The full project changelog is in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## How it stacks up against 2Tone
 
-I benchmarked against [2Tone 26.01a](http://www.tonemap.com/Software.html)
+I benchmarked against [2Tone 26.01a](https://www.rttycontesting.com/downloads/2tone/)
 (David G3YYD's well-regarded decoder), averaged over three random seeds,
 sweeping SNR from −4 to −22 dB in 2 dB steps with 30 seconds of dwell
 per bin. Same audio fed into both decoders through the same Voicemeeter

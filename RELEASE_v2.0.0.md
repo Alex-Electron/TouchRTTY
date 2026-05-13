@@ -14,7 +14,7 @@
 
 TouchRTTY v2.0.0 is a substantial rewrite over v1.72 — a fundamentally
 new decoder architecture with a learned post-classifier on top. On the
-same audio where [2Tone 26.01a](http://www.tonemap.com/Software.html)
+same audio where [2Tone 26.01a](https://www.rttycontesting.com/downloads/2tone/)
 collapses into random letters at low SNR, this build produces readable
 telegraphy. I benchmarked it against 2Tone over multiple seeds, and the
 multi-run-averaged numbers are:
