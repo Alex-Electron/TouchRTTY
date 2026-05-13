@@ -12,20 +12,13 @@ the visualizer and the decoded RTTY text, and the bottom has eight
 quick-access buttons. Everything else (menu, tuning lab, diagnostics)
 overlays the middle area when you tap into it.
 
-```
-+----------------------------------------------------+
-|  TOP BAR (33 px) — SIG / AGC / ERR + metrics       |
-+----------------------------------------------------+
-|                                                    |
-|           MAIN ZONE  (160 px)                      |
-|           Waterfall / spectrum / scope             |
-|                                                    |
-+----------------------------------------------------+
-|       TEXT ZONE (160 px) — decoded RTTY text       |
-+----------------------------------------------------+
-|  BOTTOM BAR (8 buttons × 1 row)                    |
-+----------------------------------------------------+
-```
+<p align="center">
+  <img src="images/screen_layout.svg" alt="TouchRTTY screen layout, 480×320 px" width="900">
+</p>
+
+The actual heights (from `src/ui/UIManager.hpp`): TOP BAR 34 px, frequency
+MARKER strip 14 px, DSP zone (waterfall / spectrum / scope) 64 px, TEXT
+zone 160 px (the biggest — half the screen), BOTTOM BAR 48 px.
 
 ---
 

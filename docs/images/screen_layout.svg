@@ -1,0 +1,261 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" font-family="ui-sans-serif, system-ui, sans-serif">
+  <!-- backdrop -->
+  <rect width="1200" height="760" fill="#0E1525"/>
+
+  <!-- title -->
+  <text x="600" y="38" fill="#F4F6FA" font-size="22" font-weight="600" text-anchor="middle">TouchRTTY — screen layout (480 × 320 px, drawn 2× scale)</text>
+
+  <!-- ============================================================
+       The screen, drawn at 2x device pixels.
+       Device:  480 × 320
+       Drawn:   960 × 640  (each device px = 2 svg units)
+       Origin: (60, 70)
+       ============================================================ -->
+  <g transform="translate(60,70)">
+    <!-- outer frame, slightly larger than the screen -->
+    <rect x="-6" y="-6" width="972" height="652" rx="10" ry="10" fill="#0A0F1A" stroke="#2DD4BF" stroke-width="2"/>
+
+    <!-- background (the actual screen is full-black) -->
+    <rect x="0" y="0" width="960" height="640" fill="#000000"/>
+
+    <!-- ========== TOP BAR (device y 0..34 → svg y 0..68) ========== -->
+    <g>
+      <!-- Row 1: SIG (y 0..9 device → 0..18 svg) -->
+      <text x="4"  y="14" fill="#AAAAAA" font-size="13" font-family="ui-monospace, Menlo, monospace">SIG</text>
+      <rect x="56" y="0"  width="164" height="18" fill="none" stroke="#444444"/>
+      <rect x="56" y="0"  width="106" height="18" fill="#00FF00"/>
+      <text x="232" y="14" fill="#AAAAAA" font-size="13" font-family="ui-monospace, Menlo, monospace">SNR 14.2  SIG -12  M:1490 S:1660  AFC +2.4</text>
+
+      <!-- Row 2: AGC (device y 12..21) -->
+      <text x="4"  y="38" fill="#AAAAAA" font-size="13" font-family="ui-monospace, Menlo, monospace">AGC</text>
+      <rect x="56" y="24" width="164" height="18" fill="none" stroke="#444444"/>
+      <rect x="56" y="24" width="58"  height="18" fill="#F59E0B"/>
+      <text x="232" y="38" fill="#AAAAAA" font-size="13" font-family="ui-monospace, Menlo, monospace">AGC ×1.50  C0 8%  C1 28%  Vmid 1.65V</text>
+
+      <!-- Row 3: ERR (device y 24..33) -->
+      <text x="4"  y="62" fill="#AAAAAA" font-size="13" font-family="ui-monospace, Menlo, monospace">ERR</text>
+      <rect x="56" y="48" width="164" height="18" fill="none" stroke="#444444"/>
+      <rect x="56" y="48" width="8"   height="18" fill="#00FF00"/>
+      <text x="232" y="62" fill="#AAAAAA" font-size="13" font-family="ui-monospace, Menlo, monospace">BD 50(A)  SH 450  STOP 1.5  ERR 3%</text>
+
+      <!-- right-side mini indicators -->
+      <text x="900" y="14" fill="#2DD4BF" font-size="13" font-family="ui-monospace, Menlo, monospace" text-anchor="end">NN</text>
+      <text x="900" y="38" fill="#2DD4BF" font-size="13" font-family="ui-monospace, Menlo, monospace" text-anchor="end">VIT</text>
+      <text x="900" y="62" fill="#666666" font-size="13" font-family="ui-monospace, Menlo, monospace" text-anchor="end">NOTCH</text>
+
+      <!-- bottom grid line (device y=33) -->
+      <line x1="0" y1="66" x2="960" y2="66" stroke="#444444" stroke-width="1"/>
+    </g>
+
+    <!-- ========== MARKER (device y 34..48 → svg y 68..96) ==========
+         Mark tone @ ~1490 Hz, Space tone @ ~1660 Hz.
+         FFT bin width ≈ 9.77 Hz over 480px → ~50 px gap between markers.
+         Place at x ≈ 360 (cyan/Mark) and x ≈ 460 (yellow/Space) device px,
+         i.e. 720 and 920 svg units.
+    -->
+    <g transform="translate(0,68)">
+      <!-- frequency scale ticks -->
+      <line x1="0" y1="0"  x2="960" y2="0" stroke="#222222" stroke-width="1"/>
+      <!-- subtle freq legend -->
+      <text x="8"   y="22" fill="#555555" font-size="11" font-family="ui-monospace, Menlo, monospace">0.3 kHz</text>
+      <text x="952" y="22" fill="#555555" font-size="11" font-family="ui-monospace, Menlo, monospace" text-anchor="end">3.0 kHz</text>
+
+      <!-- Mark marker (cyan, downward triangle) at signal position -->
+      <polygon points="438,4 462,4 450,22" fill="#00FFFF"/>
+      <text x="450" y="-1" fill="#00FFFF" font-size="10" text-anchor="middle" font-family="ui-monospace, Menlo, monospace">M</text>
+
+      <!-- Space marker (yellow, downward triangle) -->
+      <polygon points="540,4 564,4 552,22" fill="#FFD700"/>
+      <text x="552" y="-1" fill="#FFD700" font-size="10" text-anchor="middle" font-family="ui-monospace, Menlo, monospace">S</text>
+    </g>
+
+    <!-- ========== DSP_ZONE / WATERFALL (device y 48..112 → svg y 96..224, 128px tall) ========== -->
+    <g transform="translate(0,96)" clip-path="inset(0 0 0 0)">
+      <defs>
+        <!-- vertical fade simulating a waterfall scrolling down -->
+        <linearGradient id="wfNoise" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#0a1224"/>
+          <stop offset="100%" stop-color="#001020"/>
+        </linearGradient>
+        <!-- the Mark tone trace: bright orange in the center, dimming over time/y -->
+        <linearGradient id="markTone" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stop-color="#FFD180"/>
+          <stop offset="40%"  stop-color="#F59E0B"/>
+          <stop offset="100%" stop-color="#6B2E00"/>
+        </linearGradient>
+        <linearGradient id="spaceTone" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stop-color="#FFCB80"/>
+          <stop offset="40%"  stop-color="#F97316"/>
+          <stop offset="100%" stop-color="#5C2400"/>
+        </linearGradient>
+        <!-- random noise speckle as a pattern -->
+      </defs>
+
+      <!-- background noise field -->
+      <rect x="0" y="0" width="960" height="128" fill="url(#wfNoise)"/>
+
+      <!-- speckle: scattered faint pixels — drawn one by one (kept brief) -->
+      <g fill="#1f2d40" opacity="0.6">
+        <rect x="20"  y="10"  width="2" height="2"/>
+        <rect x="55"  y="33"  width="2" height="2"/>
+        <rect x="92"  y="18"  width="2" height="2"/>
+        <rect x="130" y="60"  width="2" height="2"/>
+        <rect x="175" y="92"  width="2" height="2"/>
+        <rect x="210" y="42"  width="2" height="2"/>
+        <rect x="245" y="74"  width="2" height="2"/>
+        <rect x="282" y="20"  width="2" height="2"/>
+        <rect x="330" y="100" width="2" height="2"/>
+        <rect x="375" y="55"  width="2" height="2"/>
+        <rect x="410" y="80"  width="2" height="2"/>
+        <rect x="615" y="33"  width="2" height="2"/>
+        <rect x="660" y="60"  width="2" height="2"/>
+        <rect x="700" y="105" width="2" height="2"/>
+        <rect x="740" y="20"  width="2" height="2"/>
+        <rect x="785" y="90"  width="2" height="2"/>
+        <rect x="830" y="42"  width="2" height="2"/>
+        <rect x="880" y="115" width="2" height="2"/>
+        <rect x="915" y="65"  width="2" height="2"/>
+        <rect x="940" y="20"  width="2" height="2"/>
+      </g>
+      <!-- a few stronger speckles -->
+      <g fill="#3a4b66" opacity="0.85">
+        <rect x="100" y="50" width="3" height="2"/>
+        <rect x="190" y="80" width="2" height="3"/>
+        <rect x="320" y="30" width="2" height="3"/>
+        <rect x="650" y="70" width="3" height="2"/>
+        <rect x="800" y="25" width="2" height="3"/>
+        <rect x="870" y="100" width="3" height="2"/>
+      </g>
+
+      <!-- Mark tone trace (vertical bright column) — width 16 svg = ~8 device px -->
+      <rect x="442" y="0" width="16" height="128" fill="url(#markTone)"/>
+      <!-- Mark "keying" — small horizontal gaps simulating space symbols -->
+      <rect x="442" y="22" width="16" height="6" fill="#001020" opacity="0.85"/>
+      <rect x="442" y="52" width="16" height="6" fill="#001020" opacity="0.85"/>
+      <rect x="442" y="84" width="16" height="6" fill="#001020" opacity="0.85"/>
+      <rect x="442" y="108" width="16" height="4" fill="#001020" opacity="0.7"/>
+
+      <!-- Space tone trace -->
+      <rect x="544" y="0" width="16" height="128" fill="url(#spaceTone)"/>
+      <!-- Space "keying" — gaps complementary to Mark -->
+      <rect x="544" y="0"  width="16" height="22" fill="#001020" opacity="0.85"/>
+      <rect x="544" y="28" width="16" height="24" fill="#001020" opacity="0.85"/>
+      <rect x="544" y="58" width="16" height="26" fill="#001020" opacity="0.85"/>
+      <rect x="544" y="90" width="16" height="18" fill="#001020" opacity="0.85"/>
+
+      <!-- soft halo around the tones to suggest sideband energy -->
+      <rect x="430" y="0" width="12" height="128" fill="#F59E0B" opacity="0.10"/>
+      <rect x="458" y="0" width="12" height="128" fill="#F59E0B" opacity="0.10"/>
+      <rect x="532" y="0" width="12" height="128" fill="#F97316" opacity="0.10"/>
+      <rect x="560" y="0" width="12" height="128" fill="#F97316" opacity="0.10"/>
+
+      <!-- bottom grid line (device y=112) -->
+      <line x1="0" y1="128" x2="960" y2="128" stroke="#444444" stroke-width="1"/>
+    </g>
+
+    <!-- ========== TEXT_ZONE (device y 112..272 → svg y 224..544, 320 svg = 160 dev) ========== -->
+    <g transform="translate(0,224)" font-family="ui-monospace, Menlo, monospace">
+      <rect x="0" y="0" width="960" height="320" fill="#000000"/>
+      <!-- 10 lines, line height = 32 svg units = 16 dev px (Spleen 8x16 font) -->
+      <text x="8" y="22"  fill="#00FF00" font-size="22">RYRYRY THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG</text>
+      <text x="8" y="54"  fill="#00FF00" font-size="22">1234567890 RYRYRY DWD DEUTSCHER WETTERDIENST</text>
+      <text x="8" y="86"  fill="#00FF00" font-size="22">SEEWETTERBERICHT DEUTSCHE BUCHT 0500 UTC GALE</text>
+      <text x="8" y="118" fill="#00FF00" font-size="22">WARNING NORTH SEA AREAS DOGGER GERMAN <tspan fill="#FF0000" font-weight="700">*</tspan>BIGHT</text>
+      <text x="8" y="150" fill="#00FF00" font-size="22">FORECAST FOR 24 HRS NW VEERING WEST 6 ROUGH</text>
+      <text x="8" y="182" fill="#00FF00" font-size="22">BECOMING MODERATE OCCASIONAL RAIN VISIBILITY</text>
+      <text x="8" y="214" fill="#00FF00" font-size="22">MODERATE OR POOR <tspan fill="#FF0000" font-weight="700">*</tspan> ZZCZC NAVTEX TRANSMISSION</text>
+      <text x="8" y="246" fill="#00FF00" font-size="22">FOLLOWING BROADCAST DEUTSCHE BUCHT NORDSEE</text>
+      <text x="8" y="278" fill="#00FF00" font-size="22">GALES IMMINENT WIND VEERING NORTHWEST GUSTS 8</text>
+      <text x="8" y="310" fill="#00FF00" font-size="22">TO 9 SEAS ROUGH BECOMING VERY ROUGH<tspan fill="#666666">_</tspan></text>
+    </g>
+
+    <!-- ========== BOTTOM_BAR (device y 272..320 → svg y 544..640, 96 svg = 48 dev) ========== -->
+    <g transform="translate(0,544)">
+      <rect x="0" y="0" width="960" height="96" fill="#000000"/>
+      <line x1="0" y1="0" x2="960" y2="0" stroke="#444444" stroke-width="1"/>
+      <!-- 8 buttons, each 120 svg wide (= 60 device px), with 4 svg gap (= 2 dev px) -->
+      <g font-size="22" text-anchor="middle" font-family="ui-monospace, Menlo, monospace">
+        <!-- B 50 -->
+        <g transform="translate(4,6)">
+          <rect width="112" height="84" rx="8" fill="#0a1224" stroke="#444444" stroke-width="2"/>
+          <text x="56" y="52" fill="#F4F6FA">B 50</text>
+        </g>
+        <!-- S 450 -->
+        <g transform="translate(124,6)">
+          <rect width="112" height="84" rx="8" fill="#0a1224" stroke="#444444" stroke-width="2"/>
+          <text x="56" y="52" fill="#F4F6FA">S 450</text>
+        </g>
+        <!-- ST 1.5 -->
+        <g transform="translate(244,6)">
+          <rect width="112" height="84" rx="8" fill="#0a1224" stroke="#444444" stroke-width="2"/>
+          <text x="56" y="52" fill="#F4F6FA">ST 1.5</text>
+        </g>
+        <!-- NOR[A] — auto-INV cyan -->
+        <g transform="translate(364,6)">
+          <rect width="112" height="84" rx="8" fill="#0a1224" stroke="#00FFFF" stroke-width="2"/>
+          <text x="56" y="52" fill="#00FFFF">NOR[A]</text>
+        </g>
+        <!-- AFC:ON — active toggle, green -->
+        <g transform="translate(484,6)">
+          <rect width="112" height="84" rx="8" fill="#0c3318" stroke="#00FF00" stroke-width="2"/>
+          <text x="56" y="52" fill="#00FF00">AFC:ON</text>
+        </g>
+        <!-- SEARCH -->
+        <g transform="translate(604,6)">
+          <rect width="112" height="84" rx="8" fill="#0a1224" stroke="#444444" stroke-width="2"/>
+          <text x="56" y="52" fill="#F4F6FA">SEARCH</text>
+        </g>
+        <!-- CLEAR -->
+        <g transform="translate(724,6)">
+          <rect width="112" height="84" rx="8" fill="#0a1224" stroke="#444444" stroke-width="2"/>
+          <text x="56" y="52" fill="#F4F6FA">CLEAR</text>
+        </g>
+        <!-- MENU -->
+        <g transform="translate(844,6)">
+          <rect width="112" height="84" rx="8" fill="#0a1224" stroke="#444444" stroke-width="2"/>
+          <text x="56" y="52" fill="#F4F6FA">MENU</text>
+        </g>
+      </g>
+    </g>
+  </g>
+
+  <!-- ============================================================
+       Side annotations on the right
+       Screen ends at x = 60 + 960 = 1020; we have x 1040..1180 for text
+       ============================================================ -->
+  <g font-family="ui-sans-serif, system-ui, sans-serif" fill="#94a3b8">
+    <!-- TOP BAR — center of zone in svg coords: y = 70 + 34 = 104 -->
+    <line x1="1020" y1="104" x2="1050" y2="104" stroke="#2DD4BF" stroke-width="1.5"/>
+    <text x="1056" y="100" fill="#F4F6FA" font-size="14" font-weight="700">TOP BAR · 34 px</text>
+    <text x="1056" y="118" font-size="12">SIG / AGC / ERR + live metrics</text>
+    <text x="1056" y="134" font-size="11" fill="#64748b">NN / VIT / NOTCH state on the right</text>
+
+    <!-- MARKER — y = 70 + 41 = 111 (mid of 14px zone) -->
+    <line x1="1020" y1="152" x2="1050" y2="152" stroke="#2DD4BF" stroke-width="1.5"/>
+    <text x="1056" y="148" fill="#F4F6FA" font-size="14" font-weight="700">MARKERS · 14 px</text>
+    <text x="1056" y="166" font-size="12">Cyan = Mark tone</text>
+    <text x="1056" y="182" font-size="12">Yellow = Space tone</text>
+
+    <!-- DSP / WATERFALL — y = 70 + 80 = 150  (center: y 80 dev) -->
+    <line x1="1020" y1="224" x2="1050" y2="224" stroke="#2DD4BF" stroke-width="1.5"/>
+    <text x="1056" y="220" fill="#F4F6FA" font-size="14" font-weight="700">DSP ZONE · 64 px</text>
+    <text x="1056" y="238" font-size="12">Waterfall · spectrum · scope</text>
+    <text x="1056" y="254" font-size="11" fill="#64748b">Two visible bands = Mark + Space</text>
+
+    <!-- TEXT — y = 70 + 192 = 262 (center: y 192 dev) -->
+    <line x1="1020" y1="384" x2="1050" y2="384" stroke="#2DD4BF" stroke-width="1.5"/>
+    <text x="1056" y="380" fill="#F4F6FA" font-size="14" font-weight="700">TEXT ZONE · 160 px</text>
+    <text x="1056" y="398" font-size="12">Decoded RTTY · 10 lines</text>
+    <text x="1056" y="414" font-size="11" fill="#64748b">Red * = rejected frame (B264)</text>
+
+    <!-- BOTTOM BAR — y = 70 + 296 = 366 (center: y 296 dev) -->
+    <line x1="1020" y1="592" x2="1050" y2="592" stroke="#2DD4BF" stroke-width="1.5"/>
+    <text x="1056" y="588" fill="#F4F6FA" font-size="14" font-weight="700">BOTTOM BAR · 48 px</text>
+    <text x="1056" y="606" font-size="12">8 touch buttons</text>
+    <text x="1056" y="622" font-size="11" fill="#64748b">Green = active toggle</text>
+    <text x="1056" y="638" font-size="11" fill="#64748b">Cyan = auto mode</text>
+  </g>
+
+  <!-- footer note -->
+  <text x="600" y="730" fill="#475569" font-size="11" text-anchor="middle" font-style="italic">Zone heights from src/ui/UIManager.hpp · TOP=34 · MARKER=14 · DSP=64 · TEXT=160 · BOTTOM=48 · sum=320</text>
+</svg>
