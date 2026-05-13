@@ -57,8 +57,6 @@ Major rewrite over v1.72. Full release notes in
 
 ### Breaking
 
-* **RP2040 no longer supported.** Requires Raspberry Pi Pico 2
-  (RP2350) — uses M33 FPU and >150 KB SRAM for FIR + FFT buffers.
 * Old per-phase planning docs (`PHASE1..PHASE7_*.md`) removed from
   `docs/` (superseded by Phase 9 implementation). Available in git
   history.
@@ -72,84 +70,86 @@ Major rewrite over v1.72. Full release notes in
 ## [B258 — Stage 4 closed: Wiener NR neutral-to-harmful under honest 3-run averaging] - 2026-04-19
 
 ### Added
-**`NR ON` / `NR OFF` serial команды** (`src/serial_commands.cpp`) + флаг
-`shared_spectral_nr` (`src/app_state.{hpp,cpp}`). По умолчанию **OFF** —
-см. ниже разбор что пошло не так.
+**`NR ON` / `NR OFF` serial commands** (`src/serial_commands.cpp`) plus
+the `shared_spectral_nr` flag (`src/app_state.{hpp,cpp}`). Default
+**OFF** — see below for the autopsy.
 
 **Per-bin Wiener noise reduction** (`src/dsp_pipeline.cpp`, guarded by `shared_spectral_nr`):
-- Асимметричный мин-трекер для floor каждого из 4-х потоков мощности
+- Asymmetric min-tracker for the floor of each of the 4 power streams
   (`mark_a`, `space_a`, `mark_b`, `space_b`): `fast-down 0.1`, `slow-up 1e-5`.
-- Per-channel Wiener gain `G = (P − floor) / P` с floor-clamp `G ≥ 0.7`.
-- SNR-gated через `shared_snr_db` из Core 1 FFT (включается только при SNR
-  ниже порога — cкорее всего порог подобран неверно).
+- Per-channel Wiener gain `G = (P − floor) / P` with floor-clamp `G ≥ 0.7`.
+- SNR-gated via `shared_snr_db` from the Core 1 FFT (engages only when
+  SNR is below the threshold — most likely the threshold was set wrong).
 
 ### Fixed
-**Stage 4 не работает — честная метрика показала neutral-to-harmful.**
-После экспериментов B253-B256 (разные floor, gating, LPF-эмуляция) и
-измерений одиночными sweep-прогонами казалось что есть улучшение на ~5%
-при -14 dB. Но **re-run того же B256 дал до 9% CER-разброса** на одинаковой
-конфигурации → baseline нестабилен из-за AWGN-реализации и Windows audio
-jitter. Стадия 4 закрыта:
-- 3-run averaging (`tools/cer_avg.py`, см. ниже) по B257:
-  - `-14 dB`: NRON 22.58% mean vs NROFF **18.56%** mean → NRON **хуже** на 4.02%
-  - `-16 dB`: NRON 59.45% mean vs NROFF **48.05%** mean → NRON хуже на 11.4%
-  - `-18 dB`: NRON 80.37% mean vs NROFF 79.95% mean → ~ноль
-- Симметричное применение gain к обоим channels — математически no-op
-  (downstream AGC `atc_mark_env`/`atc_space_env` нормализует оба в
-  одинаковом отношении). Асимметричное применение разрушает LLR-инварианты
-  (per-channel SNR esrimates становятся смещёнными).
-- Код оставлен за `shared_spectral_nr` gate (OFF by default) — на случай
-  если в Stage 5 понадобится spectral subtraction как компонент другой
-  архитектуры.
+**Stage 4 doesn't work — honest measurement showed neutral-to-harmful.**
+After the B253-B256 experiments (different floors, gating, LPF emulation)
+and measurements via single sweep runs it looked like a ~5% improvement
+at -14 dB. But **rerunning the same B256 gave up to 9% CER spread** on
+the identical config → the baseline is unstable thanks to AWGN realization
+and Windows audio jitter. Stage 4 closed:
+- 3-run averaging (`tools/cer_avg.py`, see below) over B257:
+  - `-14 dB`: NRON 22.58% mean vs NROFF **18.56%** mean → NRON **worse** by 4.02%
+  - `-16 dB`: NRON 59.45% mean vs NROFF **48.05%** mean → NRON worse by 11.4%
+  - `-18 dB`: NRON 80.37% mean vs NROFF 79.95% mean → ~zero
+- Symmetric application of gain to both channels is mathematically a no-op
+  (downstream AGC `atc_mark_env`/`atc_space_env` normalizes both in the
+  same ratio). Asymmetric application breaks LLR invariants (per-channel
+  SNR estimates become biased).
+- Code left behind the `shared_spectral_nr` gate (OFF by default) — in
+  case Stage 5 wants spectral subtraction as a component of a different
+  architecture.
 
 ### Next
-- Stage 5 variant 1 (matched filter / Path A LPF narrower): тест `BW`
-  команды `{0.4, 0.5, 0.6, 0.75, 0.9}` × 3 sweep-прогона каждый →
+- Stage 5 variant 1 (matched filter / Path A LPF narrower): test `BW`
+  command at `{0.4, 0.5, 0.6, 0.75, 0.9}` × 3 sweep runs each →
   `cer_avg.py` aggregation.
-- Stage 5 candidates остались: BCJR soft-output, character-level LM,
-  ML classifier на логах сдвиговых регистров.
+- Remaining Stage 5 candidates: BCJR soft-output, character-level LM,
+  ML classifier on shift-register logs.
 
 ---
 
 ## [B257 — tools/cer_avg.py: N-run CER aggregation (mean/std/min/max)] - 2026-04-19
 
 ### Added
-**`tools/cer_avg.py`** — runner над `cer_analyze.py` для усреднения CER
-по N sweep+log парам:
+**`tools/cer_avg.py`** — runner over `cer_analyze.py` that averages CER
+over N sweep+log pairs:
 ```
 python cer_avg.py --gt "RYRYRY..." \
   --pairs run1.sweep:run1.log run2.sweep:run2.log run3.sweep:run3.log
 ```
-Output: per `(SNR, PATH)` tuple печатает `N mean std min max`. Нужно было
-чтобы выловить что одиночные sweep-прогоны нестабильны на ±9% CER — без
-усреднения **невозможно** отличить реальное улучшение декодера от шума
-AWGN-реализации.
+Output: for each `(SNR, PATH)` tuple prints `N mean std min max`. Built
+this to expose that single sweep runs are unstable to within ±9% CER —
+without averaging it's **impossible** to tell a real decoder improvement
+from the noise of an AWGN realization.
 
 ### Fixed
-**`tools/sweep_runner.py` — post-noise rescale сохраняет SNR.**
-Раньше при клиппинге (`peak > 0.95`) рескейл применялся только к audio
-без учёта того, что шум внутри `add_awgn()` считается относительно
-rms сигнала **до** генерации. При больших отрицательных SNR-ах это
-приводило к переполнению и потере точности замера. Новое поведение:
-- Pre-scale `clean` signal на `--sig-level` (default 0.10 = -20 dBFS)
-  **до** add_awgn, чтобы при минимальном SNR в ladder шум укладывался
-  в ±1.0 без клиппинга.
-- Если всё равно peak > 0.95 после наложения шума — rescale применяется
-  к **обоим** (signal уже включен в audio), SNR сохраняется (делается
-  одно и то же кратное), декодер справляется через AGC.
+**`tools/sweep_runner.py` — post-noise rescale preserves SNR.**
+Previously, on clipping (`peak > 0.95`) the rescale was applied only to
+the audio without accounting for the fact that the noise inside
+`add_awgn()` is computed relative to the signal rms **before** generation.
+At large negative SNRs that led to overflow and loss of measurement
+precision. New behaviour:
+- Pre-scale the `clean` signal by `--sig-level` (default 0.10 = -20 dBFS)
+  **before** add_awgn, so that at the minimum SNR in the ladder the
+  noise fits within ±1.0 without clipping.
+- If peak > 0.95 still happens after noise overlay — the rescale is
+  applied to **both** (the signal is already inside the audio), SNR is
+  preserved (same multiplier applied to everything), the decoder copes
+  via AGC.
 
-**`tools/cer_analyze.py` — `--lag` компенсация serial-batching.**
-Firmware flush-ит накопленные chars только когда приходит newline — а
-newline обычно приходит на следующем `[CMD] PATH=X` echo. Значит символы
-декодированные во время bin N попадают в лог под timestamp'ом bin N+1.
-Опция `--lag 2.0` (default) сдвигает timestamps записей на 2 секунды
-назад перед bin-assignment → правильная атрибуция символов к SNR/PATH.
-Без этого первое окно sweep'а систематически показывало CER как принадлежащий
-следующему окну (first-window bias).
+**`tools/cer_analyze.py` — `--lag` compensation for serial batching.**
+Firmware flushes accumulated chars only when a newline arrives — and the
+newline usually arrives on the next `[CMD] PATH=X` echo. So characters
+decoded during bin N end up in the log under bin N+1's timestamp. The
+`--lag 2.0` option (default) shifts record timestamps back by 2 seconds
+before bin assignment → correct attribution of characters to SNR/PATH.
+Without this the first window of a sweep systematically showed its CER
+as belonging to the next window (first-window bias).
 
 ### Next
-- Использовать `cer_avg.py --pairs` минимум для 3 прогонов при всех
-  будущих measurements — одиночные замеры больше не доверять.
+- Use `cer_avg.py --pairs` for at least 3 runs on every future
+  measurement — no more trusting single-shot numbers.
 
 ---
 
@@ -157,204 +157,226 @@ newline обычно приходит на следующем `[CMD] PATH=X` ech
 
 ### Added
 **Stage 3.3 — dynamic LLR fusion** (`src/dsp_pipeline.cpp`, `shared_dyn_fusion`):
-заменили равновесный geometric mean двух IQ paths на веса, пропорциональные
-per-path SNR. Формула после тюнинга:
+replaced the equal-weight geometric mean of the two IQ paths with weights
+proportional to per-path SNR. Final formula after tuning:
 ```
 w_a = sqrt(snr_a_ema) / (sqrt(snr_a_ema) + sqrt(snr_b_ema))
-w_a = clamp(w_a, 0.2, 0.8)    // защита от single-path lock-in
-α    = 0.002                   // per-path EMA (медленное обновление)
+w_a = clamp(w_a, 0.2, 0.8)    // guard against single-path lock-in
+α    = 0.002                   // per-path EMA (slow update)
 mark  = exp(w_a·log(mark_a)  + w_b·log(mark_b))
 space = exp(w_a·log(space_a) + w_b·log(space_b))
 ```
-Где `snr_{a,b} = max(mark, space) / min(mark, space)` на каждой обработанной выборке.
+Where `snr_{a,b} = max(mark, space) / min(mark, space)` on every
+processed sample.
 
-**`DYN ON` / `DYN OFF` serial команды** + `shared_snr_a_ema`/`shared_snr_b_ema`
-телеметрия (диагностика weight-конвергенции).
+**`DYN ON` / `DYN OFF` serial commands** plus `shared_snr_a_ema` /
+`shared_snr_b_ema` telemetry (for weight-convergence diagnostics).
 
-**`PATH LLR` alias** для `PATH HYB` (совместимость с внешними скриптами
-которые могут использовать старое имя).
+**`PATH LLR` alias** for `PATH HYB` (compatibility with external scripts
+that may use the old name).
 
-**`WEIGHTS <wa> <wb>` команда** — статический override весов Stage 3.2 для
-A/B ablation (внутренне нормализует в sum=1.0).
+**`WEIGHTS <wa> <wb>` command** — static Stage 3.2 weight override for
+A/B ablation (internally normalised to sum=1.0).
 
 ### Key measurement
 3-run averaged threshold (CER ≥ 5%):
-- **до Stage 3 (B230 baseline)**: ~ -11 dB
+- **before Stage 3 (B230 baseline)**: ~ -11 dB
 - **B252 Stage 3.3 TUNED HYB**: **~ -14 dB** → honest +3 dB gain vs pre-stage
-- Меньшие α (0.001) и более узкий clamp (0.3..0.7) тестировались,
-  победил α=0.002 + sqrt-softening + wide clamp [0.2..0.8].
+- Smaller α (0.001) and a tighter clamp (0.3..0.7) were tested too;
+  the winner was α=0.002 + sqrt-softening + a wide [0.2..0.8] clamp.
 
 ### Fixed
-**Stage 3.2 weighted fusion bias** — одиночный замер B249 с fixed `WEIGHTS
-0.7 0.3` дал неправдоподобно хороший результат при -18 dB. Причина — first-window
-bias (первое окно sweep содержит чистый сигнал до наложения AWGN). Reversed-order
-control run (B251 rev) подтвердил: первое окно всегда контаминировано
-независимо от порядка DYN ON/OFF. Теперь все измерения используют
-`--trim 3.0` (skip first 3 seconds per window) + `--lag 2.0` (batching
-compensation) + cer_avg.py на 3 прогонах.
+**Stage 3.2 weighted fusion bias** — a single B249 measurement with
+fixed `WEIGHTS 0.7 0.3` had given an implausibly good -18 dB result.
+The cause: first-window bias (the first sweep window contains the clean
+signal before AWGN is mixed in). A reversed-order control run (B251 rev)
+confirmed: the first window is always contaminated regardless of the
+DYN ON/OFF order. All measurements now use `--trim 3.0` (skip the first
+3 s of each window) + `--lag 2.0` (batching compensation) + cer_avg.py
+over 3 runs.
 
 ### Next
-- Stage 4 (Wiener spectral NR) — см. B258 (failed, reverted).
-- Stage 5 variant 1: matched filter tuning через BW sweep.
+- Stage 4 (Wiener spectral NR) — see B258 (failed, reverted).
+- Stage 5 variant 1: matched filter tuning via a BW sweep.
 
 ---
 
 ## [B247 — serial VERSION command + cer_analyze diag-strip fix] - 2026-04-19
 
 ### Added
-**`VERSION` / `VER` / `ID` команды** (`src/serial_commands.cpp`) — печатает
-`>> TouchRTTY Phase9 B<N> (built <DATE> <TIME>)` чтобы автоматика могла
-проверить, что за прошивка сейчас на устройстве. Обнаружено что на RP2350
-была прошивка из соседнего проекта (отвечала `UNKNOWN COMMAND: PATH A` и
-вставляла `[HYBRID DIVERGENCE: Legacy=… ML=…]` в serial), из-за чего
-B246 sweep-замеры A/B/HYB были невалидны.
+**`VERSION` / `VER` / `ID` commands** (`src/serial_commands.cpp`) —
+prints `>> TouchRTTY Phase9 B<N> (built <DATE> <TIME>)` so automation
+can verify which firmware is currently on the device. Discovered that
+the RP2350 had been carrying firmware from a neighbouring project
+(answering `UNKNOWN COMMAND: PATH A` and injecting
+`[HYBRID DIVERGENCE: Legacy=… ML=…]` into the serial output), which is
+why the B246 A/B/HYB sweep measurements were invalid.
 
 ### Fixed
-**`tools/cer_analyze.py` — clean_decoded** теперь правильно срезает diag-линии:
-- Regex `\[D\][^\n]*` → per-record strip (раньше джойнил всё пробелом и срезал
-  одну большую строку, убивая всё после первого `[D]`).
-- Добавлены фильтры `\[HYBRID[^\]\n]*\]?[^\n]*`, `>>[^\n]*`, `===[^\n]*`.
-- Join records через `''.join(clean_decoded(c) for c in chars)` (concat без
-  разделителя — char-stream firmware выдаёт без пробела между символами).
+**`tools/cer_analyze.py` — clean_decoded** now strips diagnostic lines
+correctly:
+- Regex `\[D\][^\n]*` → per-record strip (previously joined everything
+  with spaces and stripped a single big string, killing everything after
+  the first `[D]`).
+- Added filters `\[HYBRID[^\]\n]*\]?[^\n]*`, `>>[^\n]*`, `===[^\n]*`.
+- Join records via `''.join(clean_decoded(c) for c in chars)` (concat
+  with no separator — the char-stream firmware emits with no space
+  between characters).
 
-Предыдущая версия давала CER=90% даже при +20 dB (в "decoded" попадало
-содержимое `[D] SNR=... ERR=...`); теперь при +20 dB видим real CER 15-30%
-(остаточные 15% — FIGS-table mismatch rtty_gen vs firmware ITA2, пока
-обхожу через digit-free text).
+The previous version was returning CER=90% even at +20 dB (the contents
+of `[D] SNR=... ERR=...` were leaking into "decoded"); now at +20 dB we
+see a real CER of 15-30% (the residual 15% is FIGS-table mismatch
+between rtty_gen and firmware ITA2, worked around for now via
+digit-free text).
 
 ### Next
-- Sweep с `--text "RYRYRY THE QUICK BROWN FOX JUMPS OVER LAZY DOG "` (без
-  digits/symbols, FIGS никогда не триггерится → pure bit-decision CER).
-- Stage 3.2 weighted fusion только после валидного A/B/HYB baseline.
+- Sweep with `--text "RYRYRY THE QUICK BROWN FOX JUMPS OVER LAZY DOG "`
+  (no digits/symbols, FIGS never triggers → pure bit-decision CER).
+- Stage 3.2 weighted fusion only after a valid A/B/HYB baseline.
 
 ---
 
 ## [B246.1 — testbench: impulse default-off + audio sink selector] - 2026-04-18
 
 ### Fixed
-**Критический баг в `tools/rtty_simulator.html` (введён в B240.1)**: чекбокс
-`Impulse noise (атмосферики / QRN)` имел атрибут `checked` по умолчанию,
-rate=120/min, duration=10 ms, amplitude=×10. В результате **все sweep-замеры
-B242 → B246/B** (baseline B230, Soft-LLR, Soft-Viterbi, LMS-notch AWGN,
-Input BPF, Dual IQ path A/B) проводились с наложенными импульсными помехами,
-а не в чистом AWGN. Пороги декодера в этих таблицах **пессимистичнее**
-реального AWGN на неизвестную величину.
+**Critical bug in `tools/rtty_simulator.html` (introduced in B240.1)**:
+the `Impulse noise (atmospherics / QRN)` checkbox had `checked` set by
+default, with rate=120/min, duration=10 ms, amplitude=×10. As a result
+**every sweep measurement B242 → B246/B** (baseline B230, Soft-LLR,
+Soft-Viterbi, LMS-notch AWGN, Input BPF, Dual IQ path A/B) was run with
+impulse noise overlaid, not clean AWGN. The decoder thresholds in those
+tables are **more pessimistic** than real AWGN by an unknown amount.
 
-- `impEnable` убран `checked` — импульсы теперь off-by-default.
-- Все замеры B242→B246 нужно переснять в чистом AWGN; ретро-анализ
-  относительного gain по stage-переходам остаётся (импульс влияет на все
-  стадии одинаково), но абсолютные пороги — нет.
+- `impEnable` no longer has `checked` — impulses are now off by default.
+- All B242→B246 measurements need to be re-shot in clean AWGN; the
+  retrospective analysis of relative gain per stage transition stays
+  valid (impulses affect every stage equally), but the absolute
+  thresholds do not.
 
 ### Added
-**Селектор аудиовыхода** в симуляторе (`Audio output` fieldset в самом верху):
-- Dropdown со списком всех output-устройств через `navigator.mediaDevices.enumerateDevices()`
-- Кнопка "Show device names" — запрашивает `getUserMedia({audio:true})` на 1 мс
-  (сразу останавливается), чтобы Chrome/Firefox разблокировал реальные имена
-  устройств вместо `Output 1 (hash...)`.
-- Auto-refresh при `devicechange` (подключение/отключение USB-карты).
+**Audio output selector** in the simulator (`Audio output` fieldset at
+the top):
+- Dropdown listing every output device via
+  `navigator.mediaDevices.enumerateDevices()`.
+- A "Show device names" button — requests
+  `getUserMedia({audio:true})` for 1 ms (then stops immediately) so
+  that Chrome/Firefox unblocks the real device names instead of showing
+  `Output 1 (hash...)`.
+- Auto-refresh on `devicechange` (USB sound card plug/unplug).
 
-**Центральный output-bus (`masterBus`)**: все 5 источников (signal gain,
-AWGN noise, CW QRM, RTTY QRM, impulse bursts) теперь сходятся на
-`masterBus`, а не на `audioCtx.destination`. Роутинг:
-- Default → `masterBus → audioCtx.destination` (как было)
-- Выбрано устройство → `masterBus → MediaStreamDestinationNode → <audio>.setSinkId(deviceId)`
+**Central output-bus (`masterBus`)**: all 5 sources (signal gain, AWGN
+noise, CW QRM, RTTY QRM, impulse bursts) now converge on `masterBus`,
+not on `audioCtx.destination`. Routing:
+- Default → `masterBus → audioCtx.destination` (as before).
+- Device chosen → `masterBus → MediaStreamDestinationNode →
+  <audio>.setSinkId(deviceId)`.
 
-Через `HTMLMediaElement.setSinkId` (Chrome любой современный, Firefox 116+) —
-в отличие от экспериментального `AudioContext.setSinkId`, который в Firefox
-не поддерживается и в Chrome часто не работает.
+Going through `HTMLMediaElement.setSinkId` (any recent Chrome,
+Firefox 116+) — unlike the experimental `AudioContext.setSinkId`, which
+is not supported in Firefox and frequently doesn't work in Chrome.
 
 ### Why
-Ноут пользователя имеет несколько звуковых карт (built-in + USB). Нужно
-направлять тестовый сигнал именно на карту, заведённую в ADC декодера
-через audio-loop, минуя встроенные динамики.
+My laptop has multiple sound cards (built-in + USB). The test signal
+needs to be routed specifically to the card wired into the decoder's
+ADC via the audio loop, bypassing the built-in speakers.
 
 ---
 
 ## [B246 — Dual IQ path + 3-way switch (Stage 3.1)] - 2026-04-16
 
 ### Added
-**Вторая IQ-ветка** в `src/dsp_pipeline.cpp`. Теперь после LMS-notch сигнал
-демодулируется параллельно двумя путями:
-- **Path A** (существующий, узкий): biquad LPF BW = `baud · tuning_lpf_k` (≈0.75·baud)
-- **Path B** (новый, широкий): biquad LPF BW = `baud · 1.5` — больше полоса,
-  устойчивее к drift/ISI, чуть больше noise
+**A second IQ branch** in `src/dsp_pipeline.cpp`. The signal is now
+demodulated in parallel along two paths after the LMS-notch:
+- **Path A** (existing, narrow): biquad LPF BW = `baud · tuning_lpf_k`
+  (≈0.75·baud).
+- **Path B** (new, wide): biquad LPF BW = `baud · 1.5` — wider band,
+  more drift/ISI tolerance, a touch more noise.
 
-Обе ветки считаются всегда (чтобы переключение было без щелчка). Выбор power-пары
-(mark/space), питающей framer, делается по `shared_decoder_path`:
-- `0 = A` (narrow) — default, identical behavior to B245
-- `1 = B` (wide)
-- `2 = HYB` — простой average `0.5·(A+B)` (Stage 3.2 заменит на SNR-weighted)
+Both branches run all the time (so switching is click-free). The
+power-pair (mark/space) feeding the framer is selected by
+`shared_decoder_path`:
+- `0 = A` (narrow) — default, identical behaviour to B245.
+- `1 = B` (wide).
+- `2 = HYB` — simple average `0.5·(A+B)` (Stage 3.2 will replace this
+  with SNR-weighted fusion).
 
 ### UI
-- **Menu → PATH кнопка** (3-я колонка нижнего ряда): тап циклит A → B → HYB → A.
-  Цвет постоянный (muted blue) — меняется только надпись.
-- **Top bar row 3** под `ST:` — индикатор `P:A` (dim) / `P:B` (green) / `P:HYB` (cyan).
-- Выбор persist в flash (`AppSettings.decoder_path`).
+- **Menu → PATH button** (3rd column of the bottom row): tap cycles
+  A → B → HYB → A. Colour is constant (muted blue) — only the label
+  changes.
+- **Top bar row 3** under `ST:` — indicator `P:A` (dim) / `P:B` (green)
+  / `P:HYB` (cyan).
+- Selection persists in flash (`AppSettings.decoder_path`).
 
 ### Serial
-- `PATH A` / `PATH B` / `PATH HYB` — явное переключение.
+- `PATH A` / `PATH B` / `PATH HYB` — explicit switch.
 
 ### Measurement plan
-Следующий sweep: три отдельных прогона (A/B/HYB) через симулятор при идентичных
-условиях — сравнение threshold и CER на −8..−12 дБ. Ожидания:
-- A baseline −10 дБ (regression check vs B245)
-- B: может быть чуть хуже в AWGN (шире BW), но лучше при drift
-- HYB: между ними, простой average без интеллекта; Stage 3.2 должна обогнать
+Next sweep: three separate runs (A/B/HYB) through the simulator under
+identical conditions — compare threshold and CER at −8..−12 dB.
+Expectations:
+- A baseline −10 dB (regression check vs B245).
+- B: maybe slightly worse in AWGN (wider BW), better under drift.
+- HYB: between them, dumb average with no intelligence; Stage 3.2
+  should beat it.
 
 ### Next
-Stage 3.2 — заменить простой average на weighted fusion + SNR-estimate.
+Stage 3.2 — replace the dumb average with weighted fusion + SNR
+estimate.
 
 ---
 
-## [Phase 9 Progress Report — Этапы 1-2 закрыты] - 2026-04-16
+## [Phase 9 Progress Report — Stages 1-2 closed] - 2026-04-16
 
-Полный детальный разбор: `docs/PHASE9_PROGRESS_REPORT.md`.
+Full detailed write-up: `docs/PHASE9_PROGRESS_REPORT.md`.
 
-### Сводная таблица
-| Build | Stage | Threshold | Quality | Статус |
+### Summary table
+| Build | Stage | Threshold | Quality | Status |
 |-------|-------|-----------|---------|--------|
-| B230 | baseline | −10..−11 дБ | baseline | — |
-| B242 | 1.1 Soft-LLR | −10 дБ | −14 дБ оживает (0→282 chars) | ✅ |
-| B243.1 | 1.2 Soft-Viterbi | −10 дБ | −8 дБ 6% → 0% | ✅ |
-| B244 | 2.1 LMS-notch | −10 дБ (AWGN) / +1-2 дБ (QRM) | Stable под CW | ✅ |
-| B245 | 2.2 Input BPF | −10 дБ | −10 дБ 15% → 0% (чистый край) | ✅ |
+| B230 | baseline | −10..−11 dB | baseline | — |
+| B242 | 1.1 Soft-LLR | −10 dB | −14 dB alive (0→282 chars) | ✅ |
+| B243.1 | 1.2 Soft-Viterbi | −10 dB | −8 dB 6% → 0% | ✅ |
+| B244 | 2.1 LMS-notch | −10 dB (AWGN) / +1-2 dB (QRM) | Stable under CW | ✅ |
+| B245 | 2.2 Input BPF | −10 dB | −10 dB 15% → 0% (clean edge) | ✅ |
 
-### Что реально получили на Этапах 1-2
-- Threshold в AWGN **не сдвинулся** (−10 дБ), но это **ожидаемо**: Этапы 1-2 это
-  подготовительные — честный framer + стойкость к QRM + гигиена полосы.
-- Framer больше не отдаёт ложняк на границе (B243)
-- Устойчивость к CW QRM (B244) — новое качество
-- Чистый вход для fusion (B245)
+### What I actually got out of Stages 1-2
+- The AWGN threshold **did not shift** (−10 dB) — but that's
+  **expected**: Stages 1-2 are preparation work, an honest framer plus
+  QRM resilience plus band hygiene.
+- The framer no longer produces false frames at the edge (B243).
+- CW QRM resilience (B244) — a new property.
+- Clean input for fusion (B245).
 
-### Настоящий сдвиг порога начинается со Stage 3
-- Stage 3 (fusion двух IQ): +0.5-1.5 дБ
-- Stage 4 (spectral NR): +1-2 дБ
-- Stage 5 (ML post): +1-2 дБ
-- Цель: threshold **−14..−15 дБ**
+### The real threshold push starts at Stage 3
+- Stage 3 (two-IQ fusion): +0.5-1.5 dB.
+- Stage 4 (spectral NR): +1-2 dB.
+- Stage 5 (ML post): +1-2 dB.
+- Goal: threshold **−14..−15 dB**.
 
-### Оговорки к замерам
-- `cer_analyze.py` иногда показывает фантомные 7-8% на высоких SNR из-за
-  одиночных byte-loss в serial — читаем по сплошному 0% диапазону.
-- Маркеры `=NN=` иногда теряются (LMS-notch cold-start), тогда соседний бин
-  захватывает content и CER искусственно растёт.
-- Всё измерено в синтетическом AWGN через simulator→ADC. Реальный эфир
-  добавит selective fading, импульсы, дрейф TX — Stage 4-5 могут дать
-  другую картину на реальном датасете (задача #16).
+### Caveats on the measurements
+- `cer_analyze.py` sometimes shows phantom 7-8% at high SNR thanks to
+  single byte-losses on the serial — read it over the solid 0% range.
+- The `=NN=` markers occasionally vanish (LMS-notch cold-start) and a
+  neighbouring bin captures the content, inflating CER artificially.
+- Everything is measured in synthetic AWGN through simulator→ADC. Real
+  air will add selective fading, impulses, TX drift — Stages 4-5 may
+  paint a different picture on a real dataset (task #16).
 
 ---
 
 ## [B245 — Input BPF 300-3000 Hz (Stage 2.2)] - 2026-04-16
 
 ### Added
-**Фиксированный Butterworth BPF 300-3000 Hz** — два биквада (HPF@300 + LPF@3000)
-вставлены после AGC, перед LMS-notch. Помощник `design_hpf()` добавлен в
-`src/dsp/biquad.hpp` (раньше был только LPF).
+**Fixed Butterworth BPF 300-3000 Hz** — two biquads (HPF@300 + LPF@3000)
+inserted after AGC, before the LMS-notch. Helper `design_hpf()` added
+to `src/dsp/biquad.hpp` (previously LPF-only).
 
 ### Why
-Phase 9, Stage 2.2. Пайплайн плана: `AGC → BPF → LMS-notch → IQ`. BPF
-дополняет 63-tap FIR (уже bandpass) — срезает остаточный DC/hum <300 Гц и
-HF-шум >3 кГц, которые FIR пропускает. Основная цель — очистить полосу
-перед LMS-notch и IQ-демод, чтобы Stage 3 (fusion) получил чистый вход.
+Phase 9, Stage 2.2. The pipeline plan: `AGC → BPF → LMS-notch → IQ`.
+The BPF complements the 63-tap FIR (already a bandpass) — it cuts
+residual DC/hum below 300 Hz and HF noise above 3 kHz that the FIR lets
+through. The main goal is to clean up the band before the LMS-notch and
+the IQ demod so that Stage 3 (fusion) gets a clean input.
 
 ### Measured (2026-04-16, AWGN only)
 | SNR  | B243.1 | **B245** |
@@ -364,95 +386,109 @@ HF-шум >3 кГц, которые FIR пропускает. Основная �
 | −12  | 9%* | 31%* |
 | −14  | 25.9% | lost |
 
-\* бины захватывают соседний SNR из-за сбежавших маркеров.
+\* bins capture an adjacent SNR due to drifted markers.
 
-**Threshold: −10 dB** (тот же, что B243.1/B244), но bin −10 стал полностью
-чистым (0.00% против 15% у B243.1). Край порога чище.
+**Threshold: −10 dB** (same as B243.1/B244), but bin −10 went fully
+clean (0.00% vs 15% on B243.1). The edge of the threshold is cleaner.
 
-AWGN-нейтрально по threshold, как и ожидалось для фиксированного BPF:
-реальный выигрыш BPF раскроется при QRM/noise-floor тестах и как чистый
-вход для Stage 3 (fusion).
+AWGN-neutral on threshold, as expected for a fixed BPF: the real BPF
+win will surface in QRM/noise-floor tests and as clean input for
+Stage 3 (fusion).
 
 
 ### Next
-Stage 3: Fusion двух IQ-веток (narrow LPF + wide raised-cosine) с weighted
-combine. Ожидаемый gain +0.5-1.5 дБ — первый этап, который реально должен
-двигать порог вниз.
+Stage 3: Fusion of the two IQ branches (narrow LPF + wide raised-cosine)
+with weighted combine. Expected gain +0.5-1.5 dB — the first stage that
+should actually move the threshold down.
 
 ---
 
 ## [B244 — LMS-notch adaptive (Stage 2.1)] - 2026-04-14
 
 ### Added
-**Новый модуль `src/dsp/lms_notch.hpp`** — 2nd-order constrained adaptive notch
-(Nehorai-style). Вставлен в pipeline каскадом из двух экземпляров сразу после AGC,
-до IQ-демодуляции.
+**New module `src/dsp/lms_notch.hpp`** — 2nd-order constrained adaptive
+notch (Nehorai-style). Wired into the pipeline as a cascade of two
+instances directly after AGC, before IQ demod.
 
-- **Nieж-notch**: окно 300–1350 Hz, старт 600 Hz. Ловит CW QRM ниже RTTY band.
-- **Верх-notch**: окно 1650–3200 Hz, старт 2200 Hz. Ловит QRM сверху.
-- Pole radius `r = 0.985` → BW ≈ 48 Hz (узкий нуль, не повреждает соседние тона).
-- LMS step `mu = 5e-6` — консервативный, сходимость ~1-2 s.
-- Коэффициент `a` кламплен к допустимому диапазону, чтобы нуль не уполз в
-  RTTY band (1400..1600 Hz) и чтобы два notch'а не сошлись на одну помеху.
+- **Low notch**: window 300–1350 Hz, start 600 Hz. Catches CW QRM
+  below the RTTY band.
+- **High notch**: window 1650–3200 Hz, start 2200 Hz. Catches QRM above.
+- Pole radius `r = 0.985` → BW ≈ 48 Hz (narrow null, doesn't damage
+  neighbouring tones).
+- LMS step `mu = 5e-6` — conservative, convergence in ~1-2 s.
+- Coefficient `a` clamped to a permitted range so that the null can't
+  wander into the RTTY band (1400..1600 Hz) and so the two notches
+  can't converge onto the same interferer.
 
 ### Why
-Phase 9, Stage 2.1. В чистом AWGN gain ≈ 0 (notch'у не на что сходиться), в
-реальном эфире с CW QRM ожидаем +1-2 дБ threshold. Основная цель — продвинуть
-декодер к −15..−16 дБ в условиях узкополосных помех.
+Phase 9, Stage 2.1. In clean AWGN the gain ≈ 0 (the notch has nothing
+to converge on); in real-air with CW QRM I expect +1-2 dB on threshold.
+The main goal is to push the decoder toward −15..−16 dB under
+narrowband interference.
 
 ### How to measure
-- **AWGN-only sanity**: тот же sweep, CER не должен вырасти.
-- **QRM test**: в симуляторе включить CW QRM на 1000 Hz level −10 дБ, sweep.
-  Без notch на −5 дБ смерть, с notch надеемся на −8..−10 дБ threshold.
+- **AWGN-only sanity**: same sweep, CER must not rise.
+- **QRM test**: in the simulator turn on CW QRM at 1000 Hz, level
+  −10 dB, sweep. Without the notch −5 dB is death; with the notch I
+  hope for −8..−10 dB threshold.
 
 ### Cost
-- ~2 MAC × 2 notch × 10 kSps = 40 kMAC/s на Core 0. Пренебрежимо.
-- Стабильность: форма `1 + a·z⁻¹ + z⁻²` с полюсами на r < 1 — всегда устойчива.
+- ~2 MAC × 2 notches × 10 kSps = 40 kMAC/s on Core 0. Negligible.
+- Stability: form `1 + a·z⁻¹ + z⁻²` with poles on r < 1 — always
+  stable.
 
 ### Measured (2026-04-14)
 
-**AWGN-only (sanity)**: threshold −10 dB (как B243.1). Мелкий шум на +14 дБ
-из-за cold-start notch (мало времени на convergence перед высоким SNR).
+**AWGN-only (sanity)**: threshold −10 dB (same as B243.1). Minor noise
+at +14 dB from notch cold-start (not enough time to converge before the
+high-SNR sample).
 
-**AWGN + CW QRM** (уровень оператора, частота вне RTTY band):
-threshold −10 dB **тот же**, от +20 до −8 дБ везде ≤2% CER. Notch успешно
-нулифицирует QRM — без него CW обычно разваливает декодер даже на высоком SNR.
+**AWGN + CW QRM** (operator level, frequency outside RTTY band):
+threshold −10 dB **unchanged**, from +20 to −8 dB everywhere ≤2% CER.
+The notch successfully nulls the QRM — without it CW usually shreds
+the decoder even at high SNR.
 
-Subjectively +1-2 дБ gain в QRM-условиях, как и планировалось.
+Subjectively +1-2 dB gain in QRM conditions, as planned.
 
 ### Tools changes
-`tools/cer_analyze.py::best_cer` оптимизирован: было O(49·N²) (Levenshtein на
-каждый циклический сдвиг GT), стало O(49·N + 3·N²) — грубый char-match для
-выбора top-3 сдвигов, потом Levenshtein только для них. На логах с большими
-бинами (merged из-за потерянных маркеров) ускорение 10-50x.
+`tools/cer_analyze.py::best_cer` optimised: was O(49·N²) (Levenshtein on
+every cyclic GT shift), now O(49·N + 3·N²) — a coarse char-match picks
+top-3 shifts, then Levenshtein runs only on those. On logs with large
+bins (merged due to lost markers) the speedup is 10-50×.
 
 ### Next
-Stage 2.2: Input BPF 300-3000 Hz — защитит от высокочастотного white spectrum
-мусора, который текущий анти-алиасинг FIR пропускает.
+Stage 2.2: Input BPF 300-3000 Hz — protection against the high-frequency
+white-spectrum trash the current anti-aliasing FIR lets through.
 
 ---
 
 ## [B243 — Soft-Viterbi framer (Stage 1.2)] - 2026-04-14
 
 ### Changed
-**Framer в `src/dsp_pipeline.cpp` + `src/dsp/dpll_framer.hpp`**: к B242 soft-LLR
-добавлены два soft-bit гейта на границе фрейма:
+**Framer in `src/dsp_pipeline.cpp` + `src/dsp/dpll_framer.hpp`**: on
+top of the B242 soft-LLR, two soft-bit gates are added at the frame
+boundary:
 
-- **Weakest-link (data-bit)**: отклонить фрейм если `min(|soft_data[i]|) < 0.20·sig_level`.
-  Фильтрует кейс когда один из 5 data-битов оказался около нуля — тогда слайс по знаку
-  давал случайное решение и случайный Baudot-код. Именно это давало 6% CER на -8 дБ после B242.
-- **Frame-average**: отклонить если `mean(|start| + |data[0..4]| + stop) / 7 < 0.30·sig_level`.
-  Отсекает фреймы с общей слабой статистикой (низкий SNR окно).
+- **Weakest-link (data-bit)**: reject the frame if
+  `min(|soft_data[i]|) < 0.20·sig_level`. Filters the case where one of
+  the 5 data bits ended up near zero — then the slice on sign was a
+  coin flip and the resulting Baudot code was random. That's exactly
+  what produced 6% CER at -8 dB after B242.
+- **Frame-average**: reject if
+  `mean(|start| + |data[0..4]| + stop) / 7 < 0.30·sig_level`. Cuts
+  frames with weak overall statistics (a low-SNR window).
 
 ### Why
-Phase 9, Stage 1.2 — вторая половина soft-решения. B242 только валидировал
-границы фрейма (stop/start), но внутренние data-биты всё ещё получали hard-slice
-без проверки уверенности → ложные фреймы на грани SNR.
+Phase 9, Stage 1.2 — the second half of soft-decision. B242 only
+validated the frame edges (stop/start), but the internal data bits were
+still getting a hard-slice with no confidence check → false frames at
+the SNR edge.
 
 ### Tuning (B243.1)
-Первый замер с порогами 0.20/0.30 дал **регрессию**: на +20 дБ CER=4.94% (чистые
-фреймы режутся), на -8 дБ CER=28%, на -10..-14 декодер умирал. Пороги ослаблены
-до 0.10/0.15 — чувствительный soft-бит гейт, но не параноик.
+The first measurement with 0.20/0.30 thresholds **regressed**: at
++20 dB CER=4.94% (clean frames being rejected), at -8 dB CER=28%, at
+-10..-14 the decoder died. Thresholds loosened to 0.10/0.15 —
+sensitive soft-bit gate, not paranoid.
 
 ### Measured (2026-04-14, AWGN only, B243.1 thresholds=0.10/0.15)
 
@@ -461,41 +497,52 @@ Phase 9, Stage 1.2 — вторая половина soft-решения. B242 �
 | +20..−6 | 0-2% | 0-6% | **0-2%** |
 | **−8** | ~0% | **6.0%** | **0.00%** ✓ |
 | −10 | 0.6% | 1.8% | ~15%* |
-| −12 | 9.1% | 9.4% | — (маркер повреждён) |
+| −12 | 9.1% | 9.4% | — (marker damaged) |
 | −14 | lost | 25.9% | 27.2% |
 
-\* bin −10 дБ захватил контент −12 дБ из-за потерянного маркера =17= в декод-потоке.
+\* bin −10 dB captured the content of −12 dB because the `=17=`
+marker went missing in the decode stream.
 
-**Threshold (CER≥5%): −10 dB** — тот же, что B230/B242, но на границе чисто.
+**Threshold (CER≥5%): −10 dB** — same as B230/B242, but the edge is
+clean.
 
-**Главный win**: ложные фреймы на −8 дБ (6.0% B242 → 0.00% B243.1) вычищены
-weakest-link гейтом. Это что и должен был дать Stage 1.2.
+**Headline win**: false frames at −8 dB (6.0% B242 → 0.00% B243.1)
+cleaned up by the weakest-link gate. That's what Stage 1.2 was
+supposed to deliver.
 
 
 ### Next
-Stage 1.2 закрыт. Переходим к Stage 2 — шумовая обстановка:
-- **Stage 2.1**: LMS-notch (2 адаптивных нуля) против CW QRM.
+Stage 1.2 closed. Moving to Stage 2 — the noise environment:
+- **Stage 2.1**: LMS-notch (2 adaptive nulls) against CW QRM.
 - **Stage 2.2**: Input BPF 300-3000 Hz.
-Ожидаемый gain: +1-2 дБ в реальном эфире (в чистом AWGN ничего не даст).
+Expected gain: +1-2 dB on real air (nothing in clean AWGN).
 
 ---
 
 ## [B242 — Soft-LLR bit decision (Stage 1.1)] - 2026-04-15
 
 ### Changed
-**Framer в `src/dsp_pipeline.cpp`**: hard-slice на границе бита (`integrate_acc > 0`) заменён на
-Soft-LLR с адаптивным порогом на границе фрейма.
+**Framer in `src/dsp_pipeline.cpp`**: the hard-slice at the bit boundary
+(`integrate_acc > 0`) replaced with Soft-LLR plus an adaptive threshold
+at the frame boundary.
 
-- Сохраняем `soft_start`, `soft_data[5]`, `soft_stop` (= последний `integrate_acc`) — soft-values, не битовые решения.
-- EMA `sig_level = 0.98·sig + 0.02·|integrate_acc|` отслеживает уровень сигнала (адаптируется к AGC drift / M–S имбалансу).
-- На stop-bit: фрейм валиден только если `soft_stop > 0.25·sig_level` **и** `-soft_start > 0.15·sig_level`.
-  Раньше fixed-порог `integrate_acc > 0` принимал слабые/нулевые биты как MARK → мусор при низком SNR.
-- Stop-gap арминг для STOP-DET теперь привязан к `valid_stop`, а не к сырому биту.
-- Data-биты по-прежнему hard-slice в `current_char` (soft-Viterbi придёт в Stage 1.2).
+- Keep `soft_start`, `soft_data[5]`, `soft_stop` (= last
+  `integrate_acc`) — soft values, not bit decisions.
+- EMA `sig_level = 0.98·sig + 0.02·|integrate_acc|` tracks signal level
+  (adapts to AGC drift / M–S imbalance).
+- On the stop bit: a frame is valid only if `soft_stop > 0.25·sig_level`
+  **and** `-soft_start > 0.15·sig_level`. Previously the fixed
+  `integrate_acc > 0` threshold accepted weak/zero bits as MARK →
+  garbage at low SNR.
+- The stop-gap arming for STOP-DET is now tied to `valid_stop`, not to
+  the raw bit.
+- Data bits still hard-slice into `current_char` (soft-Viterbi comes in
+  Stage 1.2).
 
 ### Why
-План Phase 9, Этап 1.1 — первый простой выигрыш в цепочке к −15..−16 дБ.
-Ожидаемый gain +2–3 дБ от замены hard-slice на adaptive-threshold frame-validation.
+The Phase 9 plan, Stage 1.1 — the first cheap win in the chain to
+−15..−16 dB. Expected gain +2–3 dB from replacing hard-slice with
+adaptive-threshold frame validation.
 
 ### Measured (2026-04-15, AWGN only)
 
@@ -505,225 +552,464 @@ Soft-LLR с адаптивным порогом на границе фрейма
 | −8  | ~0%  | **6.02%** ⚠️ |
 | −10 | 0.60% | 1.79% |
 | −12 | 9.09% | 9.38% |
-| −14 | маркер потерян | **25.89%** (282 chars) |
+| −14 | marker lost | **25.89%** (282 chars) |
 
-**Threshold (CER≥5%): ~−10..−11 dB — без изменения vs B230.**
+**Threshold (CER≥5%): ~−10..−11 dB — unchanged vs B230.**
 
-Наблюдения:
-- На −14 декодер теперь не умирает (282 символа vs потерянный маркер) — адаптивный порог пропускает больше фреймов.
-- Но на −8 странный всплеск 6% — в preview `QWERTYUIOP RYRYRY...`, похоже на ложный фрейм, проскочивший через ослабленный порог.
-- Без soft-Viterbi (Stage 1.2) одних адаптивных порогов не хватает — больше символов, но и больше мусора.
+Observations:
+- At −14 the decoder no longer dies (282 chars vs lost marker) — the
+  adaptive threshold lets more frames through.
+- But at −8 there's a strange spike of 6% — preview reads
+  `QWERTYUIOP RYRYRY...`, looks like a false frame that slipped past
+  the softened threshold.
+- Without soft-Viterbi (Stage 1.2) adaptive thresholds alone aren't
+  enough — more characters, but also more garbage.
 
 
 ### Next
-- Stage 1.2: Soft-Viterbi framer с stop-bit как constraint — должен отфильтровать мусорные фреймы за счёт мягких решений по 5 data-битам.
-- Возможно: покрутить `STOP_MIN_FRAC` / `START_MIN_FRAC` — но это тюнинг, а не архитектура.
+- Stage 1.2: Soft-Viterbi framer with stop-bit as a constraint —
+  should filter out garbage frames via soft decisions over the 5 data
+  bits.
+- Maybe: tweak `STOP_MIN_FRAC` / `START_MIN_FRAC` — but that's tuning,
+  not architecture.
 
 ---
 
 ## [Baseline Build 230 — AWGN only] - 2026-04-15
 
 ### Measured
-Первый честный baseline-замер Build 230 через sync-маркеры (`--markers`).
+First honest baseline measurement of Build 230 via sync markers
+(`--markers`).
 
 | SNR (dB) | CER     |
 |----------|---------|
 | +18..−8  | ~0%     |
 | −10      | 0.60%   |
 | **−12**  | **9.09%** |
-| −14      | маркер потерян |
+| −14      | marker lost |
 
-**Decoder threshold (CER≥5%): ~−10..−11 dB** — 4 dB лучше, чем в плане писалось (−6..−8). Но условия идеальные: только AWGN, без QRM/drift/fading/impulse. Артефакты в `docs/baseline_build230_{cer.csv,sweep.txt,serial.log}`.
+**Decoder threshold (CER≥5%): ~−10..−11 dB** — 4 dB better than the
+plan said (−6..−8). But conditions are ideal: AWGN only, no
+QRM/drift/fading/impulse. Artifacts in
+`docs/baseline_build230_{cer.csv,sweep.txt,serial.log}`.
 
-### Fixes в `cer_analyze.py`
-- `clean_decoded()`: стрипает теги `[FIGS]`/`[LTRS]`/`[ERR]` перед Levenshtein. До фикса CER был ~40% на чистом декоде — теги считались как вставки.
-- Threshold estimate: игнорирует пустые бины (0 chars) чтобы не врать про "threshold=+20 dB" когда первая точка просто не попала в маркеры.
+### Fixes in `cer_analyze.py`
+- `clean_decoded()`: strips `[FIGS]`/`[LTRS]`/`[ERR]` tags before
+  Levenshtein. Before the fix CER was ~40% on a clean decode — the
+  tags counted as insertions.
+- Threshold estimate: ignores empty bins (0 chars) so it doesn't lie
+  about "threshold=+20 dB" when the first sample simply didn't fall
+  between markers.
 
-### Цель Phase 9
-Превзойти 2Tone: threshold **−15..−16 dB** (на 4-5 dB лучше baseline). Начинаем Этап 1.1 — Soft-LLR bit decision (+2-3 dB ожидаемый gain).
+### Phase 9 goal
+Beat 2Tone: threshold **−15..−16 dB** (4-5 dB better than baseline).
+Starting Stage 1.1 — Soft-LLR bit decision (+2-3 dB expected gain).
 
 ## [Build 241] - 2026-04-15
-### Added (sweep sync-markers — robust CER binning)
-- **Симулятор**: в `startSweep()` на каждом переходе SNR в поток основного RTTY инжектируется маркер `=NN=` (NN = двузначный индекс точки, padStart `01`..`18`). Реализовано через модульный `markerQueue`, который `scheduleChunk()` потребляет **перед** основным текстом; `charIndex` не продвигается, когда берём символ из очереди.
-- **Формат маркера**: `" =NN= "` с пробелами-разделителями. `=` присутствует только в FIGS, поэтому regex `=\d\d=` в декодированном потоке не конфликтует с `RYRYRY...` основного текста.
-- **`cer_analyze.py --markers`**: новый режим. Склеивает весь serial-вывод, находит все `=NN=` через regex, режет поток на сегменты между маркерами и маппит на точки sweep по номеру. Устойчив к батчингу serial-вывода (именно то, что завалило baseline B230).
-- Sweep-лог теперь дополнительно пишет `MARK==NN=` в строке каждой точки для трассировки.
+### Added (sweep sync markers — robust CER binning)
+- **Simulator**: in `startSweep()`, on every SNR step a marker `=NN=`
+  (NN = the two-digit point index, padStart `01`..`18`) is injected
+  into the main RTTY stream. Implemented via a modular `markerQueue`
+  which `scheduleChunk()` consumes **before** the main text;
+  `charIndex` doesn't advance while a character is taken from the
+  queue.
+- **Marker format**: `" =NN= "` with space separators. `=` only
+  appears in FIGS, so the regex `=\d\d=` in the decoded stream doesn't
+  clash with the `RYRYRY...` of the main text.
+- **`cer_analyze.py --markers`**: a new mode. Concatenates the whole
+  serial output, finds every `=NN=` via regex, splits the stream into
+  segments between markers and maps them to sweep points by number.
+  Resilient to the serial-output batching (which is exactly what
+  broke the B230 baseline).
+- The sweep log now additionally writes `MARK==NN=` in each point's
+  line for tracing.
 
 ### Why
-Baseline-замер B230 показал: serial-вывод устройства приходит большими чанками с одним timestamp на весь чанк. Timestamp-бинирование не работает. Inline-маркеры в самом аудио-сигнале — самое чистое решение: не нужен общий clock, не нужно менять прошивку. На низких SNR маркеры тоже теряются, но там CER и так 100% — не критично.
+The B230 baseline measurement showed: the device's serial output
+arrives in large chunks with one timestamp per chunk. Timestamp
+binning doesn't work. Inline markers in the audio signal itself are
+the cleanest solution — no shared clock, no firmware changes. At very
+low SNR the markers get lost too, but at that point CER is 100%
+anyway — not critical.
 
 ## [Build 240] - 2026-04-15
 ### Added (simulator — noise preview + impulse tone/duration controls)
-- **Кнопка `NOISE ONLY`** в `rtty_simulator.html`: запускает всю звуковую цепочку (AWGN, CW, QRM-RTTY, impulses, fading, drift) БЕЗ основного RTTY-передатчика. Main markBitGain остаётся в 0. Нужна чтобы на слух проверить, что каждый тип помех реально звучит и регулируется.
-- **Импульсы — новые регулировки**:
-  - `Tone (Hz)` 100..4000 — центральная частота "щелчка".
-  - `Duration (ms)` 1..40 — длина бёрста.
-  - Checkbox `Random tone + duration per burst` — каждый impulse берёт случайные tone (150..3650 Hz) и duration (1..16 ms).
-- **Изменена форма импульса**: было — декей-белый-шум 2 ms. Стало — damped sine `env·(0.7·sin(2πf·t) + 0.3·noise)`, τ=len/4. Звучит как естественный атмосферик/разряд, а не просто "пшик".
-- Рефакторинг `startRTTY()` → `startRTTY(muteMain)` + глобальный `rttyMuted`. Статус-строка в noise-only показывает жёлтым "NOISE ONLY (main RTTY muted)".
+- **`NOISE ONLY` button** in `rtty_simulator.html`: runs the full
+  audio chain (AWGN, CW, QRM-RTTY, impulses, fading, drift) WITHOUT
+  the main RTTY transmitter. `markBitGain` stays at 0. Needed so I
+  can sanity-check by ear that every interference type actually
+  sounds right and tunes correctly.
+- **Impulses — new controls**:
+  - `Tone (Hz)` 100..4000 — central click frequency.
+  - `Duration (ms)` 1..40 — burst length.
+  - Checkbox `Random tone + duration per burst` — every impulse
+    picks a random tone (150..3650 Hz) and duration (1..16 ms).
+- **Changed impulse shape**: was — decaying white noise 2 ms. Now —
+  damped sine `env·(0.7·sin(2πf·t) + 0.3·noise)`, τ=len/4. Sounds
+  like a natural atmospheric/discharge, not just "psh".
+- Refactored `startRTTY()` → `startRTTY(muteMain)` + global `rttyMuted`.
+  Status line in noise-only shows yellow "NOISE ONLY (main RTTY muted)".
 
 ### Why
-Пользователь заметил, что импульсы не слышны на фоне RTTY. Кнопка noise-only позволяет изолировать каждую помеху. Регулируемый тон/длительность делает импульсы реалистичнее (атмосферики разные: grain-level, молнии, reg-spikes).
+I noticed the impulses are inaudible against RTTY. The noise-only
+button lets each interferer be isolated. Tunable tone/duration makes
+the impulses more realistic (atmospherics vary: grain-level, lightning,
+regulator spikes).
 
 ## [Build 239] - 2026-04-13
-### Added (testbench — Python tools — **closes testbench phase**)
-- **`tools/cer_analyze.py`**: корреляция HTML sweep-лога + serial-лога → CER(SNR) таблица.
-- **Алгоритм**:
-  1. Parse sweep-log — извлекает (ISO_ts, SNR, idx) на каждой точке.
-  2. Parse serial-log — timestamp+text на каждой строке.
-  3. Для каждой sweep-точки: окно `[ts+trim, next_ts)`, собрать декодированные chars.
-  4. Clean: только ASCII printable, uppercase.
-  5. **Best cyclic Levenshtein** vs ground-truth: пробует все offset'ы в GT-цикле, берёт минимум. Нормализация: `cer = edit_distance / len(decoded)`.
+### Added (testbench — Python tools — **closes the testbench phase**)
+- **`tools/cer_analyze.py`**: correlates the HTML sweep log + serial
+  log → CER(SNR) table.
+- **Algorithm**:
+  1. Parse sweep log — extract (ISO_ts, SNR, idx) for every point.
+  2. Parse serial log — timestamp + text per line.
+  3. For every sweep point: window `[ts+trim, next_ts)`, collect
+     decoded chars.
+  4. Clean: ASCII printable only, uppercased.
+  5. **Best cyclic Levenshtein** vs ground truth: tries every offset
+     in the GT cycle, takes the minimum. Normalization:
+     `cer = edit_distance / len(decoded)`.
 - CLI: `--sweep --serial --gt <str|@file> --out <csv> --plot <png> --trim <sec>`.
-- Эвристика **threshold estimate**: самый высокий SNR, на котором CER ≥ 5%. Это наша главная метрика (decoder threshold).
-- Опциональный matplotlib-график CER vs SNR.
-- Smoke-test пройден на синтетических логах: 0%→67% CER, threshold найден корректно.
+- **Threshold estimate** heuristic: the highest SNR at which CER ≥ 5%.
+  This is my main metric (decoder threshold).
+- Optional matplotlib CER-vs-SNR plot.
+- Smoke test passed on synthetic logs: 0% → 67% CER, threshold
+  correctly found.
 
-### Phase 9 testbench готов
-Все инструменты для объективного измерения декодера на месте:
-- HTML-симулятор (AWGN, QRM, drift, fading, morse, sweep)
-- Python offline (rtty_gen, serial_logger, cer_analyze)
+### Phase 9 testbench ready
+Every tool for objectively measuring the decoder is in place:
+- HTML simulator (AWGN, QRM, drift, fading, morse, sweep).
+- Python offline (rtty_gen, serial_logger, cer_analyze).
 
-Следующий шаг: **baseline-замер текущего декодера Build 230**, затем Этап 1.1 (soft-LLR).
+Next step: **baseline measurement of the current Build 230 decoder**,
+then Stage 1.1 (soft-LLR).
 
 ## [Build 238] - 2026-04-13
 ### Added (testbench — Python tools)
-- **`tools/serial_logger.py`**: timestamped логгер serial-вывода устройства. Каждая пришедшая строка пишется как `<ISO8601>\t<line>`, совместимо с таймстемпами HTML sweep-лога. Используется в паре с sweep из `rtty_simulator.html` → потом `cer_analyze.py` (следующий билд) сопоставит по времени.
-- Зависимость: `pyserial` (уже установлен).
+- **`tools/serial_logger.py`**: timestamped logger of the device
+  serial output. Each incoming line is written as
+  `<ISO8601>\t<line>`, compatible with the HTML sweep-log timestamps.
+  Used in pair with the sweep from `rtty_simulator.html` →
+  `cer_analyze.py` (next build) matches by time.
+- Dependency: `pyserial` (already installed).
 
 ## [Build 237] - 2026-04-13
 ### Added (testbench — Python tools)
-- **`tools/rtty_gen.py`**: offline-генератор WAV с известным текстом + контроль SNR. CLI-args: `--text --baud --shift --stop --center --snr --sr --duration --out`.
-- ITA2 Baudot (LSB first, start=Space, stop=Mark), FIGS/LTRS auto-shifts, совпадает с конвенциями `rtty_simulator.html`.
-- Continuous-phase синтез (фаза переносится через frequency-edges — нет разрывов, как у `OscillatorNode`-перестроек).
-- AWGN в audio-полосе: `noise_rms = signal_rms · 10^(−SNR/20)`. Clip-protect автоматический.
-- Ground-truth текст выводится в stdout (для сверки с decoded serial output).
-- Smoke-test пройден: 3s @ +5 dB SNR → 16 символов "RYRYRY RYRYRY RY".
-- Зависимости: `numpy`, `scipy` (установлены).
+- **`tools/rtty_gen.py`**: offline WAV generator with known text +
+  SNR control. CLI args:
+  `--text --baud --shift --stop --center --snr --sr --duration --out`.
+- ITA2 Baudot (LSB first, start=Space, stop=Mark), FIGS/LTRS
+  auto-shifts, matches `rtty_simulator.html` conventions.
+- Continuous-phase synthesis (phase carried across frequency edges —
+  no discontinuities like `OscillatorNode` retunes).
+- AWGN in the audio band: `noise_rms = signal_rms · 10^(−SNR/20)`.
+  Automatic clip-protection.
+- Ground-truth text printed to stdout (for cross-checking against the
+  decoded serial output).
+- Smoke test passed: 3 s @ +5 dB SNR → 16 chars "RYRYRY RYRYRY RY".
+- Dependencies: `numpy`, `scipy` (installed).
 
 ## [Build 236] - 2026-04-13
-### Added (testbench — Phase 9, подпункт 5/5 — closes testbench phase)
-- **Batch SNR sweep в `rtty_simulator.html`**. Автоматический sweep SNR по заданным точкам с dwell-временем. UI:
-  - Sliders: `SNR from` +30..−25, `SNR to` +30..−25, `Step` 1..5 dB, `Dwell` 5..120 s.
-  - Кнопки `SWEEP` / `CANCEL`.
-  - Log area: ISO-таймстемп + SNR + индекс на каждой точке. Первая/последняя строка = маркеры границ sweep'а.
-- Sweep автоматически включает AWGN и двигает slider SNR. Направление (вверх/вниз) выводится из знака разницы.
-- **Методика замера CER(SNR)**: (1) запустить TX в симуляторе, (2) запустить serial-логгер устройства с timestamp'ами, (3) нажать SWEEP, (4) скопировать лог-текст + serial-лог, (5) offline-Python (следующая задача) сопоставит по времени и посчитает CER на каждой точке.
-- **Закрывает testbench-фазу Phase 9**. Дальше: Python `rtty_gen.py` + `cer_measure.py` для offline-воспроизводимости, потом baseline замер текущего декодера.
+### Added (testbench — Phase 9, item 5/5 — closes the testbench phase)
+- **Batch SNR sweep in `rtty_simulator.html`**. Automatic SNR sweep
+  through given points with dwell time. UI:
+  - Sliders: `SNR from` +30..−25, `SNR to` +30..−25, `Step` 1..5 dB,
+    `Dwell` 5..120 s.
+  - Buttons `SWEEP` / `CANCEL`.
+  - Log area: ISO timestamp + SNR + index per point. First/last line
+    = sweep boundary markers.
+- The sweep automatically turns on AWGN and moves the SNR slider.
+  Direction (up/down) inferred from the sign of the difference.
+- **CER(SNR) measurement methodology**: (1) start TX in the
+  simulator, (2) start the device serial logger with timestamps,
+  (3) press SWEEP, (4) copy the log text + serial log, (5) offline
+  Python (next task) matches by time and computes CER per point.
+- **Closes the testbench phase of Phase 9**. Next: Python
+  `rtty_gen.py` + `cer_measure.py` for offline reproducibility, then
+  the baseline measurement of the current decoder.
 
 ## [Build 235] - 2026-04-13
 ### Added (testbench)
-- **CW QRM теперь с реальной морзянкой**. Добавлен dropdown `CW mode: Continuous carrier | Keyed morse`. В режиме keyed — полноценная передача текста `"CQ CQ DE UA3TEST K  "` по азбуке Морзе с character-dict для A-Z/0-9/пунктуации.
-- **Ручной ключ** (реализм): jitter-слайдер `0..50 %` добавляет случайное масштабирование на длину каждого элемента (точка/тире/пауза). Реалистично имитирует оператора, не идеального автомата. При 20% джиттере соотношение dot/dash плавает, межбуквенные паузы тоже. Слайдер WPM `10..40` (PARIS-based: dot = 1.2/WPM).
-- **Envelope**: 5 ms linear ramp на включении/выключении элемента — мягкий key-click (не идеально острый, как у реального ключа с side-tone фильтром).
-- Scheduler отдельный (`scheduleCWChunk`), look-ahead 1.5с, восстанавливает `cwTime` если отстаём.
+- **CW QRM now uses real Morse**. Added dropdown
+  `CW mode: Continuous carrier | Keyed morse`. In keyed mode — full
+  Morse-coded transmission of `"CQ CQ DE UA3TEST K  "` with a
+  character dict for A-Z/0-9/punctuation.
+- **Hand key** (realism): jitter slider `0..50 %` adds random scaling
+  to the length of every element (dot/dash/pause). Realistically
+  imitates an operator, not a perfect machine. At 20% jitter the
+  dot/dash ratio floats, inter-letter pauses float too. WPM slider
+  `10..40` (PARIS-based: dot = 1.2/WPM).
+- **Envelope**: 5 ms linear ramp on element on/off — a soft key-click
+  (not perfectly sharp, as with a real key with a side-tone filter).
+- Separate scheduler (`scheduleCWChunk`), 1.5 s look-ahead, recovers
+  `cwTime` if it falls behind.
 
 ## [Build 234.1] - 2026-04-13
 ### Fixed
-- **QRM RTTY scheduler не запускался**: в `startRTTY` вызов `scheduleQRMChunk()` стоял **до** `isPlaying = true`, а функция на входе `if (!isPlaying) return;` без рескеда. Второй RTTY-сигнал в итоге застревал на начальной Mark-частоте (звучал как непрерывный тон). Вызов перенесён после `isPlaying = true`.
+- **QRM RTTY scheduler wasn't starting**: in `startRTTY` the
+  `scheduleQRMChunk()` call was placed **before** `isPlaying = true`,
+  and the function returns at the top on `if (!isPlaying) return;`
+  with no rescheduling. The second RTTY signal ended up stuck on the
+  initial Mark frequency (sounded like a continuous tone). Call
+  moved after `isPlaying = true`.
 
 ## [Build 234] - 2026-04-13
 ### Refactored
-- **Simulator signal path → dual-tone (Mark/Space независимые ветки)**. Вместо одного `OscillatorNode` с `frequency.setValueAtTime`-переключением — две постоянные ветки: `markOsc → markBitGain → markFadeGain → gain` и `spaceOsc → spaceBitGain → spaceFadeGain → gain`. Scheduler теперь toggleит BitGain'ы (с микро-ramp 0.5ms для anti-click), а не частоту. Drift-ветки подключены к **обеим** `osc.frequency` (ConstantSource + SinOsc → markOsc.frequency + spaceOsc.frequency), т.е. оба тона дрейфуют синхронно.
-- **Зачем refactor**: нельзя честно смоделировать selective fading (Mark и Space замирают независимо — КВ-multipath) без раздельных gain на каждую несущую.
+- **Simulator signal path → dual-tone (independent Mark/Space
+  branches)**. Instead of one `OscillatorNode` with
+  `frequency.setValueAtTime` switching — two persistent branches:
+  `markOsc → markBitGain → markFadeGain → gain` and
+  `spaceOsc → spaceBitGain → spaceFadeGain → gain`. The scheduler now
+  toggles the BitGains (with a 0.5 ms micro-ramp for anti-click)
+  instead of the frequency. The drift branches are connected to
+  **both** `osc.frequency` (ConstantSource + SinOsc →
+  markOsc.frequency + spaceOsc.frequency), i.e. both tones drift in
+  sync.
+- **Why the refactor**: you can't honestly model selective fading
+  (where Mark and Space fade independently — HF multipath) without
+  separate gain on each carrier.
 
-### Added (testbench — Phase 9, подпункт 4/5)
-- **QSB — flat amplitude fading**: синусоидальный envelope поверх всего сигнала. Слайдеры `depth 0..40 dB` и `period 1..60 s`. Формула: `fade = 10^(−(depth/2)·(1−cos(2π·t/T))/20)` ∈ [10^(−depth/20), 1] — периодически проваливается до минимума и возвращается к 1.
-- **Selective fading** (КВ-multipath): Mark и Space замирают **независимо**, с фазовым сдвигом 0.7π между ними. Имитирует ситуацию, когда один тон глубоко в нуле, другой виден — типичное на КВ при ионосферном multipath. Слайдеры `depth 0..40 dB`, `period 1..30 s`.
-- Envelope-апдейт в JS через `setInterval(50ms)` + `setTargetAtTime` на `markFadeGain`/`spaceFadeGain` (дёшево, QSB медленный).
-- **Impulse noise** (QRN / атмосферики): случайные короткие (~2 ms) экспоненциально-затухающие шумовые всплески. Poisson-распределение: интервалы `−ln(1−rand) · 60/rate`. Слайдеры `rate 0..300 clicks/min`, `amplitude ×0..×20` от SIGNAL_PEAK.
-- **Use case**: максимально приближенные к реальному КВ-эфиру условия для стресс-теста декодера (текущего и будущего гибридного).
+### Added (testbench — Phase 9, item 4/5)
+- **QSB — flat amplitude fading**: a sinusoidal envelope on top of
+  the whole signal. Sliders `depth 0..40 dB` and `period 1..60 s`.
+  Formula: `fade = 10^(−(depth/2)·(1−cos(2π·t/T))/20)` ∈
+  [10^(−depth/20), 1] — periodically dips to the minimum and returns
+  to 1.
+- **Selective fading** (HF multipath): Mark and Space fade
+  **independently**, with a 0.7π phase shift between them. Mimics
+  the situation where one tone is deep in a null and the other is
+  visible — typical on HF under ionospheric multipath. Sliders
+  `depth 0..40 dB`, `period 1..30 s`.
+- Envelope update in JS via `setInterval(50 ms)` +
+  `setTargetAtTime` on `markFadeGain`/`spaceFadeGain` (cheap, QSB is
+  slow).
+- **Impulse noise** (QRN / atmospherics): random short (~2 ms)
+  exponentially decaying noise bursts. Poisson distribution:
+  intervals `−ln(1−rand) · 60/rate`. Sliders
+  `rate 0..300 clicks/min`, `amplitude ×0..×20` of SIGNAL_PEAK.
+- **Use case**: conditions as close as possible to real HF air for
+  stress-testing the decoder (current and future hybrid).
 
 ## [Build 233] - 2026-04-13
-### Added (testbench — Phase 9, подпункт 3/5)
-- **tools/rtty_simulator.html: частотный drift** основного сигнала. Две независимые составляющие, суммируются на `osc.frequency` AudioParam (поверх `setValueAtTime`-scheduling, т.к. AudioParam складывает intrinsic + входы):
-  - **Linear drift**: `ConstantSourceNode` с длинным `linearRampToValueAtTime` (rate·3600 за час). Slider `−10..+10 Hz/s`, step 0.1. Имитирует тепловой уход TRX после включения.
-  - **Sinusoidal drift**: low-freq `OscillatorNode` × `GainNode` → amplitude Hz. Sliders `amp 0..50 Hz`, `period 1..60 s`. Имитирует Doppler/ионосферный wobble/QSB-частоту.
-- Обе ветки с live-update через `setTargetAtTime`. Checkbox-ы включают/выключают независимо.
-- **Use case**: проверка устойчивости AFC и SEARCH к медленному уходу частоты; подготовка к оценке, насколько widely-matched filter (path B из §3 плана) лучше narrow (path A) в drift-условиях.
+### Added (testbench — Phase 9, item 3/5)
+- **tools/rtty_simulator.html: frequency drift** of the main signal.
+  Two independent components, summed on the `osc.frequency`
+  AudioParam (on top of `setValueAtTime` scheduling, because
+  AudioParam sums intrinsic + inputs):
+  - **Linear drift**: `ConstantSourceNode` with a long
+    `linearRampToValueAtTime` (rate·3600 per hour). Slider
+    `−10..+10 Hz/s`, step 0.1. Mimics a TRX thermal walk after
+    power-on.
+  - **Sinusoidal drift**: low-freq `OscillatorNode` × `GainNode` →
+    amplitude in Hz. Sliders `amp 0..50 Hz`, `period 1..60 s`.
+    Mimics Doppler / ionospheric wobble / QSB frequency.
+- Both branches with live update via `setTargetAtTime`. Checkboxes
+  enable/disable independently.
+- **Use case**: AFC and SEARCH resilience to slow frequency drift;
+  preparation for evaluating how much better a widely matched
+  filter (path B from §3 of the plan) is than a narrow one (path A)
+  under drift.
 
 ## [Build 232] - 2026-04-13
-### Added (testbench — Phase 9, подпункт 2/5)
-- **tools/rtty_simulator.html: QRM-инжекция**. Две параллельные ветки помех поверх основного RTTY-сигнала:
-  - **CW carrier**: непрерывный sine-тон. Slider частоты `300..3000 Hz` + уровень `−30..+20 дБ` относительно основного сигнала. Live-обновление без перезапуска.
-  - **Second RTTY**: второй RTTY-сигнал 45.45/170/1.5 с фиксированным текстом `"CQCQCQ DE TEST RYRYRY 73 "`. Slider center-freq `400..2800 Hz` + уровень `−30..+20 дБ`. Отдельный scheduler со своим look-ahead (1.0с).
-- **Уровни**: оба QRM-источника нормированы к `SIGNAL_PEAK=0.5`, то есть `cw_gain = 0.5·10^(lv/20)`. `lv=0 dB` = той же мощности что основной сигнал.
-- **Use case**: проверка устойчивости SEARCH и декодера к соседним сигналам, имитация реального эфира с несколькими станциями на одной полосе.
+### Added (testbench — Phase 9, item 2/5)
+- **tools/rtty_simulator.html: QRM injection**. Two parallel
+  interference branches on top of the main RTTY signal:
+  - **CW carrier**: a continuous sine tone. Frequency slider
+    `300..3000 Hz` + level `−30..+20 dB` relative to the main signal.
+    Live update without restart.
+  - **Second RTTY**: a second 45.45/170/1.5 RTTY signal with the
+    fixed text `"CQCQCQ DE TEST RYRYRY 73 "`. Center-freq slider
+    `400..2800 Hz` + level `−30..+20 dB`. Separate scheduler with
+    its own look-ahead (1.0 s).
+- **Levels**: both QRM sources normalized to `SIGNAL_PEAK=0.5`, so
+  `cw_gain = 0.5·10^(lv/20)`. `lv=0 dB` = same power as the main
+  signal.
+- **Use case**: SEARCH and decoder resilience to neighbouring
+  signals, imitation of real-air with several stations sharing the
+  band.
 
 ## [Build 231] - 2026-04-13
-### Added (testbench — Phase 9, подпункт 1/N)
-- **tools/rtty_simulator.html: AWGN + SNR slider**. Первый шаг к testbench для гибридного декодера (Phase 9). В симулятор добавлена параллельная ветка белого гауссовского шума (сумма 3-х uniform, RMS≈1.0, 10-секундный looped buffer). Gain шума вычисляется как `SIGNAL_RMS · 10^(−SNR/20)` — slider `−25..+30 дБ` меняет уровень шума live, без перезапуска. Checkbox "AWGN" включает/выключает ветку.
-- **Конвенция**: sine peak = 0.5 (RMS ≈ 0.354), SNR в полной audio-полосе (не в bit-bandwidth). Упрощение для интерактивного теста; точный SNR-в-полосе считаем позже в Python.
-- **Цель use**: крутим slider, смотрим, на каком SNR декодер (Build 230) начинает сыпаться — получаем первичную оценку threshold baseline перед внедрением soft-LLR.
-- План: отдельные билды добавят QRM-инжекцию, частотный drift, импульсные помехи, batch-mode для CER-замера.
+### Added (testbench — Phase 9, item 1/N)
+- **tools/rtty_simulator.html: AWGN + SNR slider**. First step
+  toward a testbench for the hybrid decoder (Phase 9). Added a
+  parallel branch of white Gaussian noise to the simulator (sum of
+  3 uniform, RMS≈1.0, 10-second looped buffer). Noise gain is
+  computed as `SIGNAL_RMS · 10^(−SNR/20)` — slider `−25..+30 dB`
+  changes the noise level live, no restart. The "AWGN" checkbox
+  enables/disables the branch.
+- **Convention**: sine peak = 0.5 (RMS ≈ 0.354), SNR in the full
+  audio band (not in bit bandwidth). A simplification for an
+  interactive test; the precise in-band SNR is computed later in
+  Python.
+- **Use**: drag the slider, watch at what SNR the decoder
+  (Build 230) starts to fall apart — get a first cut at the
+  baseline threshold before introducing soft-LLR.
+- Plan: separate builds will add QRM injection, frequency drift,
+  impulse noise, batch mode for CER measurement.
 
 ## [Build 230] - 2026-04-13
 ### Verified (no code changes)
-- **STOP-DET алгоритм подтверждён на реальном эфире (50/450/1.5)**: 60-секундный захват через `C:\Temp\stopdet_capture.ps1` с корректным SEARCH-локом (FREQ=984.1, ERR=3%) показал однозначное голосование `Result: 1.5 bits (votes: 1.0=0 1.5=19 2.0=1)`. Все измеренные gap_fraction в диапазоне 0.34–0.60T — плотно внутри bin 1.5 (границы 0.25/0.85 корректны).
-- **Ранее наблюдавшийся баг** ("определил 1.0 вместо 1.5") был downstream-симптомом: SEARCH не залочился корректно, state-7-end timing измерялся на несинхронизированном framer. С правильным локом STOP-DET работает как задумано.
-- TODO: ловить edge-cases на других сигналах (100 бод, 2.0 стоп, слабые SNR).
+- **STOP-DET algorithm confirmed on real air (50/450/1.5)**: a
+  60-second capture via `C:\Temp\stopdet_capture.ps1` with a correct
+  SEARCH lock (FREQ=984.1, ERR=3%) showed an unambiguous vote
+  `Result: 1.5 bits (votes: 1.0=0 1.5=19 2.0=1)`. All measured
+  gap_fractions are in 0.34–0.60T — squarely inside bin 1.5
+  (boundaries 0.25/0.85 are correct).
+- **The earlier bug** ("detected 1.0 instead of 1.5") was a
+  downstream symptom: SEARCH wasn't locking properly, so the
+  state-7-end timing was measured on a desynchronized framer. With
+  a correct lock, STOP-DET works as designed.
+- TODO: catch edge cases on other signals (100 baud, 2.0 stop,
+  weak SNR).
 
 ## [Build 229] - 2026-04-13
 ### Fixed (measurement)
-- **Core 1 load metric теперь честная**: DMA-waits в `ili9488_push_*` функциях (`dma_channel_wait_for_finish_blocking`) были учтены как работа, хотя на деле это блокирующее ожидание (Cortex-M33 спит). Добавлен `shared_c1_dma_wait_time` — аккумулирует DMA-ожидания, вычитается из Core 1 total_work перед расчётом процента.
-- **Результат**: замер Core 1 упал с 41-47% до **8-10%** (соответствует reference-проекту). Compute-нагрузка всегда была низкой — только метрика врала. Реальный запас для гибридного декодера огромный.
+- **Core 1 load metric is honest now**: DMA waits in
+  `ili9488_push_*` (`dma_channel_wait_for_finish_blocking`) were
+  being counted as work even though they're blocking waits
+  (Cortex-M33 is asleep). Added `shared_c1_dma_wait_time` — it
+  accumulates DMA waits and is subtracted from Core 1 total work
+  before the percentage is computed.
+- **Result**: Core 1 measurement dropped from 41-47% to **8-10%**
+  (matches the reference project). The compute load was always low
+  — only the metric was lying. The real headroom for the hybrid
+  decoder is huge.
 
 ### Changed
-- UI update interval 200ms → **500ms** (как у соседей). Снижает частоту top-bar перерисовок в 2.5×. Косметически; реальный выигрыш маскирован исправлением метрики.
+- UI update interval 200 ms → **500 ms** (as in the neighbouring
+  project). Cuts top-bar repaints by 2.5×. Cosmetic; the real win
+  is masked by the metric fix.
 
 ## [Build 228] - 2026-04-13
 ### Optimized
-- **Incremental text rendering (Core 1)**: regular char-append теперь рендерит только нижнюю строку (`drawRTTYLastLineOnly`) — fillRect 440×line_h + один drawString + push_colors только затронутой полосы, вместо fillSprite 480×160 + 16×drawString + полный push. На hot path (60 символов из 61 до переноса) экономится ~10× SPI-трафика и ~10× рендер-работы. Полный `drawRTTY` вызывается только при добавлении новой строки (newline/CR/line-wrap), смене scroll_offset, или ре-рендере экрана. Throttle 8ms (~120 fps cap) для incremental.
+- **Incremental text rendering (Core 1)**: a regular char-append now
+  redraws only the bottom line (`drawRTTYLastLineOnly`) — fillRect
+  440×line_h + a single drawString + push_colors only of the
+  affected strip, instead of fillSprite 480×160 + 16×drawString +
+  full push. On the hot path (60 chars out of 61 before a wrap) it
+  saves ~10× SPI traffic and ~10× render work. The full `drawRTTY`
+  is called only on a new-line add (newline/CR/line-wrap), a
+  scroll_offset change, or a screen re-render. Throttle 8 ms
+  (~120 fps cap) on incremental.
 
 ## [Build 227] - 2026-04-13
 ### Optimized
-- **Ring buffer FFT collection (Core 0)**: убран 2 KB `memmove` каждые 480 сэмплов (~102 ms) — теперь `ts[]` циркулярный с bitmask-индексом `& (FFT_SIZE-1)`. Snapshot в `shared_fft_ts` делается одним unwrap-проходом от oldest→newest вместо memmove + memcpy.
-- **ADC-pacing через `adc_fifo_get_blocking()` без busy-wait**: удалён избыточный `while(adc_fifo_is_empty()) tight_loop_contents()` перед реальным blocking-вызовом. Cortex-M33 теперь реально спит между сэмплами. Timestamp `st` перенесён *после* wake-up — Core 0 load metric исключает idle/sleep time.
-- **Результат**: Core 0 7% → **4-5%**. Приближение к reference-проекту (3%). Ring FFT также снижает I-cache pressure.
+- **Ring buffer FFT collection (Core 0)**: dropped the 2 KB
+  `memmove` every 480 samples (~102 ms) — `ts[]` is now circular
+  with a bitmask index `& (FFT_SIZE-1)`. The snapshot into
+  `shared_fft_ts` is done by a single unwrap pass from
+  oldest→newest instead of memmove + memcpy.
+- **ADC-pacing via `adc_fifo_get_blocking()` with no busy-wait**:
+  dropped the redundant
+  `while(adc_fifo_is_empty()) tight_loop_contents()` before the
+  real blocking call. Cortex-M33 now genuinely sleeps between
+  samples. Timestamp `st` moved to *after* wake-up — the Core 0
+  load metric excludes idle/sleep time.
+- **Result**: Core 0 7% → **4-5%**. Approaching the reference
+  project (3%). The ring FFT also reduces I-cache pressure.
 
 ## [Build 226] - 2026-04-13
 ### Fixed
-- **SEARCH больше не пропускает широкие FSK-пары**: в B222 добавленный valley-test (rejection пар с глубокой впадиной между пиками) был слишком агрессивен — отсекал легитимный 450-Hz сигнал (Mark b180=+41 dB, Space b224=+22 dB, впадина на шумовом полу ~−2 dB, diff 33 dB). Порог повышен 25 → 40 dB: real wide-FSK (valley ~30-35 dB ниже пиков) проходит, cross-signal false combos (diff 40+ dB) по-прежнему отсекаются. Проверено на живом эфире: погодный 50/450/1.5 выбирается с score=109.8, обгоняя шумовые 200-Hz кандидаты.
-- **SEARCH tolerance per-shift (внутренний цикл)**: B222 расширил `local_tolerance` только во внешнем цикле (границы lo). Внутренний `for (d = -tolerance; ...)` остался на константе 2 — поэтому для 425/450/500/850 часть легитимных кандидатов с drift ±3-4 bins всё равно отсекалась. Теперь оба цикла используют `local_tolerance`.
+- **SEARCH no longer skips wide FSK pairs**: the B222 valley-test
+  (rejecting pairs with a deep dip between peaks) was too
+  aggressive — it was rejecting a legitimate 450 Hz signal
+  (Mark b180=+41 dB, Space b224=+22 dB, valley on the noise floor
+  ~−2 dB, diff 33 dB). Threshold bumped 25 → 40 dB: real wide-FSK
+  (valley ~30-35 dB below peaks) passes, cross-signal false combos
+  (diff 40+ dB) are still rejected. Verified on live air: the
+  weather 50/450/1.5 is picked with score=109.8, beating noisy
+  200-Hz candidates.
+- **SEARCH per-shift tolerance (inner loop)**: B222 widened
+  `local_tolerance` only in the outer loop (lo boundaries). The
+  inner `for (d = -tolerance; ...)` stayed on the constant 2 — so
+  for 425/450/500/850 a fraction of legitimate candidates with
+  drift ±3-4 bins were still being rejected. Now both loops use
+  `local_tolerance`.
 
 ### Added
-- **DUMP SPEC**: serial-команда, дампит текущие FFT-магнитуды (512 бинов, bin=9.77 Hz). Нужна для offline-анализа спектра: можно получить срез с устройства и в диалоге определить, какие сигналы присутствуют, почему AUTO залочилось на неверную пару, etc.
-- **DUMP MS**: дампит огибающие Mark/Space (480 сэмплов истории).
-- **shared_fft_mag[]**: Core 1 копирует `smooth_mag` в shared-массив после каждого FFT-расчёта. Нужен для DUMP SPEC (serial-handler не делает FFT сам).
+- **DUMP SPEC**: a serial command that dumps the current FFT
+  magnitudes (512 bins, bin = 9.77 Hz). Needed for offline spectrum
+  analysis — pull a slice from the device and figure out, in
+  dialog, what signals are present, why AUTO locked on the wrong
+  pair, etc.
+- **DUMP MS**: dumps the Mark/Space envelopes (480 samples of
+  history).
+- **shared_fft_mag[]**: Core 1 copies `smooth_mag` into a shared
+  array after every FFT computation. Needed for DUMP SPEC (the
+  serial handler doesn't FFT itself).
 
 ## [Build 222] - 2026-04-13
 ### Added
-- **Valley test в SEARCH**: отвергает фейковые FSK-пары из двух независимых сигналов, чья случайная разница частот совпала со стандартным shift. Например: узкий CW на 890 Hz + сильный Mark широкого RTTY на 1758 Hz → разница 868 Hz ≈ 850 shift → SEARCH выбирает ложный 850. Проверяется минимум магнитуды между пиками для shift > 20 bins; при очень глубокой впадине (>40 dB ниже пиков, скорректировано в B226) пара отвергается как "два разных сигнала".
+- **Valley test in SEARCH**: rejects fake FSK pairs from two
+  independent signals whose accidental frequency difference matches
+  a standard shift. Example: a narrow CW at 890 Hz + a strong Mark
+  of a wide RTTY at 1758 Hz → difference 868 Hz ≈ 850 shift →
+  SEARCH picks a false 850. The minimum magnitude between the peaks
+  is checked for shift > 20 bins; on a very deep dip (>40 dB below
+  the peaks, calibrated in B226) the pair is rejected as "two
+  different signals".
 
 ### Changed
-- **Wider shifts have wider tolerance**: при shift_bins ≥ 15 tolerance=3, при ≥ 40 tolerance=4 (было константа 2). Компенсирует FSK spectral smearing и TX drift на широких разносах — 450-Hz сигнал может сидеть на 44 bins вместо идеальных 46, не теряется.
+- **Wider shifts have wider tolerance**: at shift_bins ≥ 15
+  tolerance=3, at ≥ 40 tolerance=4 (was a constant 2). Compensates
+  for FSK spectral smearing and TX drift on wide shifts — a
+  450 Hz signal can sit at 44 bins instead of the ideal 46 and not
+  be lost.
 
 ## [Build 221] - 2026-04-12
 ### Added
-- **Seqlock для shared DSP data**: Core 0 оборачивает запись `shared_fft_ts/adc_waveform/mag_m/mag_s` в инкремент `shared_dsp_seq` с `__dmb()` барьерами. Core 1 читает с retry-циклом (до 3 попыток) — если seq изменилась между началом и концом memcpy, данные считаются рваными и перечитываются. Задел под будущий перенос FFT на Core 0 (частота shared-обновлений вырастет).
-- **SAVE flash serial indicator**: `[SAVE] writing flash (DSP paused ~45ms)...` + `[SAVE] done in X me`. Кнопка SAVE в UI уже меняет цвет визуально.
+- **Seqlock for shared DSP data**: Core 0 wraps the write of
+  `shared_fft_ts/adc_waveform/mag_m/mag_s` in an increment of
+  `shared_dsp_seq` with `__dmb()` barriers. Core 1 reads with a
+  retry loop (up to 3 attempts) — if the seq changes between the
+  start and end of memcpy, the data is treated as torn and re-read.
+  Groundwork for the future move of the FFT to Core 0 (the shared
+  update rate goes up).
+- **SAVE flash serial indicator**:
+  `[SAVE] writing flash (DSP paused ~45ms)...` + `[SAVE] done in
+  X me`. The UI SAVE button already changes colour visually.
 
 ### Changed
-- Memory barriers `__dmb()` добавлены в Core 0 writer и Core 1 reader для корректной работы seqlock на двухъядерном ARM.
+- `__dmb()` memory barriers added in the Core 0 writer and the
+  Core 1 reader for correct seqlock operation on the dual-core ARM.
 
 ## [Build 220] - 2026-04-12
 ### Optimized
-- **FIR 63-tap симметричный**: буфер power-of-2 (64) для bitmask-индексации вместо `% 63`. Использована симметрия коэффициентов (`fir_coeffs[i] == fir_coeffs[62-i]`) — 32 умножения + 31 сложение пар вместо 63 умножений. Forward iteration убирает reverse branch.
-- FIR ~50% быстрее, освобождает ~0.5% Core 0.
+- **63-tap symmetric FIR**: power-of-2 (64) buffer for bitmask
+  indexing instead of `% 63`. Coefficient symmetry exploited
+  (`fir_coeffs[i] == fir_coeffs[62-i]`) — 32 multiplies + 31 pair
+  adds instead of 63 multiplies. Forward iteration drops the
+  reverse branch.
+- FIR ~50% faster, frees ~0.5% of Core 0.
 
 ## [Build 219] - 2026-04-12
 ### Added
-- **PIO Waterfall LUT**: предвычисленная `waterfall_pio_lut[256]` таблица rainbow-gradient (uint8 → 32-bit PIO-ready RGB666). Rainbow-расчёт теперь O(1) lookup вместо 6 float-операций + color565 + byte swap на каждый из 480×64 = 30720 пикселей в кадре.
-- **Circular history buffer**: `wf_history[64][480]` uint8 (30 KB) вместо RGB565 sprite (61 KB). Скролл = декремент `wf_offset` без memcpy.
-- Новая функция `ili9488_push_waterfall_lut()` — рендер через history + LUT + ping-pong DMA.
+- **PIO Waterfall LUT**: a precomputed `waterfall_pio_lut[256]`
+  rainbow-gradient table (uint8 → 32-bit PIO-ready RGB666). The
+  rainbow computation is now an O(1) lookup instead of 6 float ops
+  + color565 + byte swap on every one of the 480×64 = 30720 pixels
+  in a frame.
+- **Circular history buffer**: `wf_history[64][480]` uint8 (30 KB)
+  instead of an RGB565 sprite (61 KB). Scroll = decrement
+  `wf_offset` with no memcpy.
+- A new function `ili9488_push_waterfall_lut()` — render via
+  history + LUT + ping-pong DMA.
 
 ### Changed
-- Core 1 нижняя граница загрузки: 60% → **39%**. FPS водопада: стабильно 22 → 20-25.
-- Reference идея из `c:\YandexDisk\DIY\RP2350_RTTY\TouchRTTY\` портирована (там та же схема PIO LUT + history buffer).
+- Core 1 lower-bound load: 60% → **39%**. Waterfall FPS:
+  stable 22 → 20-25.
+- Reference idea from `c:\YandexDisk\DIY\RP2350_RTTY\TouchRTTY\`
+  ported (same PIO LUT + history buffer scheme there).
 
 ### Documented
-- `docs/ROADMAP_OPTIMIZATION.md` раздел 8: гибридный декодер RTTY (цель — **лучше 2Tone**, порог ~−15..−16 дБ SNR). 4 этапа: Goertzel matched filter → Multi-phase Goertzel → Character-level ML → Bayesian prior + Viterbi + noise blanker + spectral sub + temporal diversity + tiny NN fallback + soft confidence UI.
-- `docs/20260412/` — детальный анализ алгоритмов (RTTY_DECODER_ALGORITHMS_COMPARISON, IQ_VS_GOERTZEL_ML_ANALYSIS, OPTIMIZATION_AND_INTERFERENCE_MITIGATION).
+- `docs/ROADMAP_OPTIMIZATION.md` section 8: hybrid RTTY decoder
+  (goal — **beat 2Tone**, threshold ~−15..−16 dB SNR). 4 stages:
+  Goertzel matched filter → multi-phase Goertzel → character-level
+  ML → Bayesian prior + Viterbi + noise blanker + spectral sub +
+  temporal diversity + tiny NN fallback + soft confidence UI.
+- `docs/20260412/` — detailed algorithm analysis
+  (RTTY_DECODER_ALGORITHMS_COMPARISON, IQ_VS_GOERTZEL_ML_ANALYSIS,
+  OPTIMIZATION_AND_INTERFERENCE_MITIGATION).
 
 ## [Build 218] - 2026-04-12
 ### Added

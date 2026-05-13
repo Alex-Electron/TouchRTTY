@@ -23,9 +23,6 @@ few things to check if the first power-up looks wrong.
   Useful for the physical "factory reset" button on GP4.
 * *(Phase 4 / future)* A MicroSD card module on SPI1 for logging.
 
-The Pico 2 costs about $5, the display $10–15. Total bill of
-materials under $25 if you scrounge passives, plus a USB cable.
-
 ---
 
 ## Pin map
