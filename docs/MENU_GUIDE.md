@@ -13,12 +13,15 @@ quick-access buttons. Everything else (menu, tuning lab, diagnostics)
 overlays the middle area when you tap into it.
 
 <p align="center">
-  <img src="images/screen_layout.svg" alt="TouchRTTY screen layout, 480×320 px" width="900">
+  <img src="images/screen_layout.png" alt="TouchRTTY screen layout, 480×320 px" width="700">
 </p>
 
-The actual heights (from `src/ui/UIManager.hpp`): TOP BAR 34 px, frequency
-MARKER strip 14 px, DSP zone (waterfall / spectrum / scope) 64 px, TEXT
-zone 160 px (the biggest — half the screen), BOTTOM BAR 48 px.
+> *Illustrative render — not pixel-accurate to the firmware.* The
+> actual heights, taken from `src/ui/UIManager.hpp`, are: TOP BAR
+> 34 px, frequency MARKER strip 14 px (between top bar and waterfall),
+> DSP / waterfall zone 64 px, TEXT zone 160 px (the biggest — half the
+> screen), BOTTOM BAR 48 px. The mockup above is closer to an artist's
+> rendering of the layout than a true 1:1 screenshot.
 
 ---
 
