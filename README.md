@@ -86,7 +86,36 @@ across seeds, not a lucky run.
 | Use the touchscreen | [Menu guide](docs/MENU_GUIDE.md) |
 | Train your own NN | [NN training](docs/NN_TRAINING.md) |
 | Run benchmarks | [Bench tooling](docs/BENCH_TOOLING.md) |
+| See what's coming next | [Roadmap](docs/ROADMAP_OPTIMIZATION.md) |
 | Just generate test signal in a browser | [`tools/rtty_simulator.html`](tools/rtty_simulator.html) |
+
+---
+
+## What's coming next
+
+v2.0.0 closed the strategic "beat 2Tone" goal for RTTY. Plenty of room
+left. The full backlog with priorities and rationale lives in
+[`docs/ROADMAP_OPTIMIZATION.md`](docs/ROADMAP_OPTIMIZATION.md) §9, but
+the short list:
+
+* **SITOR-B / NAVTEX FEC** — 100 baud / 170 Hz with CCIR 476 time
+  diversity. The natural next protocol once RTTY is solid.
+* **Real-air NN oracle pipeline** — a DWD template matcher to label
+  uncertain frames against ground truth. The path to push the −16 dB
+  threshold by another 5–10 pp.
+* **CW (Morse) decoder** — K-means based, sitting on the same dual-IQ
+  front-end.
+* **SD card logging** — exFAT, Phase 4 plan. Wiring is already in the
+  [hardware setup](docs/HARDWARE_SETUP.md) so you can solder it in now.
+* **FT8 / FT4** — narrowband modes, way more compute, but the dual-core
+  has headroom.
+* **WEFAX** — HF weather fax. Would reuse the spectrum-renderer path.
+* **DRM** — Digital Radio Mondiale, longer-term.
+* **UI palettes / skins** — cosmetic. "Hacker green" and friends.
+
+Plus a research backlog of decoder-quality ideas (Symbol-level MLSE,
+Gardner clock recovery, n-gram language model, IQ-direct input, etc.)
+collected in [`docs/NEIGHBOR_IDEAS.md`](docs/NEIGHBOR_IDEAS.md).
 
 ---
 

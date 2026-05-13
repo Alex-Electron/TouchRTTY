@@ -85,7 +85,37 @@ SNR-лесенка от −4 до −22 dB шагом 2 dB по 30 секунд 
 | Пользоваться тачскрином | [Гайд по меню](docs/MENU_GUIDE.ru.md) |
 | Обучить свою нейронку | [Тренировка NN](docs/NN_TRAINING.ru.md) |
 | Запустить бенч | [Bench-тулинг](docs/BENCH_TOOLING.ru.md) |
+| Узнать что дальше в планах | [Roadmap](docs/ROADMAP_OPTIMIZATION.ru.md) |
 | Просто сгенерить тестовый сигнал в браузере | [`tools/rtty_simulator.html`](tools/rtty_simulator.html) |
+
+---
+
+## Что дальше в планах
+
+v2.0.0 закрыла стратегическую цель «обогнать 2Tone» для RTTY. Запас
+по работе ещё большой. Полный backlog с приоритетами и обоснованиями
+лежит в [`docs/ROADMAP_OPTIMIZATION.ru.md`](docs/ROADMAP_OPTIMIZATION.ru.md)
+§9, а короткий список такой:
+
+* **SITOR-B / NAVTEX FEC** — 100 baud / 170 Гц с CCIR 476 time
+  diversity. Естественный следующий протокол, как только RTTY доведён.
+* **Real-air NN oracle pipeline** — DWD template matcher, чтобы
+  размечать неопределённые фреймы против ground truth. Путь сдвинуть
+  порог −16 dB ещё на 5–10 pp.
+* **CW (Морзе) декодер** — K-means based, на том же dual-IQ
+  фронт-энде.
+* **SD-карта для логов** — exFAT, план Phase 4. Распиновка уже в
+  [hardware setup](docs/HARDWARE_SETUP.ru.md), можно подпаивать
+  сейчас.
+* **FT8 / FT4** — узкополосные режимы, гораздо больше compute, но у
+  dual-core запас есть.
+* **WEFAX** — HF weather fax. Переиспользует pipeline спектра.
+* **DRM** — Digital Radio Mondiale, на более долгий горизонт.
+* **UI палитры / скины** — косметика. «Hacker green» и компания.
+
+Плюс research-backlog по качеству декодера (Symbol-level MLSE,
+Gardner clock recovery, n-gram language model, IQ-direct вход и пр.)
+собран в [`docs/NEIGHBOR_IDEAS.ru.md`](docs/NEIGHBOR_IDEAS.ru.md).
 
 ---
 
