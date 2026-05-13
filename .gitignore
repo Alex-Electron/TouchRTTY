@@ -91,3 +91,12 @@ datasets/nn_archive/nn_weights_ultra_regressed.h
 
 # ── Internal working drafts (not for the public branch) ─────────────
 docs/nano_banana_prompts.md
+docs/NEIGHBOR_IDEAS.md
+docs/NEIGHBOR_IDEAS.ru.md
+
+# ── Bench artefacts: local-machine specific, regenerable via tools/ ──
+datasets/logs/
+datasets/nn_archive/
+datasets/training_real*.npz
+datasets/recs_mono/
+datasets/real_air/

@@ -8,8 +8,8 @@
 > `docs/ROADMAP_OPTIMIZATION.md` §8): пошёл в **dual-IQ + LLR fusion +
 > TinyML NN** вместо Goertzel + Character-ML. Итог — порог декодирования
 > ≈ −16 dB SNR (CER ~9 pp) против ~−13 dB у 2Tone, что закрывает цель
-> «лучше 2Tone». Полные результаты — `RELEASE_v2.0.0.md`,
-> `docs/NN_TRAINING.md`, `datasets/logs/bench_auto_v2/`.
+> «лучше 2Tone». Полные результаты — `RELEASE_v2.0.0.md`
+> и `docs/NN_TRAINING.md`.
 
 **Дата создания**: 2026-04-13
 **Статус**: исторический design doc (план реализован, см. шапку)

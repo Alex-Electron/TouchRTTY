@@ -297,12 +297,11 @@ me can re-check the experiments without having to repeat them:
 | v18 | wider 160/80 + weight_uncertain | Wider didn't add value over baseline |
 | 256/128 | Wide architecture, no regularization | Catastrophic 84–90 % CER |
 
-Each one has weights in [`datasets/nn_archive/`](../datasets/nn_archive/)
-and bench evidence under
-[`datasets/logs/nn_compare_v*_s{42,43,44}/`](../datasets/logs/).
-If a future change ever looks like it might help, check the archive
-first — there's a good chance someone tried something similar and I
-recorded what happened.
+Every one of these was bench-validated with multi-seed sweeps. The
+artifacts live on the development machine and aren't checked in (they
+add half a gigabyte), but the recipe for each variant is captured
+above and reproducible — `tools/train_nn_torch.py` plus the flags in
+the Variant column gives you the same weights.
 
 The sweet spot remains: **v13** — PyTorch, baseline 128/64,
 noise=0.35, `weight_uncertain=3.0`.

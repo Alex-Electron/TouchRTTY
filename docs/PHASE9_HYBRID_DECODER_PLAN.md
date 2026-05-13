@@ -9,8 +9,7 @@
 > LLR fusion + TinyML NN** instead of Goertzel + Character-ML. The
 > result — decoding threshold ≈ −16 dB SNR (CER ~9 pp) vs 2Tone's
 > ~−13 dB, which closes the "better than 2Tone" goal. Full results in
-> `RELEASE_v2.0.0.md`, `docs/NN_TRAINING.md`,
-> `datasets/logs/bench_auto_v2/`.
+> `RELEASE_v2.0.0.md` and `docs/NN_TRAINING.md`.
 
 **Created:** 2026-04-13
 **Status:** historical design doc (plan shipped, see banner)

@@ -21,7 +21,7 @@ know where to look next.
 - **Current branch:** `feat/alex-cl-dev` (pushed to GitHub as a single
   squashed `v2.0.0` commit). `main` is still behind.
 - **What's next:** real-air NN oracle pipeline, SITOR-B/NAVTEX FEC,
-  Phase 10 (see `NEIGHBOR_IDEAS.md`). Details in section 6.
+  IQ-direct input. Details in section 6.
 
 **Repo:** `https://github.com/Alex-Electron/TouchRTTY.git`
 **Path:** `C:\Temp\TouchRTTY`
@@ -44,7 +44,6 @@ bench results. The canonical order:
 | **Phase 7** — WEFAX (HF weather fax) | — | ⏸ PLANNED | `docs/archive/phase1-8/PHASE7_WEFAX_PLAN.md` |
 | **Phase 8** — DRM | — | ⏸ PLANNED | `docs/archive/phase1-8/PHASE8_DRM_PLAN.md` |
 | **Phase 9** — Hybrid RTTY decoder (dual-IQ + LLR + Soft-Viterbi + TinyML NN) | B242–B265 | ✅ DONE (v2.0.0) | `RELEASE_v2.0.0.md`, `docs/PHASE9_*.md` |
-| **Phase 10** — research backlog (Symbol-MLSE, Gardner, n-gram LM, IQ-вход) | — | 🔬 RESEARCH | `docs/NEIGHBOR_IDEAS.md` |
 
 > **Why Phase 9 ran before Phase 4-8.** Priority shifted to the
 > strategic goal "beat 2Tone at low SNR". Phase 4-8 are *mode
@@ -191,9 +190,9 @@ Full backlog — `docs/ROADMAP_OPTIMIZATION.md` §9. Priorities:
    beat hard-decision).
 2. **SITOR-B / NAVTEX FEC** — 100 baud / 170 Hz, CCIR 476, ratio 4:3,
    time diversity. See memory `project_sitorb.md`.
-3. **Phase 10** — `docs/NEIGHBOR_IDEAS.md`: Symbol-MLSE, Gardner clock
-   recovery, Flywheel DPLL, semantic auto-INV lockout. Each is its
-   own experiment with multi-seed bench validation.
+3. **IQ-direct input** — feed quadrature IQ from an external SDR
+   front-end straight into the dual ADC, bypassing the audio path and
+   AGC. +2–4 dB in marginal conditions and prerequisite for DRM.
 4. **Phase 4-8** — mode expansion (CW advanced, FT8/FT4, WEFAX, DRM,
    SD card). Lower priority — a separate strategic line.
 5. **UI palettes / skins** — memory `project_ui_palettes.md` ("hacker
@@ -232,7 +231,6 @@ Full backlog — `docs/ROADMAP_OPTIMIZATION.md` §9. Priorities:
 | What was in v2.0.0 | `RELEASE_v2.0.0.md` |
 | Phase 9 design history | `docs/PHASE9_HYBRID_DECODER_PLAN.md` |
 | Phase 9 progress snapshot B245 | `docs/PHASE9_PROGRESS_REPORT.md` |
-| Phase 10 ideas | `docs/NEIGHBOR_IDEAS.md` |
 | Phase 1-8 archive | `docs/archive/phase1-8/` |
 
 ---

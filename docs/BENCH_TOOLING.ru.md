@@ -25,7 +25,6 @@ Bench-инфраструктура — больше кода, чем сама NN
 | Усреднить N seed-прогонов в mean ± σ таблицу | `tools/aggregate_compare.py` |
 | Превратить `DUMP FRAMES`-лог в готовую training-npz | `tools/parse_dump_frames.py` |
 | Без надзора крутить train + flash + sweep циклы | `tools/overnight_runner.sh` |
-| Глянуть исторический bench против 2Tone | snapshot в `datasets/logs/bench_auto_v2/` |
 | Сгенерить тестовый сигнал в браузере | открой `tools/rtty_simulator.html` |
 
 Если просто хочешь проверить, что свежая прошивка работает — сразу
@@ -260,19 +259,18 @@ ground-truth. Для стандартной "RYRYRY…" GT-строки длин
 ## Headline bench против 2Tone
 
 Сравнивал TouchRTTY лицом к лицу с 2Tone 26.01a (G3YYD) на одинаковом
-аудио. Bench evidence закоммичен в
-[`datasets/logs/bench_auto_v2/`](../datasets/logs/bench_auto_v2/) —
-per-SNR `compare.txt` плюс raw декодированный текст обоих декодеров.
-На SNR ≤ −12 dB TouchRTTY выдаёт читаемый телетайп там, где у 2Tone
-случайные буквы.
+аудио. На SNR ≤ −12 dB TouchRTTY выдаёт читаемый телетайп там, где у
+2Tone случайные буквы. Per-SNR `compare.txt` и raw декодированный
+текст обоих декодеров писались в локальные логи по ходу прогона — в
+репо они не лежат (полгигабайта артефактов с конкретного стенда), но
+процедура описана выше, и тот же прогон можно повторить у себя.
 
 Инфраструктура, что прогоняла этот бенч (Win32 hwnd handshake с
 N1MM Logger+, 2Tone'овский File→Save Text protocol, Voicemeeter
 routing и пр.), была реверс-инженирлена для одноразового бенчмарка и
 сюда не входит. Цель public-tree тулинга — воспроизводимость для
 TouchRTTY-only экспериментов, а не полная воспроизводимость 2Tone
-сетапа (он капризный и Windows-only). Закоммиченное evidence стоит
-само по себе.
+сетапа (он капризный и Windows-only).
 
 TouchRTTY-only бенчи (`nn_sweep_compare.py` и т.п.) работают
 кросс-платформенно.

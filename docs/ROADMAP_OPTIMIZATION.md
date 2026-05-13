@@ -381,6 +381,90 @@ frames the labels are unknown. The solution:
 - [ ] Hill-climb: ALPHA → BW → SQ
 - [ ] Score = -5×ERR + SNR − 1000×|FE| + SQ_bonus
 
+### Decoder-quality experiments — TODO
+
+A backlog of DSP-side ideas I want to try, ranked by gain-per-effort.
+Each one needs the multi-seed bench methodology (§ honest 3-run
+averaging) to confirm it actually helps before going into production.
+
+**Priority A — high gain, focused effort:**
+
+- [ ] **Symbol-level MLSE against the 32-matrix Baudot alphabet.**
+  Instead of bit-by-bit hard decisions, accumulate soft-bit energy
+  into a 7-element vector for the whole character (165 ms for 45.45
+  baud, 150 ms for 50 baud, including Start+Stop). At the end of the
+  symbol, Euclidean-correlate against all 32 ITA-2 alphabet matrices.
+  The maximum wins. This can "fill in" a character even if 2–3 of the
+  5 data bits are destroyed. Cost: 32 × 7 multiplies per symbol —
+  minimal, ~15 kHz macs at 50 baud. Expected: +1..2 dB vs current
+  Soft-Viterbi framer. Requires framer refactor.
+
+- [ ] **Soft-Viterbi start/stop energy validation.** The current
+  Soft-Viterbi gate (B247) checks frame *structure*, not the actual
+  energies of the Start and Stop bits. Adding energy checks on the
+  1st and 7.5th bit slot would reject "character spray" frames in
+  deep fades. Small patch, fully compatible with the existing Stage
+  1.2 framer.
+
+- [ ] **Gardner Early-Late Gate clock recovery.** Replace the
+  zero-crossing DPLL with a Gardner gate: measure signal energy at
+  the 25 % and 75 % bit slots, slow the clock if early-energy is
+  higher, speed up if late, with a 0.05 phase-step clamp to avoid
+  "phase bounces" in noise. Gardner works on peaks, not transitions,
+  so it stays stable at low CNR where zero-crossings get unreliable.
+  Big DPLL refactor but the most natural path to wringing more dB
+  out of timing recovery.
+
+**Priority B — easy wins, protection against erratic behavior:**
+
+- [ ] **Flywheel DPLL confidence weighting.** Multiply the
+  zero-crossing phase error by the current envelope weight. In a
+  deep fade the DPLL "coasts" on its last stable frequency instead
+  of getting yanked by noise. Drastically reduces jitter and
+  character loss during fading. Small patch.
+
+- [ ] **Semantic auto-inversion lockout.** A "semantic confidence"
+  counter that increments on every ITA-2 control character (LTRS /
+  FIGS). High confidence forbids the auto-INV flipper from running,
+  so in deep fades the polarity doesn't oscillate between NOR and
+  INV chasing noise.
+
+- [ ] **Per-symbol Maximum Ratio Combining (MRC) in dual-IQ
+  fusion.** The current Stage 3.3 LLR fusion uses a global SNR
+  pre-estimate to weight the two IQ paths. A per-symbol version
+  using dynamic `atc_mark_env` and `atc_space_env` inside the
+  Euclidean distance is finer-grained and would prevent noise
+  amplification when one tone fades out entirely (selective fading).
+
+- [ ] **RTTY-aware LMS notch with "force field".** The current LMS
+  notch chain is global. Adding a passband-protection rule (forbid
+  the notch from entering Mark/Space ±margin) would let it hunt QRM
+  more aggressively without ever killing the wanted signal itself.
+
+- [ ] **Lookahead noise blanker.** Detect spikes in real time but
+  mute the *delayed* audio (16 samples / ~1.6 ms later) — effectively
+  "time-travel" and erase the rising edge of a lightning crack
+  before the decoder ever sees it.
+
+**Priority C — quality-of-life and squelch/AFC polish:**
+
+- [ ] **25-percentile noise-floor histogram.** A 64-bin histogram
+  for noise floor estimation instead of a simple mean. A strong RTTY
+  signal doesn't lift the perceived noise floor, so squelch and SNR
+  stay accurate in a congested band.
+
+- [ ] **Parabolic AFC sub-bin interpolation.** 3 bins around the
+  peak → parabolic vertex → 0.5 Hz tracking precision instead of
+  choppy 10 Hz. Kills jitter on the on-screen markers.
+
+- [ ] **Adaptive DPLL phase clamp.** ±0.3 wide for the first 5
+  symbols after squelch opens (fast acquisition), then narrow to
+  ±0.1 (jitter-resistant tracking).
+
+- [ ] **Hot-loop caching of `expf()` constants.** Precompute
+  `expf(time-constant)` once when baud changes instead of inside the
+  10 kHz hot loop. Saves ~60 cycles per sample.
+
 ### Other
 
 - [ ] Final screen "Found: ..." after SEARCH
@@ -391,6 +475,10 @@ frames the labels are unknown. The solution:
 - [ ] I2S DAC audio output
 - [ ] FT8 / FT4 mode
 - [ ] WEFAX (HF weather fax)
+- [ ] IQ-direct input from external SDR front-end (e.g. Belka-DX),
+  dual-ADC capture, bypassing the audio path and AGC clipping. Worth
+  +2-4 dB in marginal conditions; prerequisite for DRM (§9 of the
+  archived Phase 8 plan).
 
 ---
 

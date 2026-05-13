@@ -341,6 +341,89 @@ Bonus: **B265 DUMP FRAMES** позволяет пользователю соби
 - [ ] Hill-climb: ALPHA → BW → SQ
 - [ ] Score = -5×ERR + SNR - 1000×|FE| + SQ_bonus
 
+### Эксперименты по качеству декодера — TODO
+
+Backlog DSP-идей, которые хочу попробовать, отсортирован по
+gain/effort. Каждую — прогонять через multi-seed bench (§ honest
+3-run averaging) до того, как пускать в production.
+
+**Приоритет A — высокий выигрыш, сфокусированная работа:**
+
+- [ ] **Symbol-level MLSE по 32-матрице Baudot-алфавита.** Вместо
+  bit-by-bit hard decisions — накапливать soft-bit энергию в
+  7-элементный вектор на весь символ (165 мс для 45.45 baud, 150 мс
+  для 50 baud, со Start+Stop). В конце символа — Euclidean
+  correlation против всех 32 матриц ITA-2. Максимум выигрывает.
+  Позволяет «достроить» символ даже если 2–3 из 5 data-битов
+  разрушены. Стоимость: 32 × 7 умножений на символ — копейки,
+  ~15 кГц macs на 50 baud. Ожидание: +1..2 dB против текущего
+  Soft-Viterbi framer. Требует рефакторинга framer'а.
+
+- [ ] **Soft-Viterbi start/stop energy validation.** Текущий
+  Soft-Viterbi gate (B247) проверяет *структуру* фрейма, не
+  фактические энергии Start и Stop битов. Добавить проверку энергий
+  на 1-й и 7.5-й bit slot — это отрежет «character spray» фреймы в
+  deep fades. Маленький патч, полностью совместим со Stage 1.2.
+
+- [ ] **Gardner Early-Late Gate clock recovery.** Заменить
+  zero-crossing DPLL на Gardner gate: мерить энергию сигнала в 25 %
+  и 75 % bit slot'ах, замедлять clock если early-энергия выше,
+  ускорять если late, с phase-step clamp 0.05 чтобы избежать «phase
+  bounces» в шуме. Gardner работает на peaks, а не transitions —
+  стабильнее при низком CNR, где zero-crossings уже ненадёжны.
+  Большой рефакторинг DPLL, но самый естественный путь выжать ещё
+  пару dB из timing recovery.
+
+**Приоритет B — лёгкие выигрыши, защита от erratic поведения:**
+
+- [ ] **Flywheel DPLL confidence weighting.** Умножать
+  zero-crossing phase error на текущий envelope weight. В deep fade
+  DPLL «coast'ит» на последней стабильной частоте вместо того, чтобы
+  его дёргал шум. Драматически снижает jitter и character loss при
+  фейдинге. Маленький патч.
+
+- [ ] **Semantic auto-inversion lockout.** Счётчик «semantic
+  confidence», инкрементируется на каждый ITA-2 control (LTRS /
+  FIGS). Высокая уверенность **запрещает** auto-INV-флипер
+  включаться. Иначе в deep fade полярность может осциллировать между
+  NOR и INV, гоняясь за шумом.
+
+- [ ] **Per-symbol Maximum Ratio Combining (MRC) в dual-IQ
+  fusion.** Текущая Stage 3.3 LLR fusion использует глобальный SNR
+  pre-estimate для весов. Per-symbol версия с динамическими
+  `atc_mark_env` и `atc_space_env` внутри Euclidean distance —
+  тоньше, и предотвращает усиление шума, когда один тон полностью
+  замирает (selective fading).
+
+- [ ] **RTTY-aware LMS notch с «force field».** Текущий LMS-notch
+  глобальный. Добавление правила защиты passband (запрещать notch'у
+  заходить в Mark/Space ±margin) позволит ему агрессивнее охотиться
+  на QRM, не убивая полезный сигнал.
+
+- [ ] **Lookahead noise blanker.** Детектить spike в реальном
+  времени, но mute'ить *задержанное* аудио (16 сэмплов / ~1.6 мс
+  позже) — фактически «путешествие во времени», стирающее rising
+  edge молнии до того, как декодер её увидит.
+
+**Приоритет C — quality-of-life, squelch и AFC:**
+
+- [ ] **25-percentile noise-floor histogram.** 64-bin гистограмма
+  для оценки noise floor вместо простого среднего. Сильный RTTY
+  сигнал не задирает воспринимаемый noise floor → squelch и SNR
+  остаются точными в congested band.
+
+- [ ] **Parabolic AFC sub-bin interpolation.** 3 бина вокруг peak →
+  parabolic vertex → точность tracking'а 0.5 Гц вместо choppy 10
+  Гц. Убирает jitter на экранных маркерах.
+
+- [ ] **Adaptive DPLL phase clamp.** ±0.3 для первых 5 символов
+  после открытия squelch (fast acquisition), потом сузить до ±0.1
+  (jitter-resistant tracking).
+
+- [ ] **Hot-loop кэширование `expf()` констант.** Предвычислять
+  `expf(time-constant)` один раз при смене baud вместо вызова внутри
+  10 кГц горячей петли. Экономит ~60 cycles per sample.
+
 ### Прочее
 
 - [ ] Итоговый экран "Found: …" после SEARCH
@@ -351,6 +434,10 @@ Bonus: **B265 DUMP FRAMES** позволяет пользователю соби
 - [ ] I2S DAC Audio Output
 - [ ] FT8 / FT4 mode
 - [ ] WEFAX (HF weather fax)
+- [ ] IQ-direct вход с внешнего SDR-фронтенда (например, Belka-DX),
+  dual-ADC захват, обход аудио-тракта и AGC-клиппинга. +2–4 dB в
+  маргинальных условиях; обязателен для DRM (§9 архивного плана
+  Phase 8).
 
 ---
 

@@ -66,9 +66,8 @@ SNR-лесенка от −4 до −22 dB шагом 2 dB по 30 секунд 
 Всё, что ≤ 14 % на TouchRTTY, — это в основном артефакт cyclic-rotation
 в cer_analyze, а реальный декодированный текст читается чисто. Ниже
 этого baseline'а **TouchRTTY выдаёт читаемый телетайп там, где 2Tone
-показывает абракадабру.** Честный reference run лежит в
-[`datasets/logs/bench_auto_v2/`](datasets/logs/bench_auto_v2/)
-(commit `af4bdd0`).
+показывает абракадабру.** Тот же бенч можно воспроизвести на своём
+loopback'е по скриптам из [`docs/BENCH_TOOLING.ru.md`](docs/BENCH_TOOLING.ru.md).
 
 Низкое стандартное отклонение у NN-ON (1.5–3.2 pp на ключевых SNR)
 важнее самих цифр — это значит, улучшение воспроизводится между
@@ -111,11 +110,11 @@ v2.0.0 закрыла стратегическую цель «обогнать 2
   dual-core запас есть.
 * **WEFAX** — HF weather fax. Переиспользует pipeline спектра.
 * **DRM** — Digital Radio Mondiale, на более долгий горизонт.
+* **IQ-direct вход** — кормить квадратурное IQ прямо с SDR-фронтенда
+  (например, Belka-DX) в оба ADC Pico, минуя аудио-тракт и
+  AGC-клиппинг. +2–4 dB в маргинальных условиях и обязательное
+  условие для DRM/wideband работ выше.
 * **UI палитры / скины** — косметика. «Hacker green» и компания.
-
-Плюс research-backlog по качеству декодера (Symbol-level MLSE,
-Gardner clock recovery, n-gram language model, IQ-direct вход и пр.)
-собран в [`docs/NEIGHBOR_IDEAS.ru.md`](docs/NEIGHBOR_IDEAS.ru.md).
 
 ---
 
@@ -201,16 +200,15 @@ mass-storage диск `RPI-RP2` по-старинке: зажми BOOTSEL и в�
 │   ├── overnight_runner.sh    ← цикл train+sweep без надзора
 │   ├── parse_dump_frames.py   ← B265 dump stream → npz для тренировки
 │   └── rtty_simulator.html    ← браузерный генератор RTTY
-├── datasets/
-│   ├── nn_archive/            ← каждый weight blob, что я тренировал
-│   └── logs/                  ← bench evidence (compare-таблицы)
-└── docs/                      ← пять long-form гайдов
+└── docs/                      ← long-form гайды
 ```
 
-Каждый NN-эксперимент закоммичен вместе с multi-seed evidence в
-`datasets/logs/nn_compare_v*_s{42,43,44}/`. Если будущее изменение
-вдруг даст регресс — откатить к любому раннему weight blob — это один
-`cp`, потому что всё заархивировано.
+Bench-артефакты (per-SNR логи, веса прошлых NN-вариантов, sweep
+evidence) в репо не лежат — это локальные данные с конкретного
+стенда, которые раздули бы репо до полугигабайта. Выводы, к которым
+они привели, описаны в [`docs/NN_TRAINING.ru.md`](docs/NN_TRAINING.ru.md),
+а методология для повторения эквивалентного бенча на своём
+оборудовании — в [`docs/BENCH_TOOLING.ru.md`](docs/BENCH_TOOLING.ru.md).
 
 ---
 

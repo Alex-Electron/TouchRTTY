@@ -26,7 +26,6 @@ that's the right ratio.
 | Average N seed-runs into a mean ± σ table | `tools/aggregate_compare.py` |
 | Convert a `DUMP FRAMES` log into a training-ready npz | `tools/parse_dump_frames.py` |
 | Run train + flash + sweep cycles unattended | `tools/overnight_runner.sh` |
-| Inspect the historical bench against 2Tone | the snapshot in `datasets/logs/bench_auto_v2/` |
 | Generate test signal in a browser | open `tools/rtty_simulator.html` |
 
 If you're just trying to verify a fresh flash works, jump to
@@ -270,19 +269,19 @@ what I're doing implicitly.
 ## The headline bench against 2Tone
 
 I benchmarked TouchRTTY head-to-head against G3YYD's 2Tone 26.01a on
-the same audio. The bench evidence is committed at
-[`datasets/logs/bench_auto_v2/`](../datasets/logs/bench_auto_v2/) —
-per-SNR `compare.txt` plus raw decoded text from both decoders. At
-SNR ≤ −12 dB TouchRTTY produces readable telegraphy where 2Tone's
-output is random letters.
+the same audio. At SNR ≤ −12 dB TouchRTTY produces readable
+telegraphy where 2Tone's output is random letters. Per-SNR
+`compare.txt` and raw decoded text from both decoders were captured
+during the run to local logs — those aren't checked in (the half-GB
+of bench artifacts is local-machine specific), but the methodology
+is documented above so you can run the same comparison yourself.
 
 The infrastructure that drove that bench (Win32 hwnd handshake against
 N1MM Logger+, 2Tone's File→Save Text protocol, Voicemeeter routing,
 etc.) was reverse-engineered for the one-off benchmark and isn't
 shipped here — the goal of public-tree tooling is reproducibility for
 TouchRTTY-only experiments, not full reproducibility of the 2Tone
-comparison setup (which is finicky and Windows-specific). The
-committed evidence stands on its own.
+comparison setup (which is finicky and Windows-specific).
 
 The TouchRTTY-only benches (`nn_sweep_compare.py` etc.) work
 cross-platform.

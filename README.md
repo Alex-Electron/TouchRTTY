@@ -67,9 +67,9 @@ loopback.
 Anything ≤ 14 % on TouchRTTY is mostly cer_analyze's cyclic-rotation
 artifact — the actual decoded text reads clean. Below the artifact
 baseline, **TouchRTTY produces readable telegraphy at SNR levels where
-2Tone's output is random gibberish.** The honest reference run lives at
-[`datasets/logs/bench_auto_v2/`](datasets/logs/bench_auto_v2/) (commit
-`af4bdd0`).
+2Tone's output is random gibberish.** The exact bench can be
+reproduced on your own loopback with the scripts described in
+[`docs/BENCH_TOOLING.md`](docs/BENCH_TOOLING.md).
 
 The low standard deviation on NN-ON (1.5–3.2 pp at the key SNRs) matters
 more than the raw numbers — it means the improvement is reproducible
@@ -111,11 +111,11 @@ the short list:
   has headroom.
 * **WEFAX** — HF weather fax. Would reuse the spectrum-renderer path.
 * **DRM** — Digital Radio Mondiale, longer-term.
+* **IQ-direct input** — feed quadrature IQ straight from an SDR
+  front-end (e.g. Belka-DX) into the Pico's dual ADC, bypassing the
+  audio path and AGC clipping entirely. Worth +2–4 dB in marginal
+  conditions and a prerequisite for the wideband / DRM work above.
 * **UI palettes / skins** — cosmetic. "Hacker green" and friends.
-
-Plus a research backlog of decoder-quality ideas (Symbol-level MLSE,
-Gardner clock recovery, n-gram language model, IQ-direct input, etc.)
-collected in [`docs/NEIGHBOR_IDEAS.md`](docs/NEIGHBOR_IDEAS.md).
 
 ---
 
@@ -204,16 +204,15 @@ rejected a frame.
 │   ├── overnight_runner.sh    ← chain train+sweep cycles unattended
 │   ├── parse_dump_frames.py   ← B265 dump stream → npz for training
 │   └── rtty_simulator.html    ← in-browser RTTY generator
-├── datasets/
-│   ├── nn_archive/            ← every weight blob I trained, archived
-│   └── logs/                  ← bench evidence (compare tables, summaries)
-└── docs/                      ← the five long-form docs
+└── docs/                      ← the long-form docs
 ```
 
-Each NN experiment I ran is committed with its multi-seed evidence
-in `datasets/logs/nn_compare_v*_s{42,43,44}/`. If a future change ever
-regresses, you can roll back to any earlier weight blob with a single
-`cp` because everything is archived.
+The bench artifacts (per-SNR logs, prior NN weight blobs, sweep
+evidence) aren't checked in — they're local-machine specific and
+would balloon the repo to half a gigabyte. The decisions they
+supported are written up in [`docs/NN_TRAINING.md`](docs/NN_TRAINING.md),
+and the methodology to regenerate equivalent evidence on your own
+setup is in [`docs/BENCH_TOOLING.md`](docs/BENCH_TOOLING.md).
 
 ---
 

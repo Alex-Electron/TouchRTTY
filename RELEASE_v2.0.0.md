@@ -30,8 +30,8 @@ That's 3–6× lower real error rate at the SNRs where it matters. The low
 standard deviation matters more than the raw numbers — it means the
 improvement is reproducible across seeds, not a lucky run. The reference
 2Tone bench (committed evidence, the same audio that produced the
-gibberish vs telegraphy comparison) lives at
-[`datasets/logs/bench_auto_v2/`](datasets/logs/bench_auto_v2/).
+gibberish vs telegraphy comparison) is reproducible on your own loopback — see
+[`docs/BENCH_TOOLING.md`](docs/BENCH_TOOLING.md) for the procedure.
 
 ---
 

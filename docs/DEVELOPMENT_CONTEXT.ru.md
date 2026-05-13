@@ -20,7 +20,7 @@
 - **Текущая ветка:** `feat/alex-cl-dev` (выложена на GitHub как чистый
   squashed commit `v2.0.0`). `main` ещё отстаёт.
 - **Что дальше:** real-air NN oracle pipeline, SITOR-B/NAVTEX FEC,
-  Phase 10 (см. `NEIGHBOR_IDEAS.md`). Подробности — раздел 6.
+  IQ-direct вход. Подробности — раздел 6.
 
 **Репозиторий:** `https://github.com/Alex-Electron/TouchRTTY.git`
 **Путь:** `C:\Temp\TouchRTTY`
@@ -43,7 +43,6 @@
 | **Phase 7** — WEFAX (HF weather fax) | — | ⏸ PLANNED | `docs/archive/phase1-8/PHASE7_WEFAX_PLAN.md` |
 | **Phase 8** — DRM | — | ⏸ PLANNED | `docs/archive/phase1-8/PHASE8_DRM_PLAN.md` |
 | **Phase 9** — Hybrid RTTY decoder (dual-IQ + LLR + Soft-Viterbi + TinyML NN) | B242-B265 | ✅ DONE (v2.0.0) | `RELEASE_v2.0.0.md`, `docs/PHASE9_*.md` |
-| **Phase 10** — research backlog (Symbol-MLSE, Gardner, n-gram LM, IQ-вход) | — | 🔬 RESEARCH | `docs/NEIGHBOR_IDEAS.md` |
 
 > **Почему Phase 9 был сделан раньше Phase 4-8.** Приоритет сместился к
 > стратегической цели «обогнать 2Tone на low SNR». Phase 4-8 — *модовое
@@ -188,9 +187,9 @@ picotool load -f TouchRTTY.uf2
    от hard-decision (NN не может научиться обыгрывать hard-decision).
 2. **SITOR-B / NAVTEX FEC** — 100 baud / 170 Hz, CCIR 476, ratio 4:3,
    time diversity. Память `project_sitorb.md`.
-3. **Phase 10** — `docs/NEIGHBOR_IDEAS.md`: Symbol-MLSE, Gardner clock
-   recovery, Flywheel DPLL, semantic auto-INV lockout. Каждый — отдельный
-   эксперимент с multi-seed bench.
+3. **IQ-direct вход** — квадратурное IQ с внешнего SDR-фронтенда
+   прямо в dual ADC, минуя аудио-тракт и AGC. +2–4 dB в маргинальных
+   условиях и обязательное условие для DRM.
 4. **Phase 4-8** — расширение режимов (CW advanced, FT8/FT4, WEFAX,
    DRM, SD-карта). Низкий приоритет — отдельная стратегическая ветка.
 5. **UI палитры / скины** — память `project_ui_palettes.md` («hacker
@@ -228,7 +227,6 @@ picotool load -f TouchRTTY.uf2
 | Что было в v2.0.0 | `RELEASE_v2.0.0.md` |
 | История Phase 9 design | `docs/PHASE9_HYBRID_DECODER_PLAN.md` |
 | Phase 9 progress срез B245 | `docs/PHASE9_PROGRESS_REPORT.md` |
-| Идеи на Phase 10 | `docs/NEIGHBOR_IDEAS.md` |
 | Phase 1-8 архив | `docs/archive/phase1-8/` |
 
 ---
