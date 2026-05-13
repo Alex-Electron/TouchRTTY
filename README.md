@@ -45,7 +45,7 @@ What's interesting about this build:
   errors show up as a single red `*` in the on-screen text instead of
   the full `[ERR]` token. Cleaner reading.
 
-Full release notes live in [`CHANGELOG_B265.md`](CHANGELOG_B265.md).
+The full project changelog is in [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 
@@ -188,7 +188,8 @@ rejected a frame.
 ```
 .
 ├── README.md                  ← this file
-├── CHANGELOG_B265.md          ← what's new in B265
+├── CHANGELOG.md               ← full project changelog
+├── RELEASE_v2.0.0.md          ← release notes for v2.0.0
 ├── TouchRTTY_v2.0.0.uf2     ← ready-to-flash firmware
 ├── src/
 │   ├── display/               ← ILI9488 + PIO

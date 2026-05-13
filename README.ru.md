@@ -45,7 +45,7 @@
   а не закопаны в попап. Ошибки frame-rejection показываются на экране
   как одна красная `*`, а не полный токен `[ERR]`. Читается чище.
 
-Подробнее — в [`CHANGELOG_B265.md`](CHANGELOG_B265.md).
+Полный changelog проекта — в [`CHANGELOG.md`](CHANGELOG.md) (русский — [`CHANGELOG.ru.md`](CHANGELOG.ru.md)).
 
 ---
 
@@ -185,7 +185,8 @@ mass-storage диск `RPI-RP2` по-старинке: зажми BOOTSEL и в�
 .
 ├── README.md                  ← английский (primary)
 ├── README.ru.md               ← этот файл
-├── CHANGELOG_B265.md          ← что в B265
+├── CHANGELOG.md               ← полный changelog проекта
+├── RELEASE_v2.0.0.md          ← release notes к v2.0.0
 ├── TouchRTTY_v2.0.0.uf2     ← готовая прошивка
 ├── src/
 │   ├── display/               ← ILI9488 + PIO
