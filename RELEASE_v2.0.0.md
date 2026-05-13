@@ -1,5 +1,7 @@
 # TouchRTTY v2.0.0 — Phase 9 + TinyML NN
 
+> 🇷🇺 [Читать на русском](RELEASE_v2.0.0.ru.md)
+
 **Release date:** 2026-05-12
 **Firmware build:** B265
 **NN weights:** v13 (`weight_uncertain=3.0` PyTorch recipe)
@@ -14,7 +16,7 @@ TouchRTTY v2.0.0 is a substantial rewrite over v1.72 — a fundamentally
 new decoder architecture with a learned post-classifier on top. On the
 same audio where [2Tone 26.01a](http://www.tonemap.com/Software.html)
 collapses into random letters at low SNR, this build produces readable
-telegraphy. We benchmarked it against 2Tone over multiple seeds, and the
+telegraphy. I benchmarked it against 2Tone over multiple seeds, and the
 multi-run-averaged numbers are:
 
 | SNR | TouchRTTY NN OFF | TouchRTTY NN ON | 2Tone (real errors) |
@@ -126,7 +128,7 @@ Six long-form docs in `docs/`:
   with examples
 * [`MENU_GUIDE.md`](docs/MENU_GUIDE.md) — touchscreen UI walkthrough
 * [`NN_TRAINING.md`](docs/NN_TRAINING.md) — production v13 recipe + the
-  negative-result ledger explaining what we tried and what didn't work
+  negative-result ledger explaining what I tried and what didn't work
 * [`BENCH_TOOLING.md`](docs/BENCH_TOOLING.md) — bench scripts decision
   tree and workflows
 * Plus historical Phase 9 design docs and lessons-learned notes
@@ -183,7 +185,7 @@ Requires Pico SDK 2.x and an ARM toolchain.
 ## Roadmap
 
 There's plenty of headroom left in the NN — the negative-result ledger
-in [`docs/NN_TRAINING.md`](docs/NN_TRAINING.md) documents 10+ recipes we
+in [`docs/NN_TRAINING.md`](docs/NN_TRAINING.md) documents 10+ recipes I
 tried that didn't pay off, and the most promising remaining direction
 is building a trusted-oracle pipeline for labelling uncertain real-air
 frames (DWD template matching). Real-air augmentation today is limited

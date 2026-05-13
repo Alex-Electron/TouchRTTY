@@ -1,5 +1,7 @@
 # Changelog: TouchRTTY (RP2350)
 
+> 🇷🇺 [Читать на русском](CHANGELOG.ru.md)
+
 All notable changes to this project will be documented in this file.
 
 ---
@@ -706,7 +708,7 @@ Baseline-замер B230 показал: serial-вывод устройства 
 ## [Build 221] - 2026-04-12
 ### Added
 - **Seqlock для shared DSP data**: Core 0 оборачивает запись `shared_fft_ts/adc_waveform/mag_m/mag_s` в инкремент `shared_dsp_seq` с `__dmb()` барьерами. Core 1 читает с retry-циклом (до 3 попыток) — если seq изменилась между началом и концом memcpy, данные считаются рваными и перечитываются. Задел под будущий перенос FFT на Core 0 (частота shared-обновлений вырастет).
-- **SAVE flash serial indicator**: `[SAVE] writing flash (DSP paused ~45ms)...` + `[SAVE] done in X us`. Кнопка SAVE в UI уже меняет цвет визуально.
+- **SAVE flash serial indicator**: `[SAVE] writing flash (DSP paused ~45ms)...` + `[SAVE] done in X me`. Кнопка SAVE в UI уже меняет цвет визуально.
 
 ### Changed
 - Memory barriers `__dmb()` добавлены в Core 0 writer и Core 1 reader для корректной работы seqlock на двухъядерном ARM.

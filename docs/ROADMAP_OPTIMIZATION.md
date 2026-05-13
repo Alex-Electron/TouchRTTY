@@ -1,321 +1,403 @@
-# Roadmap: Оптимизация и Улучшение (Phase 3+)
+# Roadmap: optimization and improvement (Phase 3+)
 
-*Обновлено: 2026-04-12, Build 218*
+> 🇷🇺 [Читать на русском](ROADMAP_OPTIMIZATION.ru.md)
 
-## 0. Рефакторинг кода (Build 189-206)
+*Updated: 2026-05-12, **Build 265 / v2.0.0** released.*
 
-### Разделение main.cpp на модули
+> **Status:** Phase 9 went to production along with the TinyML NN
+> classifier. The strategic goal of section 8 ("better than 2Tone") is
+> **achieved** — multi-run AWGN bench shows TouchRTTY beating 2Tone by
+> 3–6× on real CER at SNR −12..−22 dB. The path turned out different
+> from the originally planned route (dual-IQ + LLR instead of Goertzel
+> + Character-ML), but the result is the same. Details in section 8
+> below.
 
-До Build 189 весь код (DSP, UI, serial, touch, state machines) находился в одном файле `main.cpp` (~1843 строки). В процессе развития проект был разбит на модули:
+## 0. Code refactoring (Build 189-206) — DONE
 
-| Файл | Строк | Назначение |
-|------|-------|-----------|
-| `main.cpp` | 55 | Точка входа, инициализация HW, запуск Core 1 |
-| `dsp_pipeline.cpp` | 703 | Core 0: ADC→AGC→I/Q→LPF→ATC→DPLL→Baudot→BAUD-DET→STOP-DET→auto-INV→auto-recovery |
-| `ui_loop.cpp` | 915 | Core 1: FFT, SEARCH, спектр/водопад, touch, serial parser |
-| `serial_commands.cpp` | 156 | Обработка 18+ serial-команд (BAUD, SHIFT, STOP, SEARCH и др.) |
-| `settings_flash.cpp` | 103 | Чтение/запись AppSettings во Flash (2MB offset) |
-| `app_state.hpp/.cpp` | 141+95 | Все shared volatile переменные и константы |
-| `ui/UIManager.hpp` | 718 | Отрисовка: спектр, водопад, текстовая зона, top/bottom bar, попапы |
-| **Итого** | **2745** | |
+### Splitting main.cpp into modules — DONE
 
-### Ключевые принципы рефакторинга
+Up to Build 189, everything (DSP, UI, serial, touch, state machines)
+lived in one `main.cpp` (~1843 lines). As the project grew it was
+broken into modules:
 
-1. **Разделение по ядрам:** `dsp_pipeline.cpp` исполняется строго на Core 0, `ui_loop.cpp` — на Core 1. Это гарантирует отсутствие взаимных блокировок.
+| File | Lines | Purpose |
+|------|------:|---------|
+| `main.cpp` | 55 | Entry point, HW init, Core 1 launch |
+| `dsp_pipeline.cpp` | 703 | Core 0: ADC → AGC → I/Q → LPF → ATC → DPLL → Baudot → BAUD-DET → STOP-DET → auto-INV → auto-recovery |
+| `ui_loop.cpp` | 915 | Core 1: FFT, SEARCH, spectrum/waterfall, touch, serial parser |
+| `serial_commands.cpp` | 223 | 40+ serial commands (B265) |
+| `settings_flash.cpp` | 103 | Reading/writing AppSettings to flash (2 MB offset) |
+| `app_state.hpp/.cpp` | 144+96 | All shared volatile variables and constants |
+| `ui/UIManager.hpp` | 1100+ | Rendering: spectrum, waterfall, text, top/bottom bar, menu, Tuning Lab |
+| **Total** | **~3500** | |
 
-2. **Shared state как единая точка:** Все межъядерные переменные собраны в `app_state.hpp/cpp`. Volatile semantics, без mutex.
+### Refactoring principles
 
-3. **State machines изолированы:** BAUD-DET, STOP-DET, auto-INV, auto-recovery — каждый со своими фазами и local state, все внутри `dsp_pipeline.cpp`.
+1. **Core separation:** `dsp_pipeline.cpp` runs strictly on Core 0,
+   `ui_loop.cpp` on Core 1. Guarantees no mutual blocking.
+2. **Shared state as single source:** all inter-core variables in
+   `app_state.hpp/cpp`. Volatile semantics, no mutex.
+3. **State machines isolated:** BAUD-DET, STOP-DET, auto-INV,
+   auto-recovery — each with its own phases and local state, all
+   inside `dsp_pipeline.cpp`.
+4. **UI separate from logic:** `UIManager.hpp` is pure rendering,
+   takes parameters by argument.
 
-4. **UI отделён от логики:** `UIManager.hpp` — чистая отрисовка, принимает параметры через аргументы, не читает shared state напрямую (кроме отрисовки баров).
+## 0a. Performance optimization (Build 189-194) — DONE
 
-## 0a. Оптимизация производительности (Build 189-194)
+### Reducing Core 0 load (DSP)
 
-### Снижение загрузки Core 0 (DSP)
+**Before optimization (Build 188):** Core 0 = ~30 %, Core 1 = ~70 %.
+**After optimization (Build 191+):** Core 0 = ~7 %, Core 1 = ~25-35 %.
 
-**До оптимизации (Build 188):** Core 0 = ~30%, Core 1 = ~70%.
-**После оптимизации (Build 191+):** Core 0 = ~7%, Core 1 = ~25-35%.
-
-Ключевые оптимизации:
+Key optimizations:
 
 1. **Strict Float Policy (Build 189):**
-   - Полный аудит: все `double` → `float`, `sin()` → `sinf()`, `log10()` → `log10f()`
-   - RP2350 имеет single-precision FPU; double-precision эмулируется софтово (~10x медленнее)
-   - Эффект: Core 0 с ~30% до ~15%
+   - Full audit: all `double` → `float`, `sin()` → `sinf()`,
+     `log10()` → `log10f()`
+   - RP2350 has single-precision FPU; double-precision is software
+     emulated (~10× slower)
+   - Effect: Core 0 from ~30 % to ~15 %
 
 2. **Compiler flags (Build 189):**
    ```cmake
    -O3 -ffast-math -funroll-loops
    -mfloat-abi=hard -mfpu=fpv5-sp-d16
    ```
-   `-flto` **не** используется — несовместим с Pico SDK `__wrap_` символами.
+   `-flto` **not** used — incompatible with Pico SDK `__wrap_`
+   symbols.
 
 3. **Hardware ADC FIFO (Build 190):**
-   - `adc_fifo_setup()` + `adc_run(true)` для 10kHz без джиттера
-   - `tight_loop_contents()` вместо `__wfe()` (WFE теряет сэмплы без ADC IRQ)
+   - `adc_fifo_setup()` + `adc_run(true)` for jitter-free 10 kHz
+   - `tight_loop_contents()` instead of `__wfe()` (WFE loses samples
+     without ADC IRQ)
 
 4. **fast_log2f() (Build 190):**
-   - IEEE 754 bit-trick для логарифма
-   - ~4x быстрее стандартного `log10f()`
-   - Используется в расчёте dB для сигнала и SNR
+   - IEEE 754 bit trick for the logarithm
+   - ~4× faster than stock `log10f()`
+   - Used in dB calculation for signal and SNR
 
 5. **AGC precompute (Build 190):**
-   - `1.0f / release` вычисляется один раз → умножение вместо деления в inner loop
+   - `1.0f / release` computed once → multiplication instead of
+     division in the inner loop
 
-6. **FFT на Core 1 (Build 191):**
-   - FFT перенесён с Core 0 на Core 1 — он нужен только для отрисовки спектра и SEARCH
-   - Core 0 освобождён от 1024-point FFT (~2ms per frame)
-   - Эффект: Core 0 с ~15% до ~7%
+6. **FFT on Core 1 (Build 191):**
+   - FFT moved from Core 0 to Core 1 — only needed for spectrum
+     rendering and SEARCH
+   - Core 0 freed from the 1024-point FFT (~2 ms per frame)
+   - Effect: Core 0 from ~15 % to ~7 %
 
-7. **Ping-Pong DMA Buffers (Build 190):**
-   - Двойная буферизация для SPI дисплея
-   - Одна полоска рисуется пока вторая передаётся
+7. **Ping-Pong DMA buffers (Build 190):**
+   - Double buffering for SPI display
+   - One strip drawn while the other is transferred
 
-### Снижение загрузки Core 1 (UI)
+### Reducing Core 1 load (UI)
 
-1. **Спрайтовая отрисовка (LovyanGFX):**
-   - Top bar, bottom bar, текстовая зона — каждый в отдельном спрайте
-   - Перерисовка только при изменении данных (not every frame)
+1. **Sprite rendering (LovyanGFX):** redraw only when data changes.
+2. **Waterfall optimization:** direct SPI DMA for waterfall strips.
+3. **FFT rate limiting:** every ~48 ms = 480 samples.
+4. **Waterfall LUT + circular history buffer** (Build 219) — 480×64
+   uint8 instead of 61 KB sprite, Core 1 lower bound 60 % → 39 %.
 
-2. **Waterfall оптимизация:**
-   - Прямой SPI DMA для полосок водопада
-   - 480px × 1 строка за один DMA transfer
+### Current load (Build 265)
 
-3. **FFT rate limiting:**
-   - FFT считается не на каждый frame, а при `new_data_ready` (каждые ~48ms = 480 сэмплов)
+- **Core 0:** 5-8 % (DSP idle) / 10-15 % (BAUD-DET active) / +1-2 %
+  when NN gate is open
+- **Core 1:** 25-35 % (depends on display mode)
 
-### Текущая загрузка (Build 218)
-- **Core 0:** 5-8% (DSP idle) / 10-15% (BAUD-DET active, histogram + scoring)
-- **Core 1:** 25-35% (зависит от display mode: спектр+водопад vs tuning lab)
+## 1. Font system (Roadmap item #1)
 
-## 1. Шрифтовая система (Roadmap Item #1)
+### Stage 1: 4 font modes — DONE (Build 195)
 
-### Этап 1: 4 режима шрифтов — DONE (Build 195)
-- [x] BIG: Spleen 8×16 (9 строк, 55 символов)
-- [x] MED: Bitocra 7×13 (11 строк, 62 символа)
-- [x] SMALL: Font0 6×8 (15 строк, 73 символа)
-- [x] TINY: Spleen 5×8 (17 строк, 90 символов) — Build 199
-- [x] Конвертер `tools/bdf2gfx.py`
-- [x] Автоматический line_width при переключении шрифта
-- [x] Сохранение в flash
+- [x] BIG: Spleen 8×16 (9 rows, 55 chars)
+- [x] MED: Bitocra 7×13 (11 rows, 62 chars)
+- [x] SMALL: Font0 6×8 (15 rows, 73 chars)
+- [x] TINY: Spleen 5×8 (17 rows, 90 chars) — Build 199
+- [x] Converter `tools/bdf2gfx.py`
+- [x] Automatic line_width adjustment when changing font
+- [x] Save in flash
 
-### Этап 2: Font Lab — TODO
-Отдельный экран для тонкой настройки шрифтов (размер, spacing, line_height).
+### Stage 2: Font Lab — TODO
 
-### Этап 3: Скины и цветовые схемы — TODO
-- Classic Green (текущая)
-- SDR Warm (тёмно-синий фон, тёплая палитра водопада)
+A separate screen for fine font tuning (size, spacing, line_height).
 
-## 2. Интеллектуальная автоматика приёма — DONE
+### Stage 3: Skins and color schemes — TODO
 
-### Авто-инверсия Mark/Space — DONE (Build 196-202)
-- [x] Сравнительный алгоритм (ERR before/after flip, ±3% порог)
-- [x] Индикатор NOR?/INV? при неопределённости
-- [x] SEARCH сбрасывает INV → NOR
+- Classic Green (current)
+- SDR Warm (dark blue background, warm waterfall palette)
 
-### SEARCH (автопоиск) — DONE (Build 198-216)
-- [x] FFT-based, все 8 шифтов, multi-signal (до 8)
+## 2. Intelligent reception automation — DONE
+
+### Auto mark/space inversion — DONE (Build 196-202)
+
+- [x] Comparative algorithm (ERR before/after flip, ±3 % threshold)
+- [x] NOR?/INV? indicator on uncertainty
+- [x] SEARCH resets INV → NOR
+
+### SEARCH (auto signal find) — DONE (Build 198-216)
+
+- [x] FFT-based, all 8 shifts, multi-signal (up to 8)
 - [x] Parabolic peak interpolation (Build 216)
 - [x] Shift-proportional dedup tolerance (Build 216)
 - [x] dist_penalty = 2.5 (Build 216)
-- [x] Cycling (< 10s между нажатиями)
+- [x] Cycling (< 10 s between taps)
 
-### Авто-определение шифта — DONE (Build 200-203)
-- [x] 8 стандартных шифтов, режим SHIFT AUTO (idx=8)
+### Auto-shift detection — DONE (Build 200-203)
+
+- [x] 8 standard shifts, SHIFT AUTO mode (idx=8)
 - [x] Popup 3×3
 
-### BAUD-DET (автоопределение скорости) — DONE (Build 206)
+### BAUD-DET (auto baud rate) — DONE (Build 206)
+
 - [x] Symbol Duration Histogram + Harmonic Scoring
 - [x] Fallback: ERR verify (sequential test)
 - [x] 4 baud rates: 45.45 / 50 / 75 / 100
 - [x] Popup 3×2
 
-### STOP-DET (автоопределение стоп-бита) — DONE (Build 205-218)
+### STOP-DET (auto stop bit) — DONE (Build 205-218)
+
 - [x] Direct gap measurement (state-7-end → next start-bit)
-- [x] Warmup 1.5s, idle filter 1.25T, bin boundaries 0.25/0.85T (Build 218)
-- [x] Chain BAUD→STOP через shared_chain_stop_after_baud (Build 217)
+- [x] Warmup 1.5 s, idle filter 1.25T, bin boundaries 0.25/0.85T
+  (Build 218)
+- [x] Chain BAUD→STOP via shared_chain_stop_after_baud (Build 217)
 - [x] Popup 2×2
 
-### Полный pipeline — DONE (Build 217)
+### Full pipeline — DONE (Build 217)
+
 - [x] SEARCH → SHIFT → BAUD (chain) → STOP → INV
-- [x] Автоматическая цепочка, STOP ждёт завершения BAUD
-- [ ] Итоговый экран "Found: 50 Baud, 450 Hz shift, 1.5 stop"
+- [x] Automatic chain, STOP waits for BAUD to finish
+- [ ] Final screen "Found: 50 Baud, 450 Hz shift, 1.5 stop"
 
 ### Auto-Recovery — DONE (Build 217)
-- [x] ERR > 15% для 3s → BAUD-DET → chain → STOP-DET
-- [x] Защита от конфликта с auto-INV
+
+- [x] ERR > 15 % for 3 s → BAUD-DET → chain → STOP-DET
+- [x] Protection against conflict with auto-INV
 
 ### Clipping Indicator — DONE (Build 216)
-- [x] SIG bar мигает red/white при ADC clipping
-- [x] Текст "CLIP!" мигает синим
-- [x] Latch 1.5 секунды
 
-## 3. Аппаратное Ускорение Рендеринга
+- [x] SIG bar blinks red/white on ADC clipping
+- [x] "CLIP!" text blinks blue
+- [x] 1.5 s latch
+
+## 3. Hardware-accelerated rendering
+
 - [ ] Hardware Scroll (ILI9488 VSCRSADD)
 - [ ] SIO INTERP Colormap
 - [x] Ping-Pong DMA Buffers (Build 190)
+- [x] PIO-driven SPI at 60 MHz (Build 191+) — replaced software SPI
+  with a PIO state machine
 
-## 4. Оптимизация под RP2350
+## 4. RP2350 optimization
+
 - [x] Strict Float Policy (Build 189)
 - [x] Hardware ADC FIFO (Build 190)
-- [x] fast_log2f() IEEE 754 bit-trick (Build 190)
+- [x] fast_log2f() IEEE 754 bit trick (Build 190)
 - [x] AGC precompute (Build 190)
-- [x] FFT на Core 1 (Build 191)
-- [ ] Memory Barriers (__dmb())
+- [x] FFT on Core 1 (Build 191)
+- [ ] Memory Barriers (`__dmb()`)
 - [ ] CMSIS-DSP (arm_fir_f32, arm_biquad_f32)
 
-## 5. UI оптимизация
+## 5. UI optimization
+
 - [ ] Selective Redraw
 - [ ] Widget Framework
-- [x] Eye Diagram с phosphor persistence (Build 194)
+- [x] Eye Diagram with phosphor persistence (Build 194)
 - [x] Error Rate Indicator, 3 thin bars (Build 191)
+- [x] Tuning Lab with live ALPHA/K/SQ tuning (Build 194)
+- [x] Inline NOTCH/VIT toggles in menu (Build 263, dropped the popup)
+- [x] Red `*` for [ERR] on screen (Build 263)
 
-## 6. Compiler Flags
+## 6. Compiler flags
+
 - [x] `-O3`, `-ffast-math`, `-funroll-loops` (Build 189)
 - [x] `-mfloat-abi=hard`, `-mfpu=fpv5-sp-d16` (Build 189)
-- **Примечание:** `-flto` несовместим с Pico SDK `__wrap_`
+- **Note:** `-flto` is incompatible with Pico SDK `__wrap_`
 
-## 7. Serial Command Interface
-- [x] 18+ команд (Build 194-206)
-- [x] Диагностический поток `[D]` (Build 194)
-- [x] serial_cmd.ps1 с try/finally/Dispose + DTR/RTS (Build 217)
+## 7. Serial command interface
 
-## 8. Гибридный декодер RTTY (ЦЕЛЬ: лучше 2Tone)
+- [x] 40+ commands (Build 194-265)
+- [x] Diagnostic stream `[D]` (Build 194)
+- [x] `serial_cmd.ps1` with try/finally/Dispose + DTR/RTS (Build 217)
+- [x] **B265 DUMP FRAMES** — per-frame soft-bit dump for NN training
+  capture
 
-**Стратегическая цель:** Порог декодирования **−15..−16 дБ SNR** — лучше, чем у любого существующего декодера RTTY в мире (2Tone: ~−13 дБ, MMTTY: ~−9 дБ, fldigi: ~−5 дБ).
+## 8. Hybrid RTTY decoder — **GOAL ACHIEVED** (v2.0.0)
 
-**Подход:** Не заменяем I/Q+DPLL, а **дополняем** параллельной цепочкой Goertzel Matched Filter + Character-level ML + контекстный приор. I/Q остаётся для визуализации (waterfall, Lissajous, tuning) и fallback при drift.
+**Strategic goal:** decoding threshold **−15..−16 dB SNR** — better
+than any existing RTTY decoder in the world.
 
-Детальный анализ: `docs/20260412/IQ_VS_GOERTZEL_ML_ANALYSIS.md`, `docs/20260412/RTTY_DECODER_ALGORITHMS_COMPARISON.md`.
+**What I got versus the original plan:**
 
-### Архитектура
+Architecture is different from the original Goertzel + Character-ML
+plan. I went with **dual-IQ + LLR fusion + TinyML NN classifier**,
+and it worked. So the substage statuses below reflect the actual path,
+not the original.
+
+### Architecture (actual, Phase 9)
 
 ```
-                    ┌─ I/Q + DPLL ─→ Waterfall, Lissajous, tuning UI
-ADC → FIR → AGC ───┤                  Fallback (drift >2%, freq >5 Гц)
-                    │
-                    └─ Goertzel Matched ─→ Character ML ─→ Context Prior
-                                                                   │
-                                                                   ▼
-                                                          Символ + confidence
+                              ┌─ Path A (narrow FIR + I/Q + DPLL) ─┐
+ADC → AGC → BPF → LMS notch ─┤                                     ├─ LLR fusion ─→ NN gate ─→ Baudot
+                              └─ Path B (wide FIR + I/Q + DPLL) ────┘    (B264)
+                                                                          │
+                                                                          ▼
+                                                                 Soft-Viterbi
+                                                                 frame gate
 ```
 
-### Этап 1: Dual-Goertzel Matched Filter (параллельно I/Q) — TODO
-- [ ] Goertzel Mark + Space (2 МАС/сэмпл)
-- [ ] Побитовое решение на выходе Goertzel
-- [ ] Сравнение BER с I/Q на идентичных записях (WebSDR)
-- [ ] **Ожидаемый выигрыш: +1-2 дБ vs текущего I/Q**
-- [ ] Serial command: `DECODER GOERTZEL|IQ|HYBRID`
+### Actual results (multi-run AWGN, 3 seeds × 30 s dwell)
 
-### Этап 2: Multi-phase Goertzel (MMTTY-style) — TODO
-- [ ] 8 фаз × 2 тона = 16 Goertzel параллельно
-- [ ] Early-late gate синхронизация без DPLL
-- [ ] Замена zero-crossing sync для Goertzel pipeline
-- [ ] **Ожидаемый выигрыш: +1 дБ дополнительно**
+| Decoder | Claimed threshold | Real CER at −16 dB SNR |
+|---|---:|---:|
+| fldigi | ~−5 dB | (not head-to-head benched) |
+| MMTTY | ~−9 dB | (not head-to-head benched) |
+| 2Tone (current best) | ~−13 dB | **~58 pp real errors** |
+| **TouchRTTY v2.0.0** | ~**−16 dB** | **~9 pp real errors** ✓ |
 
-### Этап 3: Character-level ML (2Tone-style) — TODO
-- [ ] 32 Baudot символа × 8 фаз = 256 корреляций на символ
-- [ ] Matched filter за полный 7.5-битный символ (start+5data+1.5stop)
-- [ ] Предвычисленные шаблоны (пересчёт при смене baud/shift/stop)
-- [ ] Soft output: метрика уверенности для каждого символа
-- [ ] **Ожидаемый выигрыш: +2-3 дБ дополнительно**
+See `RELEASE_v2.0.0.md` and `datasets/logs/multirun_summary.md`.
 
-### Этап 4: Улучшения сверх 2Tone — TODO
+### Stage 1: Dual-Goertzel matched filter — **N/A** (architecture changed)
 
-Это то, чего у 2Tone **нет** — наш путь к best-in-world:
+Originally planned: a Goertzel filter parallel to I/Q. Instead I
+implemented **dual-IQ architecture** — two parallel FIR+I/Q+DPLL
+pipelines (narrow + wide) merging via LLR. Goertzel wasn't needed —
+two I/Q chains cover the same case (narrow band for clean, wide for
+drift) more cleanly and without separate synchronization.
 
-#### 4a. Контекстный языковой приор (Bayesian n-gram) — TODO
-- [ ] Таблица частот букв ITA2 (EN + RU)
-- [ ] Биграммы/триграммы для топ-500 паттернов
-- [ ] Высокоприоритетные последовательности: "CQ CQ", "DE", "TU", "73", "RY RY" (tuning)
-- [ ] Bayes: `P(char | correlation) × P(char | context)`
-- [ ] **+0.5-1 дБ**
+### Stage 2: Multi-phase Goertzel — **N/A** (architecture changed)
 
-#### 4b. FIGS/LTRS Viterbi state machine — TODO
-- [ ] State machine: LTRS-mode / FIGS-mode
-- [ ] В FIGS-mode — только цифры и знаки валидны
-- [ ] В LTRS-mode — только буквы валидны
-- [ ] Невозможные последовательности автокорректируются
-- [ ] **+0.3-0.5 дБ**
+See above — DPLL+PI controller on both chains closed the
+multi-phase-sync need.
 
-#### 4c. Adaptive Noise Blanker + Spectral Subtraction — TODO
-- [ ] Noise blanker: импульсные помехи (>3σ over 100ms) → муте 5 мс
-- [ ] Spectral subtraction: FFT noise floor, вычитание из bin'ов Mark/Space
-- [ ] Работает на уровне ADC→FIR, до Goertzel
-- [ ] **+0.5-1 дБ в реальных HF-условиях**
+### Stage 3: Character-level ML — **DONE (v13 NN)** ✅
 
-#### 4d. Temporal Diversity (Sliding Correlation) — TODO
-- [ ] Скользящее окно корреляции (50% overlap)
-- [ ] Накопление confidence по 2-3 попыткам
-- [ ] Консенсусное решение
-- [ ] **+0.3-0.5 дБ**
+Achieved through PyTorch-trained MLP instead of 2Tone-style matched
+filter:
 
-#### 4e. Multi-band Goertzel (для SEARCH) — TODO
-- [ ] Параллельные Goertzel для всех 8 shift
-- [ ] Автовыбор лучшего по контрасту Mark/Space
-- [ ] Мгновенный lock-on без повторного сканирования
-- [ ] Ускорение SEARCH в 2-3 раза
+- [x] **7→128→64→32 TinyML MLP** (~44 KB float32 weights)
+- [x] **B264 confidence gate** — NN runs only when
+  `data_min/sig_level < 0.20`
+- [x] **PyTorch trainer** with per-sample loss weighting (v13
+  production recipe)
+- [x] **Soft output** — `nn_margin = top_logit − second_top_logit`
+  used as a confidence measure
+- [x] **Multi-run validation** — σ < 4 pp at key SNRs
+- [x] **Reproducible**: code, weights, data, bench evidence all in repo
 
-#### 4f. Tiny Neural Net (fallback для ambiguous) — TODO
-- [ ] 3-layer MLP: 60 input (7.5 бит × 8 фаз корреляции) → 32 hidden → 32 output
-- [ ] ~8KB параметров, fixed-point Q15
-- [ ] Активируется при ML confidence 40-60%
-- [ ] Тренировка на датасете WebSDR DWD (50+ часов)
-- [ ] Script обучения — отдельно, на PC
-- [ ] **+0.3-0.5 дБ при маргинальном SNR**
+### Stage 4: Improvements beyond 2Tone
 
-#### 4g. Soft Confidence UI — TODO
-- [ ] Зелёный текст: ML confidence >80%
-- [ ] Жёлтый: 40-80%
-- [ ] Красный: fallback на I/Q / неуверен
-- [ ] Информация о текущем decoder mode в top bar: `[ML:94%]`
+#### 4a. Contextual language prior (n-gram) — TRIED, NOT SHIPPED
 
-### Итоговый бюджет CPU (Core 0 @ 300 МГц)
+Experiment in `tools/ngram_lm/` (see tree history). Gain of +1.63 pp
+on the internal-corpus bench (B259), but didn't reproduce on real-air
+consistently. Shelved.
 
-| Компонент | CPU |
+#### 4b. FIGS/LTRS Viterbi — **DONE (B262 VIT)** ✅
+
+Implemented as part of the **Soft-Viterbi frame validation gate**:
+
+- [x] State machine framing with energy + parity validation
+- [x] Configurable via the `VIT ON/OFF` serial command
+- [x] Default ON in production
+
+#### 4c. Adaptive Noise Blanker + Spectral Subtraction — PARTIAL ✅
+
+- [x] **LMS adaptive notch chain** (`NOTCH ON/OFF`, Build 244+) —
+  kills narrow carriers / heterodynes
+- [ ] Impulse noise blanker (`> 3σ over 100 ms → mute 5 ms`) — TODO
+- [ ] **Wiener Spectral subtraction** — TRIED, NOT SHIPPED. B258
+  experiment (`NR ON/OFF`) gave neutral-to-harmful results under
+  3-run honest averaging. Default OFF, code kept around in case I
+  find the right threshold.
+
+#### 4d. Temporal Diversity — N/A
+
+Not implemented. Soft-Viterbi gate partially covers the case via
+energy averaging.
+
+#### 4e. Multi-band Goertzel for SEARCH — N/A
+
+SEARCH remained FFT-based (multi-shift), fast enough.
+
+#### 4f. Tiny Neural Net — **DONE (v13 production)** ✅
+
+This is the **main win of this version.** v13 NN weighs ~44 KB, uses
+the PyTorch sample_weight recipe. See Stage 3 above and
+`docs/NN_TRAINING.md`.
+
+Bonus: **B265 DUMP FRAMES** lets the user gather real-air training
+data to retrain under their own conditions.
+
+#### 4g. Soft Confidence UI — PARTIAL ✅
+
+- [x] Red `*` for invalid frames on screen (B263)
+- [x] Top bar shows NN/NOTCH/VIT status
+- [ ] Color gradient of confidence (green/yellow/red) per character —
+  TODO
+- [ ] `[ML:94%]` in top bar — TODO
+
+### Final CPU budget (Core 0 @ 300 MHz, B265)
+
+| Component | CPU |
 |---|---|
-| Текущий I/Q + DPLL | 5-8% |
-| Goertzel × 16 (multi-phase) | +0.5% |
-| Character ML × 256 | +0.9% |
-| Language prior (Bayes) | +0.1% |
-| Viterbi FIGS/LTRS | +0.1% |
-| Noise blanker + spectral sub | +0.6% |
-| Tiny NN fallback (редкий) | +0.2% |
-| **Итого** | **~7.5-10%** |
+| ADC/AGC/FIR | ~2 % |
+| Dual-IQ (A+B) + DPLL | ~3 % |
+| LMS notch chain | ~0.5 % |
+| Soft-Viterbi frame gate | ~0.5 % |
+| NN inference (gate open) | +1-2 % (sparse) |
+| BAUD-DET (when running) | +5-7 % (transient) |
+| **Steady-state total** | **~7-10 %** |
 
-Запас ~90% Core 0 для будущих режимов (CW, FT8, DRM).
+Reserve ~90 % of Core 0 for future modes (CW, FT8, DRM).
 
-### Итоговая позиция
+## 9. Planned features
 
-| Декодер | Порог SNR |
-|---|---|
-| fldigi | ~−5 дБ |
-| MMTTY | ~−9 дБ |
-| 2Tone (current best) | ~−13 дБ |
-| **TouchRTTY hybrid (цель)** | **~−15..−16 дБ** |
+### SITOR-B / NAVTEX FEC — TODO (priority)
 
-## 9. Планируемые фичи
-
-### SITOR-B / NAVTEX FEC — TODO (приоритет)
 - [ ] Framer: 7 data bits + 1 stop
 - [ ] CCIR 476 lookup (35 valid codewords, ratio 4:3)
-- [ ] Time diversity buffer (5 символов)
+- [ ] Time diversity buffer (5 symbols)
 - [ ] Phasing sync (DX/RX signals)
 - [ ] Auto-detect: 100/170 → try SITOR-B
 
-### Встроенный автотюнинг — TODO
-- [ ] Кнопка AUTO в Tuning Lab
-- [ ] Hill-climb: ALPHA → BW → SQ
-- [ ] Score = -5×ERR + SNR - 1000×|FE| + SQ_bonus
+### NN training: real-air oracle pipeline — TODO
 
-### Прочее
-- [ ] Итоговый экран "Found: ..." после SEARCH
-- [ ] Мультиплатформенность (ILI9341 320×240)
-- [ ] SD карта (DWD SYNOP parser)
-- [ ] CW Декодер (K-Means)
-- [ ] I2S DAC Audio Output
+The topic that remained after v2.0.0. Today real-air augmentation is
+limited because labels come from hard-decision — the model can't
+learn to beat hard-decision on uncertain frames, because for those
+frames the labels are unknown. The solution:
+
+- [ ] **DWD template matcher** — a parser for DWD weather format
+  (predictable day-of-week, PPZ/QWZ patterns, wind directions) gives
+  ground truth for known recordings
+- [ ] Replay through HW in DUMP FRAMES mode, label uncertain frames
+  against the oracle
+- [ ] v14 NN training with **correct** real-air labels on uncertain
+  frames — the path to push the −16 dB threshold by another 5-10 pp
+
+### Built-in autotune — TODO
+
+- [ ] AUTO button in Tuning Lab
+- [ ] Hill-climb: ALPHA → BW → SQ
+- [ ] Score = -5×ERR + SNR − 1000×|FE| + SQ_bonus
+
+### Other
+
+- [ ] Final screen "Found: ..." after SEARCH
+- [ ] Color gradient of ML confidence on the text
+- [ ] Multi-platform (ILI9341 320×240)
+- [ ] SD card (DWD SYNOP parser)
+- [ ] CW decoder (K-Means)
+- [ ] I2S DAC audio output
+- [ ] FT8 / FT4 mode
+- [ ] WEFAX (HF weather fax)
 
 ---
-*Статус: Build 219, ветка feat/alex-cl-dev*
 
-*Build 219: Waterfall LUT + circular history buffer (480×64 uint8, 30KB вместо 61KB sprite). Core 1 нижняя граница загрузки 60%→39%.*
+*Current status: **v2.0.0 released**, branch `feat/alex-cl-dev`,
+firmware build B265, NN weights v13.*
+
+*v2.0.0 closed the strategic goal of section 8 — beat 2Tone at low
+SNR. Further work on the NN side is described in
+`docs/NN_TRAINING.md` (negative-result ledger + real-air oracle
+direction).*

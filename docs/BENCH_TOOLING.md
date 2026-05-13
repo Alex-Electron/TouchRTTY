@@ -1,5 +1,7 @@
 # Benchmarking and test tooling
 
+> 🇷🇺 [Читать на русском](BENCH_TOOLING.ru.md)
+
 Everything you'd want for measuring how well the decoder is working
 lives in [`tools/`](../tools/). This doc walks through what the
 individual scripts do and how they fit together. None of them require
@@ -7,7 +9,7 @@ anything beyond Python 3 + a few packages
 (`numpy`, `scipy`, `sounddevice`, `pyserial`, and for the trainer
 `scikit-learn` or `torch`).
 
-The honest summary up front: most of these tools exist because we
+The honest summary up front: most of these tools exist because I
 needed to make confident claims about whether a change actually helped.
 The bench infrastructure is more code than the firmware NN itself, and
 that's the right ratio.
@@ -80,8 +82,8 @@ python tools/bench_replay.py \
 ```
 
 The `--tag` prefixes per-WAV log filenames so two consecutive runs
-(NN OFF, then NN ON) don't overwrite each other. We learned this lesson
-the hard way — losing a 4-minute capture log because we forgot to tag
+(NN OFF, then NN ON) don't overwrite each other. I learned this lesson
+the hard way — losing a 4-minute capture log because I forgot to tag
 the first pass is genuinely annoying.
 
 The `--prep-cmd` flag sends serial commands to the decoder *before*
@@ -151,8 +153,8 @@ python tools/aggregate_compare.py \
     datasets/logs/sweep_s44
 ```
 
-That produces a `mean ± σ` table per SNR. We standardized on this
-format for committing experiments — every NN variant in our archive
+That produces a `mean ± σ` table per SNR. I standardized on this
+format for committing experiments — every NN variant in my archive
 has a 3-seed table next to it.
 
 The `sd._terminate(); sd._initialize()` between seeds is a workaround
@@ -165,7 +167,7 @@ include.
 
 ## The overnight chain — `overnight_runner.sh`
 
-When we wanted to try six different training recipes overnight, we
+When I wanted to try six different training recipes overnight, I
 wrote this. It's a bash script that chains `train + flash + 3-seed
 sweep + aggregate` for a list of variants. Each cycle takes around
 35 minutes (5 min train + 30 min audio + a few seconds analysis). Six
@@ -199,7 +201,7 @@ train_and_sweep "v13_wu3"   --epochs 60 --weight-uncertain 3.0
 
 The big benefit is you can wake up to six fully-evaluated NN variants
 with archived weights and aggregated tables, ready to pick a winner
-from. We did exactly this and picked v13 from the resulting evidence.
+from. I did exactly this and picked v13 from the resulting evidence.
 
 ---
 
@@ -235,8 +237,8 @@ effectively dead weight for training).
 ## The CER analyzer
 
 `tools/cer_analyze.py` does the heavy lifting of correlating a sweep
-log (which tells us "between t1 and t2 the SNR was −14 dB") with a
-serial log (which tells us "at time t the decoder emitted these
+log (which tells me "between t1 and t2 the SNR was −14 dB") with a
+serial log (which tells me "at time t the decoder emitted these
 characters"). Output is a per-SNR-bin character error rate.
 
 It's invoked internally by `nn_sweep_compare.py`. You can also run it
@@ -260,14 +262,14 @@ not real error rate.
 
 When new weights show CER of e.g. 22 % on a particular SNR, subtract
 the 14 % artifact baseline to estimate the real error rate (~8 pp).
-For the headline comparison vs 2Tone in our memory notes, this is
-what we're doing implicitly.
+For the headline comparison vs 2Tone in my memory notes, this is
+what I're doing implicitly.
 
 ---
 
 ## The headline bench against 2Tone
 
-We benchmarked TouchRTTY head-to-head against G3YYD's 2Tone 26.01a on
+I benchmarked TouchRTTY head-to-head against G3YYD's 2Tone 26.01a on
 the same audio. The bench evidence is committed at
 [`datasets/logs/bench_auto_v2/`](../datasets/logs/bench_auto_v2/) —
 per-SNR `compare.txt` plus raw decoded text from both decoders. At

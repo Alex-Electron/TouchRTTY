@@ -1,14 +1,29 @@
-# Phase 9 — Hybrid RTTY Decoder Plan
+# Phase 9 — hybrid RTTY decoder plan
 
-**Дата создания**: 2026-04-13
-**Статус**: на согласовании
-**Цель**: декодер, способный вытягивать RTTY на −15..−16 дБ SNR (лучше 2Tone, текущий threshold ≈ −6..−8 дБ).
+> 🇷🇺 [Читать на русском](PHASE9_HYBRID_DECODER_PLAN.ru.md)
+
+> **Status: SHIPPED as v2.0.0 (Build B265, 2026-05-12).**
+> This document is the frozen design plan that drove the
+> implementation. The architecture partly diverged from the plan (see
+> §0 and `docs/ROADMAP_OPTIMIZATION.md` §8): I went with **dual-IQ +
+> LLR fusion + TinyML NN** instead of Goertzel + Character-ML. The
+> result — decoding threshold ≈ −16 dB SNR (CER ~9 pp) vs 2Tone's
+> ~−13 dB, which closes the "better than 2Tone" goal. Full results in
+> `RELEASE_v2.0.0.md`, `docs/NN_TRAINING.md`,
+> `datasets/logs/bench_auto_v2/`.
+
+**Created:** 2026-04-13
+**Status:** historical design doc (plan shipped, see banner)
+**Goal:** a decoder that pulls RTTY at −15..−16 dB SNR (better than
+2Tone, current threshold ≈ −6..−8 dB).
 
 ---
 
-## 0. Прояснение: что сейчас фактически реализовано
+## 0. Clarification — what's actually in the code right now
 
-Путаница была обоснованная. Я выше в обсуждении неточно обозвал "Goertzel" то, что на самом деле в коде уже **IQ-demodulation**. Фактическое состояние `src/dsp_pipeline.cpp`:
+The confusion was justified. Above I sloppily called "Goertzel" what's
+actually already **IQ demodulation** in code. Real state of
+`src/dsp_pipeline.cpp`:
 
 ```
 f_out (AGC output)
@@ -21,250 +36,319 @@ mark_power  = mi² + mq²
 space_power = si² + sq²
 ```
 
-Это классический **quadrature (IQ) demod** через NCO (sin/cos таблицы 1024) + biquad LPF на каждой ветке. Формально эквивалентно sliding-window Goertzel при равной полосе LPF, но дешевле и с гибкой АЧХ (задаётся biquad-коэффициентами).
+That's a classic **quadrature (IQ) demod** through NCO (sin/cos tables
+of 1024) + biquad LPF on each branch. Formally equivalent to a
+sliding-window Goertzel at the same LPF bandwidth, but cheaper and
+with a flexible response (set by biquad coefficients).
 
-**Почему я сбил тебя с толку**: в плане писал "Dual-Goertzel" по привычке терминологии — в литературе узкополосный tone-detect часто называют Goertzel. Но у нас уже IQ-path, и это хорошо: biquad-LPF даёт лучшую форму АЧХ, чем rectangular-window Goertzel.
+**Why I confused you:** in the plan I wrote "Dual-Goertzel" out of
+habit — in the literature narrowband tone detection is often called
+Goertzel. But I already have an IQ path, and that's a good thing:
+biquad LPF gives a better magnitude response than rectangular-window
+Goertzel.
 
-**Что тогда значит "гибрид"**: не Goertzel vs IQ, а **две параллельные IQ-ветки с разными LPF-характеристиками**, объединённые fusion-логикой. См. §3.
+**So what does "hybrid" mean here:** not Goertzel vs IQ, but **two
+parallel IQ branches with different LPF characteristics**, combined
+through fusion logic. See §3.
 
 ---
 
-## 1. Этапы обработки (итоговая цепочка)
+## 1. Processing stages (final chain)
 
 ```
 ADC 10 kHz
   │
-  ├─► [A] DC-block + AGC                     [есть]
+  ├─► [A] DC-block + AGC                     [exists]
   │
-  ├─► [B] Input BPF 300–3000 Hz              [новое, дешёвое]
+  ├─► [B] Input BPF 300–3000 Hz              [new, cheap]
   │
-  ├─► [C] Adaptive LMS-notch (2-3 нулей)     [новое]
+  ├─► [C] Adaptive LMS notch (2–3 nulls)     [new]
   │
-  ├─► [D] Spectral noise reduction            [новое, опциональное]
-  │       (spectral subtraction по FFT-пути)
+  ├─► [D] Spectral noise reduction            [new, optional]
+  │       (spectral subtraction via FFT path)
   │
-  ├─► [E] IQ-demod path A: narrow-LPF        [refactor из текущего]
+  ├─► [E] IQ demod path A: narrow LPF        [refactor of current]
   │       (BW ≈ baud · 1.0, minimum ISI)
   │
-  ├─► [F] IQ-demod path B: wide-LPF          [новое]
+  ├─► [F] IQ demod path B: wide LPF          [new]
   │       (BW ≈ baud · 1.5, matched raised-cosine)
   │
-  ├─► [G] Fusion — weighted combine A+B       [новое]
-  │       по оценке SNR/drift
+  ├─► [G] Fusion — weighted combine A+B       [new]
+  │       by SNR/drift estimate
   │
-  ├─► [H] Soft-LLR bit decision               [новое, критичное]
+  ├─► [H] Soft-LLR bit decision               [new, critical]
   │       LLR = (M_env² − S_env²)/σ²
   │
-  ├─► [I] DPLL bit-sync на LLR                [refactor: hard→soft]
+  ├─► [I] DPLL bit sync on LLR                [refactor: hard → soft]
   │
-  ├─► [J] Soft-Viterbi framer (5N1.5/2)       [новое]
-  │       start=0, stop=1 как constraint
+  ├─► [J] Soft-Viterbi framer (5N1.5/2)       [new]
+  │       start=0, stop=1 as constraint
   │
-  └─► [K] ML post-classifier (eye → symbol)   [опционально, финал]
-          маленькая CNN, синтетика+реал датасет
+  └─► [K] ML post-classifier (eye → symbol)   [optional, finale]
+          small CNN, synthetic+real dataset
 ```
 
 ---
 
-## 2. Бюджет улучшений
+## 2. Improvement budget
 
-| # | Этап | Ожидаемый gain | Сложность |
-|---|------|----------------|-----------|
-| C | LMS-notch | +1-2 дБ (в эфире с QRM) | низкая |
-| D | Spectral NR | +1-2 дБ (на слабых) | средняя |
-| E+F+G | Fusion двух IQ-путей | +0.5-1.5 дБ | средняя |
-| H+J | Soft-LLR + Viterbi framer | +2-3 дБ | высокая |
-| K | ML post-classifier | +1-2 дБ | высокая |
-| | **Суммарно (потенциал)** | **+6-10 дБ** | |
+| # | Stage | Expected gain | Difficulty |
+|---|---|---|---|
+| C | LMS notch | +1–2 dB (in QRM-heavy on-air) | low |
+| D | Spectral NR | +1–2 dB (on weak signal) | medium |
+| E+F+G | Fusion of two IQ paths | +0.5–1.5 dB | medium |
+| H+J | Soft-LLR + Viterbi framer | +2–3 dB | high |
+| K | ML post-classifier | +1–2 dB | high |
+| | **Total potential** | **+6–10 dB** | |
 
-Текущий threshold ≈ −6..−8 дБ → цель −15..−16 дБ. При честной реализации достижимо.
-
----
-
-## 3. Что такое "гибрид" — уточнение
-
-Две параллельные ветки IQ-demod:
-
-- **Path A (narrow)**: biquad LPF с BW ≈ baud. Оптимально по SNR при стабильном сигнале без дрейфа. Чувствителен к частотному offset.
-- **Path B (wide/matched)**: raised-cosine FIR с BW ≈ 1.5·baud. Устойчив к drift и timing-jitter, чуть хуже по thermal noise.
-
-**Fusion** (этап G):
-- Vариант 1 (простой): weighted-sum огибающих, веса = f(SNR_estimate).
-- Vариант 2 (продвинутый): выбор по текущему drift/jitter metric.
-- Vариант 3 (ML-based): маленький classifier на 4-х метриках → веса.
-
-Начнём с варианта 1, проверим, надо ли сложнее.
+Current threshold ≈ −6..−8 dB → target −15..−16 dB. With an honest
+implementation, reachable.
 
 ---
 
-## 4. Приоритет реализации (утверждённый план)
+## 3. What "hybrid" means — refined
 
-**Этап 1** (быстрый выигрыш, простая реализация):
-- [1.1] Soft-LLR bit decision (H) — заменить hard-slice
-- [1.2] Soft-Viterbi framer (J) — использовать stop-bit как constraint
-- **Ожидаемый gain**: +2-3 дБ за счёт двух правок
+Two parallel IQ demod branches:
 
-**Этап 2** (шумовая обстановка):
-- [2.1] LMS-notch (C) — 2 адаптивных нуля
-- [2.2] Input BPF (B) — фиксированный
-- **Ожидаемый gain**: +1-2 дБ в реальном эфире
+- **Path A (narrow):** biquad LPF, BW ≈ baud. Optimal SNR on stable,
+  drift-free signal. Sensitive to frequency offset.
+- **Path B (wide/matched):** raised-cosine FIR, BW ≈ 1.5·baud. Robust
+  against drift and timing jitter, slightly worse on thermal noise.
 
-**Этап 3** (fusion):
-- [3.1] Вторая IQ-ветка с raised-cosine FIR (F)
-- [3.2] Fusion-логика (G) — weighted combine
-- **Ожидаемый gain**: +0.5-1.5 дБ
+**Fusion** (stage G):
 
-**Этап 4** (NR):
-- [4.1] Spectral subtraction на FFT (D)
-- **Ожидаемый gain**: +1-2 дБ
+- Variant 1 (simple): weighted sum of envelopes, weights = f(SNR
+  estimate).
+- Variant 2 (advanced): branch selection by current drift/jitter
+  metric.
+- Variant 3 (ML-based): small classifier over 4 metrics → weights.
 
-**Этап 5** (ML):
-- [5.1] Сбор датасета: синтетика + записи веб-SDR + реального RX
-- [5.2] Обучение CNN на eye-diagram (16×220 → symbol)
-- [5.3] Инференс на RP2350 (рукописный, без TFLite)
-- **Ожидаемый gain**: +1-2 дБ
-
-После каждого этапа — замер threshold, обновление CHANGELOG, согласование перед следующим.
+Start with variant 1, see if anything more elaborate is needed.
 
 ---
 
-## 5. Методология измерений
+## 4. Implementation order (approved plan)
 
-Нужно прежде чем начнём: **референсный testbench** для объективной оценки gain.
+**Stage 1** (quick win, simple):
 
-- [5a] Скрипт генерации синтетического RTTY + AWGN на заданный SNR (Python offline).
-- [5b] Запись reference-сигналов через веб-SDR (разные баунды/shift/погодные/любительские).
-- [5c] Процедура "проиграть в линию" (audio cable в ADC или через USB-DAC) — воспроизводимый тест.
-- [5d] Метрика: character error rate (CER) как функция SNR. Threshold = SNR при CER=5%.
+- [1.1] Soft-LLR bit decision (H) — replace hard-slice
+- [1.2] Soft-Viterbi framer (J) — use stop-bit as a constraint
+- **Expected gain:** +2–3 dB from these two patches.
 
-Без этого будем двигаться вслепую. Первое, что делаем после согласования плана — §5.
+**Stage 2** (noise environment):
+
+- [2.1] LMS notch (C) — 2 adaptive nulls
+- [2.2] Input BPF (B) — fixed
+- **Expected gain:** +1–2 dB in real on-air.
+
+**Stage 3** (fusion):
+
+- [3.1] Second IQ branch with raised-cosine FIR (F)
+- [3.2] Fusion logic (G) — weighted combine
+- **Expected gain:** +0.5–1.5 dB.
+
+**Stage 4** (NR):
+
+- [4.1] Spectral subtraction over FFT (D)
+- **Expected gain:** +1–2 dB.
+
+**Stage 5** (ML):
+
+- [5.1] Dataset collection: synthetic + WebSDR recordings + real RX
+- [5.2] Train a CNN on the eye diagram (16×220 → symbol)
+- [5.3] Inference on RP2350 (hand-rolled, no TFLite)
+- **Expected gain:** +1–2 dB.
+
+After each stage — measure threshold, update CHANGELOG, agree before
+the next.
 
 ---
 
-## 6. Архитектурные решения, которые нужно подтвердить
+## 5. Measurement methodology
 
-1. **Двойной IQ-path против одного улучшенного**: согласен делать fusion (этап 3) или хватит одной ветки с хорошим raised-cosine?
-2. **ML runtime**: рукописный inference на float32, без внешних библиотек. CNN ≤8K параметров. Согласен?
-3. **Датасет**: берём записи с веб-SDR (у тебя есть доступ) + синтетика. Объём цель: 10k символов реальных + неограниченно синтетики.
-4. **Core распределение**: Core 0 — DSP (A..I), Core 1 — framer/ML (J,K) + UI. Согласен?
-5. **Feature flag**: новую цепочку делаем за флагом (DIAG HYBRID ON/OFF) для A/B-сравнения со старой. Согласен?
+What I need before I start: a **reference testbench** for objective
+gain evaluation.
+
+- [5a] Script to generate synthetic RTTY + AWGN at a given SNR
+  (Python, offline).
+- [5b] Reference signal captures via WebSDR (different baud/shift,
+  weather/amateur stations).
+- [5c] "Play into the line" procedure (audio cable into ADC, or via
+  USB-DAC) — repeatable test.
+- [5d] Metric: character error rate (CER) as a function of SNR.
+  Threshold = SNR at CER = 5 %.
+
+Without this I'd be moving blind. First thing after the plan is
+agreed — §5.
 
 ---
 
-## 7. Open questions / риски
+## 6. Architectural decisions to confirm
 
-- **Timing budget**: Core 0 сейчас 5%. Этап 2-3 добавит ~3-5%. Этап 4-5 ещё ~10-20%. Должно помещаться, но нужен замер.
-- **Flash**: ML-модель 8K·4B = 32 KB, plus code. У нас есть запас.
-- **Калибровка sq_snr**: при soft-decoding старая squelch-логика может мешать. Надо переделать на soft-confidence.
-- **Обратная совместимость**: AUTO-поиск и framer-сейчас работают на hard-decision. Нужно аккуратно мигрировать.
+1. **Dual IQ path vs one improved path:** do I go ahead with fusion
+   (stage 3) or is one branch with a good raised-cosine enough?
+2. **ML runtime:** hand-rolled float32 inference, no external libs.
+   CNN ≤ 8K parameters. Agreed?
+3. **Dataset:** WebSDR recordings (you have access) + synthetic.
+   Target volume: 10k real characters + unlimited synthetic.
+4. **Core split:** Core 0 — DSP (A..I), Core 1 — framer/ML (J, K) +
+   UI. Agreed?
+5. **Feature flag:** the new chain behind a flag (`DIAG HYBRID ON/OFF`)
+   for A/B comparison with the old chain. Agreed?
 
 ---
 
-## 7a. Execution log (один подпункт = один билд)
+## 7. Open questions / risks
 
-| Build | Дата | Подпункт | Статус |
-|-------|------|----------|--------|
-| 231 | 2026-04-13 | Testbench #1: AWGN + SNR slider в `rtty_simulator.html` | ✅ done |
-| 232 | 2026-04-13 | Testbench #2: QRM-инжекция (CW + второй RTTY) | ✅ done |
-| 233 | 2026-04-13 | Testbench #3: Частотный drift (linear + sine) | ✅ done |
+- **Timing budget:** Core 0 is at 5 % now. Stage 2–3 adds ~3–5 %.
+  Stage 4–5 adds another ~10–20 %. Should fit, but needs to be
+  measured.
+- **Flash:** the ML model is 8K·4B = 32 KB plus code. I have room.
+- **`sq_snr` calibration:** with soft decoding the old squelch logic
+  can interfere. Need to rebuild on soft confidence.
+- **Backward compatibility:** AUTO search and the framer currently
+  rely on hard decisions. Need to migrate carefully.
+
+---
+
+## 7a. Execution log (one bullet = one build)
+
+| Build | Date | Item | Status |
+|---|---|---|---|
+| 231 | 2026-04-13 | Testbench #1: AWGN + SNR slider in `rtty_simulator.html` | ✅ done |
+| 232 | 2026-04-13 | Testbench #2: QRM injection (CW + second RTTY) | ✅ done |
+| 233 | 2026-04-13 | Testbench #3: frequency drift (linear + sine) | ✅ done |
 | 234 | 2026-04-13 | Testbench #4: QSB + selective fading + impulse + dual-osc refactor | ✅ done |
 | 235 | 2026-04-13 | Testbench extra: CW keyed morse mode | ✅ done |
-| 236 | 2026-04-13 | Testbench #5: Batch-mode SNR sweep (closes testbench phase) | ✅ done |
+| 236 | 2026-04-13 | Testbench #5: batch-mode SNR sweep (closes testbench phase) | ✅ done |
 | —   | 2026-04-15 | **Baseline Build 230 (AWGN only): threshold ~−10..−11 dB** | ✅ done |
 | 237 | 2026-04-13 | Python: `rtty_gen.py` (offline WAV generator + AWGN) | ✅ done |
 | 238 | 2026-04-13 | Python: `serial_logger.py` (timestamped serial capture) | ✅ done |
 | 239 | 2026-04-13 | Python: `cer_analyze.py` + **testbench phase closed** | ✅ done |
-| 240 | 2026-04-15 | Simulator: NOISE ONLY btn + impulse tone/duration/random | ✅ done |
-| 241 | 2026-04-15 | Sweep sync-markers (=NN=) + cer_analyze --markers mode | ✅ done |
-| 242 | 2026-04-15 | Этап 1.1: soft-LLR bit decision (adaptive stop/start thresholds) | ✅ done — threshold не сдвинулся (~−10..−11), но на −14 декодер жив (282 chars vs lost). Ждём Stage 1.2 для отсечки мусора. |
-| 243 | 2026-04-14 | Этап 1.2: Soft-Viterbi framer (weakest-link data + frame-average) | ✅ done — на −8 дБ 6% B242 → 0% B243.1 (ложные фреймы вычищены). Threshold −10 дБ. Пороги 0.10/0.15 после тюнинга. |
-| 244 | 2026-04-14 | Этап 2.1: LMS-notch adaptive (2 каскада: 300-1350 / 1650-3200 Hz) | ✅ done — AWGN threshold −10 dB сохранён; с CW QRM threshold −10 dB и 0% CER от +8 до −8 дБ. |
-| 245 | 2026-04-16 | Этап 2.2: Input BPF 300-3000 Hz (HPF + LPF Butterworth) | ✅ done — AWGN threshold −10 dB, bin −10 стал 0.00% (B243.1 был 15%). Нейтрально, готов к Stage 3. |
-| —   | —    | Этап 3: Fusion двух IQ-веток | pending |
-| —   | —    | Этап 4: Spectral NR | pending |
-| —   | —    | Этап 5: ML post-classifier | pending |
+| 240 | 2026-04-15 | Simulator: NOISE-ONLY button + impulse tone/duration/random | ✅ done |
+| 241 | 2026-04-15 | Sweep sync-markers (=NN=) + `cer_analyze --markers` mode | ✅ done |
+| 242 | 2026-04-15 | Stage 1.1: soft-LLR bit decision (adaptive stop/start thresholds) | ✅ done — threshold didn't move (~−10..−11), but at −14 the decoder is alive (282 chars vs lost). Waiting for Stage 1.2 to filter junk. |
+| 243 | 2026-04-14 | Stage 1.2: Soft-Viterbi framer (weakest-link data + frame-avg) | ✅ done — at −8 dB 6 % B242 → 0 % B243.1 (false frames gone). Threshold −10 dB. Tuned thresholds 0.10/0.15. |
+| 244 | 2026-04-14 | Stage 2.1: LMS adaptive notch (2-stage: 300-1350 / 1650-3200 Hz) | ✅ done — AWGN threshold −10 dB preserved; with CW QRM threshold −10 dB and 0 % CER from +8 to −8 dB. |
+| 245 | 2026-04-16 | Stage 2.2: Input BPF 300-3000 Hz (HPF + LPF Butterworth) | ✅ done — AWGN threshold −10 dB, bin −10 became 0.00 % (B243.1 was 15 %). Neutral, ready for Stage 3. |
+| —   | —    | Stage 3: Fusion of two IQ branches | pending |
+| —   | —    | Stage 4: Spectral NR | pending |
+| —   | —    | Stage 5: ML post-classifier | pending |
 
-Каждый подпункт — отдельный коммит с номером билда, запись в CHANGELOG, обновление этой таблицы.
+Each item — a separate commit with build number, CHANGELOG entry,
+update of this table.
 
-## 8. Что делаем прямо сейчас
+## 8. What I do right now
 
-После согласования:
-1. Создать testbench (§5) — 1-2 сессии.
-2. Снять baseline CER(SNR) текущего декодера.
-3. Начать Этап 1 (soft-LLR).
+After agreement:
 
-Все изменения — под feature flag, с A/B-замером gain после каждого подэтапа.
+1. Build the testbench (§5) — 1–2 sessions.
+2. Take baseline CER(SNR) for the current decoder.
+3. Start Stage 1 (soft-LLR).
+
+All changes behind a feature flag, A/B-measured gain after every
+substage.
 
 ---
 
-## 9. Roadmap после Stage 5 var.1 (BW sweep) — утверждён 2026-04-20
+## 9. Roadmap after Stage 5 var.1 (BW sweep) — agreed 2026-04-20
 
-**Глобальная цель**: TouchRTTY должен быть **лучше всех публичных декодеров** на AWGN и реальном канале: лучше 2Tone (−12..−14 дБ), fldigi (−9..−11 дБ), MMTTY (−8..−10 дБ). Цель: honest threshold **−15..−16 дБ**.
+**Global goal:** TouchRTTY should be **better than every public
+decoder** on AWGN and real channel — better than 2Tone (−12..−14 dB),
+fldigi (−9..−11 dB), MMTTY (−8..−10 dB). Target: honest threshold
+**−15..−16 dB**.
 
-### 9.1. Методологическая находка (2026-04-20)
+### 9.1. Methodology finding (2026-04-20)
 
-При проработке BW-свипа (#37) обнаружено: **в ground-truth тексте не было CR/LF**, поэтому декодер копил выдачу минутами и флашил одним куском → бин-attribution ломалось → threshold по 5% CER смещался к max SNR в свипе (артефакт, а не реальный порог).
+While working on the BW sweep (#37) I discovered: **the ground-truth
+text had no CR/LF**, so the decoder buffered output for minutes and
+flushed in one chunk → bin attribution broke → threshold at 5 % CER
+shifted to max SNR in the sweep (an artefact, not a real threshold).
 
-**Fix**: `GT_TEXT = "RYRYRY THE QUICK BROWN FOX JUMPS OVER 1234567890 \r\n"` в оркестраторе, dwell 60s.
+**Fix:** `GT_TEXT = "RYRYRY THE QUICK BROWN FOX JUMPS OVER 1234567890 \r\n"`
+in the orchestrator, dwell 60 s.
 
-**Последствия для прошлых тестов**:
-- Тесты *с* PATH/DYN/CMD cycling (b256 NR, b257 avg3) — OK, serial-команды давали естественный flush каждые 10-20с.
-- Тесты *без* cycling (часть baseline-замеров, возможно часть gain-замеров Stage 1-2) — под подозрением.
+**Implications for past tests:**
 
-### 9.2. Приоритеты (по порядку)
+- Tests *with* PATH/DYN/CMD cycling (B256 NR, B257 avg3) — OK; serial
+  commands gave natural flushes every 10–20 s.
+- Tests *without* cycling (parts of baseline measurements, possibly
+  parts of Stage 1–2 gain measurements) — suspect.
+
+### 9.2. Priorities (in order)
 
 **P0. Stage 5 var.1 — matched filter BW sweep (task #37, in_progress)**
-- k ∈ {0.40, 0.50, 0.60, 0.75, 0.90}, SNR −10..−18, dwell 60s, 3 run.
-- Оркестратор: `tools/bw_sweep_orchestrator.py`.
-- Ожидается: победитель в k=0.50..0.60 по Path A (по ранним данным lead у k=0.50 на верхних SNR, k=0.60 на −16).
+
+- k ∈ {0.40, 0.50, 0.60, 0.75, 0.90}, SNR −10..−18, dwell 60 s, 3 runs.
+- Orchestrator: `tools/bw_sweep_orchestrator.py`.
+- Expected: winner at k = 0.50..0.60 on Path A (early data shows lead
+  at k = 0.50 on high SNR, k = 0.60 at −16).
 - Artefacts: `datasets/logs/b258_bw/`.
 
 **P1. Plan B — revalidate baseline + Stage 3.3 (task #38)**
-- DYN ON/OFF A/B через `serial_logger --cmd-cycle 10 --cmd-seq "ON=DYN ON|OFF=DYN OFF"`, SNR −10..−18, 3 run.
-- Цель: подтвердить что ~-14 дБ threshold и +3 дБ Stage 3.3 KEY WIN воспроизводятся под честной методикой.
-- Если просело: откатываемся к Stage 2 и думаем заново.
+
+- DYN ON/OFF A/B via
+  `serial_logger --cmd-cycle 10 --cmd-seq "ON=DYN ON|OFF=DYN OFF"`,
+  SNR −10..−18, 3 runs.
+- Goal: confirm that ~−14 dB threshold and +3 dB Stage 3.3 KEY WIN
+  reproduce under honest methodology.
+- If it drops: roll back to Stage 2 and rethink.
 
 **P2. Side-by-side benchmark vs 2Tone / fldigi / MMTTY (task #39)**
-- Сгенерить AWGN-лесенку WAV файлов (синтетика rtty_gen), прогнать через:
-  1. Наш firmware (sweep_runner + COM27 logger)
-  2. 2Tone.exe через Wine или нативно Windows, audio loopback (VAC/Voicemeeter)
-  3. fldigi через sounddevice loopback
-  4. MMTTY через sounddevice loopback
-- CER per decoder per SNR.
-- **Без этого все наши цифры — "по слухам"**. Объективное сравнение — единственный способ доказать лидерство.
 
-**P3. Stage 5 var.2 — Character N-gram LM (task #40)**
-- Bigram/trigram likelihood таблица 32×32 (Baudot codes) или 32×32×32.
-- Умножается с Viterbi path LLR на каждом шаге.
-- Корпус: ham QSO logs + English/Russian news.
-- Ожидаемый gain: **+1..3 дБ** — самый дешёвый путь к −15..−16 дБ.
-- Реализация: Python генератор таблицы → const array в firmware → модификация soft-Viterbi (src/dsp_pipeline.cpp).
+- Generate AWGN ladder of WAV files (synthetic, `rtty_gen`), run
+  through:
+  1. My firmware (`sweep_runner` + COM27 logger)
+  2. `2Tone.exe` via Wine or native Windows, audio loopback (VAC /
+     Voicemeeter)
+  3. fldigi via sounddevice loopback
+  4. MMTTY via sounddevice loopback
+- CER per decoder per SNR.
+- **Without this, all my numbers are "rumored."** Objective
+  comparison is the only way to prove leadership.
+
+**P3. Stage 5 var.2 — character N-gram LM (task #40)**
+
+- Bigram/trigram likelihood table 32×32 (Baudot codes) or 32×32×32.
+- Multiplied into Viterbi path LLR at every step.
+- Corpus: ham QSO logs + English/Russian news.
+- Expected gain: **+1..3 dB** — the cheapest path to −15..−16 dB.
+- Implementation: Python table generator → const array in firmware →
+  modify soft-Viterbi (`src/dsp_pipeline.cpp`).
 
 **P4. Real-air dataset (task #16)**
-- Записи с веб-SDR и реального RX: AWGN, QSB, QRM, drift сценарии.
-- Формат: 48 kHz / 16-bit mono (см. `datasets/RECORDING_GUIDE.md`).
-- Нужно для: (a) валидация в реальных условиях, (b) обучение ML-классификатора (task #23).
+
+- WebSDR and real-RX recordings: AWGN, QSB, QRM, drift scenarios.
+- Format: 48 kHz / 16-bit mono (see `datasets/RECORDING_GUIDE.md`).
+- Needed for: (a) real-condition validation, (b) ML classifier
+  training (task #23).
 
 **P5. Stage 5 var.3 — ML post-classifier (task #23)**
-- Маленькая CNN ≤8K параметров, eye-diagram 16×220 → символ.
-- Тренировка: синтетика + P4 датасет.
-- Инференс ~1 мс/символ на RP2350 @ 300 MHz.
-- Ожидаемый gain: +1..2 дБ.
 
-**P6. Будущее — IQ-вход (task #24)**
-- Прямо с SDR, обходя аудио-тракт и AGC/клиппинг.
-- Требует нового аппаратного I/O формата.
-- Gain: +2..4 дБ в marginal условиях.
+- A small CNN ≤ 8K parameters, eye-diagram 16×220 → symbol.
+- Training: synthetic + P4 dataset.
+- Inference ~1 ms/symbol on RP2350 @ 300 MHz.
+- Expected gain: +1..2 dB.
 
-### 9.3. Дополнительные техники (backlog)
+**P6. Future — IQ input (task #24)**
 
-- **BCJR** вместо Viterbi (+0.5..1 дБ): full forward-backward MAP. Если помещается в Core 0 budget.
-- **Адаптивный stop-bit soft-detector** (+0.5 дБ): soft-decision marginal likelihood для stop=1.0/1.5/2.0.
-- **Joint optimization** fusion-weights × BW × DPLL alpha (+0.5..1 дБ): кропотливо, но даёт последние децибелы.
+- Directly from SDR, bypassing the audio path and AGC/clipping.
+- Requires a new hardware I/O format.
+- Gain: +2..4 dB in marginal conditions.
+
+### 9.3. Additional techniques (backlog)
+
+- **BCJR** instead of Viterbi (+0.5..1 dB): full forward-backward MAP.
+  If it fits the Core 0 budget.
+- **Adaptive stop-bit soft-detector** (+0.5 dB): soft-decision
+  marginal likelihood for stop = 1.0 / 1.5 / 2.0.
+- **Joint optimization** of fusion weights × BW × DPLL alpha
+  (+0.5..1 dB): tedious but squeezes out the last dB.
 
 ### 9.4. Execution model
 
-- Каждый подпункт → отдельный build + commit + CHANGELOG + update §7a.
-- Каждый gain-замер → `cer_avg.py` (3-run avg, std), **с CR/LF в GT**.
-- Каждое принятое изменение → A/B vs previous build под feature flag.
-- Финальная валидация — P2 benchmark vs 2Tone/fldigi/MMTTY.
+- Every substep → separate build + commit + CHANGELOG + update of §7a.
+- Every gain measurement → `cer_avg.py` (3-run avg, std), **with
+  CR/LF in GT**.
+- Every accepted change → A/B vs previous build behind a feature flag.
+- Final validation — P2 benchmark vs 2Tone/fldigi/MMTTY.

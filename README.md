@@ -1,5 +1,7 @@
 # TouchRTTY
 
+> 🇷🇺 [Читать на русском](README.ru.md)
+
 A pocket-sized RTTY decoder you can actually trust on weak signals.
 
 <p align="center">
@@ -10,19 +12,19 @@ A pocket-sized RTTY decoder you can actually trust on weak signals.
 This is a Raspberry Pi Pico 2 (RP2350) running a from-scratch SDR-style
 demodulator and a small neural net that kicks in when the signal gets
 ugly. On the same audio where 2Tone collapses into random letters, you
-still get readable telegraphy. We benched it. The numbers below are real.
+still get readable telegraphy. I benched it. The numbers below are real.
 
 > [!IMPORTANT]
-> You need the **Pico 2 (RP2350)** — not the original RP2040. We lean on
+> You need the **Pico 2 (RP2350)** — not the original RP2040. I lean on
 > the M33's FPU and need more SRAM than the older chip has. Save yourself
 > the headache.
 
 ---
 
-## Where we are right now
+## Where I are right now
 
 The latest release is **v2.0.0** (firmware build B265, NN weights v13).
-If you flash nothing else and just want the best decoder we've shipped,
+If you flash nothing else and just want the best decoder I've shipped,
 grab [`TouchRTTY_v2.0.0.uf2`](TouchRTTY_v2.0.0.uf2) from the repo root.
 
 Full release notes: [`RELEASE_v2.0.0.md`](RELEASE_v2.0.0.md).
@@ -31,12 +33,12 @@ What's interesting about this build:
 
 * **NN actually helps now.** Earlier versions of the NN were a wash —
   better at threshold, worse at comfortable signal levels. v13 fixed
-  that. NN-ON is at least as good as NN-OFF at every SNR we tested, and
+  that. NN-ON is at least as good as NN-OFF at every SNR I tested, and
   much better below −14 dB.
 * **You can see what the NN is thinking.** New serial command
   `DUMP FRAMES ON` streams every Baudot frame's seven soft-bit values
   plus the hard-decision label. Drop a WAV through the decoder, capture
-  the stream, and you have labeled training data — the same loop we used
+  the stream, and you have labeled training data — the same loop I used
   to build v13.
 * **The UI got simpler.** NOTCH and VIT are now toggles right in the
   main menu instead of being buried in a popup, and frame-rejection
@@ -49,7 +51,7 @@ Full release notes live in [`CHANGELOG_B265.md`](CHANGELOG_B265.md).
 
 ## How it stacks up against 2Tone
 
-We benchmarked against [2Tone 26.01a](http://www.tonemap.com/Software.html)
+I benchmarked against [2Tone 26.01a](http://www.tonemap.com/Software.html)
 (David G3YYD's well-regarded decoder), averaged over three random seeds,
 sweeping SNR from −4 to −22 dB in 2 dB steps with 30 seconds of dwell
 per bin. Same audio fed into both decoders through the same Voicemeeter
@@ -108,7 +110,7 @@ Path A     Path B            ← narrow / wide; either alone or…
    │         │
    └────┬────┘
         ▼
-   LLR fusion (HYB)          ← we run this by default
+   LLR fusion (HYB)          ← I run this by default
         │
         ▼
    DPLL with PI loop          ← controlled by ALPHA
@@ -198,19 +200,19 @@ rejected a frame.
 │   ├── serial_commands.cpp    ← the CLI parser
 │   └── ui/                    ← waterfall / menu / eye-diagram rendering
 ├── tools/
-│   ├── train_nn_torch.py      ← PyTorch trainer (recipe that gave us v13)
+│   ├── train_nn_torch.py      ← PyTorch trainer (recipe that gave me v13)
 │   ├── bench_replay.py        ← play WAV, log serial decode
 │   ├── nn_sweep_compare.py    ← AWGN sweep NN-OFF vs NN-ON
 │   ├── overnight_runner.sh    ← chain train+sweep cycles unattended
 │   ├── parse_dump_frames.py   ← B265 dump stream → npz for training
 │   └── rtty_simulator.html    ← in-browser RTTY generator
 ├── datasets/
-│   ├── nn_archive/            ← every weight blob we trained, archived
+│   ├── nn_archive/            ← every weight blob I trained, archived
 │   └── logs/                  ← bench evidence (compare tables, summaries)
 └── docs/                      ← the five long-form docs
 ```
 
-Each NN experiment we ran is committed with its multi-seed evidence
+Each NN experiment I ran is committed with its multi-seed evidence
 in `datasets/logs/nn_compare_v*_s{42,43,44}/`. If a future change ever
 regresses, you can roll back to any earlier weight blob with a single
 `cp` because everything is archived.
@@ -221,13 +223,13 @@ regresses, you can roll back to any earlier weight blob with a single
 
 The DSP code is the kind that benefits from people actually using it on
 the air and complaining. If something's worse on your antenna than on
-ours, file an issue with a short audio clip — that's far more useful
+mine, file an issue with a short audio clip — that's far more useful
 than a generic "doesn't work" report.
 
 For NN improvements, run a multi-seed bench (3 seeds minimum) before
 proposing a recipe change. Single-run improvements at SNR ≤ −16 dB are
-almost always noise — we burned a lot of compute proving that to
-ourselves.
+almost always noise — I burned a lot of compute proving that to
+myself.
 
 ---
 

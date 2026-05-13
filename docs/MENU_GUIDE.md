@@ -1,5 +1,7 @@
 # Using the touchscreen
 
+> 🇷🇺 [Читать на русском](MENU_GUIDE.ru.md)
+
 The 480×320 ILI9488 panel has resistive touch and shows three persistent
 zones plus a few overlay screens. Once you spend ten minutes with it,
 you don't really need to look at this doc again — but here it is for
@@ -43,7 +45,7 @@ right answer 95 % of the time. The auto-detector watches gap statistics
 and picks the most likely.
 
 **4. Polarity.** `NOR` / `INV` / `NOR[A]` / `INV[A]`. The `[A]` suffix
-means we're in auto mode — the decoder will flip on its own if errors
+means I're in auto mode — the decoder will flip on its own if errors
 stay too high for too long. Without `[A]` you've manually locked it.
 Border colour: cyan = auto, magenta = manual lock.
 
@@ -112,7 +114,7 @@ The grid layout, top-left to bottom-right:
 * (six empty slots reserved for future use)
 
 You'll notice this is more compact than older builds, where NOTCH and
-VIT used to require a popup. We collapsed them into menu slots
+VIT used to require a popup. I collapsed them into menu slots
 4 and 5 — fewer taps, easier to mentally model.
 
 ---

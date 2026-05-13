@@ -1,5 +1,7 @@
 # Driving TouchRTTY over USB serial
 
+> 🇷🇺 [Читать на русском](SERIAL_COMMANDS.ru.md)
+
 Once the Pico is flashed and powered up, it shows up as a USB CDC ACM
 device — `COM<N>` on Windows, `/dev/ttyACM0` on Linux,
 `/dev/tty.usbmodem*` on macOS. Open it at **115200 8N1**, send `VERSION`,
@@ -9,7 +11,7 @@ and you should get something like
 >> TouchRTTY Phase9 B265 (built May 12 2026 05:42:11)
 ```
 
-If you get that, the serial path is alive and we can do anything.
+If you get that, the serial path is alive and I can do anything.
 If you don't, check that you're on the right port and that no other
 program (PuTTY, PyCharm terminal, Arduino IDE) is holding it open.
 
@@ -118,7 +120,7 @@ unknown-shift signals). You can run either alone or fuse them.
 * `PATH A` — narrow chain only
 * `PATH B` — wide chain only
 * `PATH HYB` (or `PATH LLR`) — log-likelihood-ratio fusion of both.
-  This is what we run by default and it's almost always the answer.
+  This is what I run by default and it's almost always the answer.
 * `DYN ON` / `DYN OFF` — controls how the HYB fusion weights the two
   chains. ON = weighted by per-chain SNR estimate. OFF = pure
   geometric mean. Default is ON, but OFF can be more robust if one
@@ -164,7 +166,7 @@ recipe). If you want to roll your own, that doc walks through it.
   energy + start/stop validation). OFF = stop-bit-only (more
   permissive, lets more text through but with more errors).
 * `NR ON` / `NR OFF` — Wiener spectral noise reduction. Experimental.
-  We tried it three runs in a row and it didn't help measurably, so
+  I tried it three runs in a row and it didn't help measurably, so
   default OFF. Kept the toggle in case you want to test it on weird
   noise.
 
@@ -267,7 +269,7 @@ NN ON
 ### Capture training data from a known-good recording
 
 ```
-NN OFF              # we want hard-decision labels
+NN OFF              # I want hard-decision labels
 DUMP FRAMES ON
 # play the recording, capture serial to file
 DUMP FRAMES OFF

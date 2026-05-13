@@ -1,90 +1,172 @@
-# Архитектурные решения и Достижения: Идеальный RTTY Декодер
+# RTTY DSP — lessons learned
 
-В этом документе зафиксированы все ключевые математические, алгоритмические и программные решения (Lessons Learned), которые позволили превратить микроконтроллер RP2350 в профессиональный DSP-модем уровня fldigi для приема радиотелетайпа (RTTY). 
+> 🇷🇺 [Читать на русском](RTTY_DSP_LESSONS_LEARNED.ru.md)
 
-Эти принципы являются фундаментом для разработки любых будущих цифровых видов связи (CW, FT8, и т.д.) на данной платформе.
+A record of the math, algorithm and code decisions that turned the
+RP2350 into a working fldigi-class RTTY modem. The same principles
+should carry over to any future digital mode (CW, FT8, etc.) on this
+platform.
 
-## 1. Абсолютное Тактирование (Анти-Джиттер)
-**Проблема:** Классические `sleep_us()` или расчеты через разницу `time_us_32()` давали микросекундную погрешность на каждом цикле. За секунду накапливалась ошибка, сдвигающая фазу бита, что приводило к рассинхронизации.
-**Решение:** Переход на жесткий абсолютный тайминг.
+## 1. Absolute timing (anti-jitter)
+
+**The problem.** Classic `sleep_us()` calls or computing deltas from
+`time_us_32()` leak microseconds on every cycle. Over a second the
+accumulated error shifts bit phase enough to break sync.
+
+**The fix.** Hard absolute timing:
+
 ```cpp
 uint32_t next_sample_time = time_us_32();
-while(true) {
-    // ... DSP математика ...
-    next_sample_time += 100; // Строго +100 мкс (10 кГц)
-    while(time_us_32() < next_sample_time) tight_loop_contents();
+while (true) {
+    // ... DSP math ...
+    next_sample_time += 100;            // strictly +100 µs (10 kHz)
+    while (time_us_32() < next_sample_time) tight_loop_contents();
 }
 ```
-Это гарантирует железобетонную частоту дискретизации ровно 10 000 Гц без дрейфа.
 
-## 2. Разделение Ядер и Защита Flash-памяти (Lockout)
-**Проблема:** При записи настроек во внутреннюю Flash-память Ядром 1, Ядро 0 (DSP) ловило `Hard Fault` (зависание), так как выполнение кода из XIP (eXecute In Place) блокируется контроллером памяти на время стирания сектора.
-**Решение:**
-1. Весь "тяжелый" код (FFT, отрисовка водопада по DMA, опрос тачскрина) жестко привязан к Ядру 1.
-2. Внедрены механизмы `multicore_lockout_start_blocking()` перед вызовом `flash_range_erase()`. Ядро 1 "вежливо" просит Ядро 0 поставить DSP на микро-паузу, выполняет запись в память, и отпускает паузу. Никаких зависаний.
+Result: a rock-solid 10 000 Hz sample rate with no drift.
 
-## 3. Непрерывная ФАПЧ (Continuous DPLL)
-**Проблема:** При передаче сплошного текста на скорости 75 Бод с жестким **1.0 стоп-битом**, классические декодеры ломаются. Они ждут перепада напряжения (zero-crossing), чтобы начать новый стартовый бит, но при 1.0 стоп-бите перепада может не быть — сигнал мгновенно переходит в Space.
-**Решение:** Бесшовный конечный автомат (Framer).
-Если ожидается 1.0 стоп-бит, и по завершении бита сигнал *уже* находится в отрицательной зоне (Space), автомат мгновенно переходит в состояние приема стартового бита и сбрасывает фазу `symbol_phase = 0.0f` без ожидания фронта.
+## 2. Core separation and flash lockout
 
-## 4. ПИ-регулятор в DPLL (Интегральная ошибка)
-**Проблема:** Разница скоростей. Если передатчик шлет 45.45 Бод, а приемник думает, что это 45.50 Бод, фаза будет постоянно ползти. Пропорциональная подстройка (ALPHA) не справлялась с накопленной статической ошибкой.
-**Решение:** В петлю синхронизации добавлен Интегратор (`freq_error`).
+**The problem.** When Core 1 wrote settings to internal flash, Core 0
+(DSP) hard-faulted. Code execution from XIP (eXecute In Place) is
+blocked by the memory controller while the sector is erased.
+
+**The fix.**
+
+1. All "heavy" code (FFT, DMA waterfall rendering, touch polling) is
+   pinned to Core 1.
+2. Before any `flash_range_erase()` I call
+   `multicore_lockout_start_blocking()`. Core 1 politely asks Core 0
+   to pause DSP, writes flash, releases the pause. No hard faults.
+
+## 3. Continuous DPLL
+
+**The problem.** On 75 baud continuous text with a hard **1.0 stop
+bit**, classic decoders break. They wait for a zero-crossing to start
+the next start bit, but with 1.0 stop the signal can transition
+straight into Space without a clean edge.
+
+**The fix.** A seamless framer. If I expect a 1.0 stop bit and at end
+of the bit the signal is *already* in Space (negative), the state
+machine immediately transitions into the start-bit-receive state and
+resets `symbol_phase = 0.0f` without waiting for an edge.
+
+## 4. PI controller in the DPLL
+
+**The problem.** Speed mismatch. If the transmitter sends 45.45 baud
+and the receiver thinks it's 45.50, phase creeps. Proportional
+correction (ALPHA) couldn't cope with the accumulated static error.
+
+**The fix.** An integrator (`freq_error`) added to the sync loop:
+
 ```cpp
-symbol_phase -= ALPHA * phase_error; 
-freq_error -= BETA * phase_error; // Накопление разницы тактовых генераторов
-// Ограничение интегратора (Windup Limit) до ±5% от скорости
+symbol_phase -= ALPHA * phase_error;
+freq_error -= BETA * phase_error;     // integrates clock-rate delta
+// Anti-windup clamp at ±5 % of the baud rate
 ```
-Это позволяет демодулятору "на лету" вычислять истинную скорость передающей стороны и подстраивать свой внутренний таймер под неё.
 
-## 5. Цифровая АРУ (Digital AGC)
-**Проблема:** Слабые сигналы (-25 дБ и ниже), полученные с WebSDR, имеют слишком малую амплитуду для корректной работы квадратурных фильтров и шумоподавителя.
-**Решение:** Сразу после входного FIR-фильтра установлен блок АРУ с быстрой атакой (10 мс) и медленным спадом (500 мс). Он автоматически умножает слабые сигналы до эталонного RMS = 0.3. 
-Усиление программно ограничено множителем `x200` (46 дБ), что позволяет принимать станции даже на границе шумов.
+The demodulator now computes the real transmitter speed live and
+adjusts its internal timer accordingly.
 
-## 6. Логарифмический Шумоподавитель (dB Squelch)
-**Проблема:** Старый шумодав вычислялся по линейной разнице амплитуд. На слабом сигнале он закрывался, а на белом шуме (где бывают случайные пики) — ложно открывался.
-**Решение:** Вся математика Squelch переведена в Децибелы (`20 * log10`). 
-Введено понятие шумовой полки (Average Noise). Шумодав открывается только тогда, когда амплитуда пика станции превышает средний шум диапазона минимум на 10-12 дБ. Использован гистерезис: порог открытия выше порога закрытия, что предотвращает "дребезг" Squelch при эфирных замираниях.
+## 5. Digital AGC
 
-## 7. Физика Экрана и DMA (MADCTL 0x28)
-**Проблема:** Экран ILI9488 аппаратно перевернут на 180° в корпусе. Прямая запись по DMA требовала инверсии осей и перестановки цветов BGR. Попытки программно "переворачивать" координаты тачскрина ломали калибровочную матрицу библиотеки `LovyanGFX`.
-**Решение:**
-1. Отказ от программных "костылей" по развороту осей.
-2. Вся настройка ориентации передана библиотеке: `tft.setRotation(1)` (соответствует аппаратному MADCTL 0x28).
-3. Инверсия физически перевернутой матрицы тачскрина прописана жестко в драйвере `XPT2046` (`x_min` и `x_max` поменяны местами при чтении АЦП). 
-Это позволило математике библиотеки корректно рассчитывать аффинные преобразования при калибровке по 4 точкам.
+**The problem.** Weak signals (−25 dB and below) coming off a WebSDR
+have amplitude too small for the quadrature filters and squelch to
+work correctly.
 
-## 8. Стандарт LSB (Lower Sideband)
-**Проблема:** RTTY исторически передается в F1B (LSB). В этой модуляции нижняя звуковая частота соответствует единице (Mark), а верхняя — нулю (Space).
-**Решение:** Демодулятор жестко зафиксирован в радиолюбительском стандарте: 
-`Mark = CenterFreq - Shift/2`, `Space = CenterFreq + Shift/2`. 
-Добавлена функция инверсии (`INV`), умножающая дискриминатор на `-1` для случаев приема через USB (Upper Sideband) на WebSDR.
+**The fix.** Right after the input FIR there's an AGC block with fast
+attack (10 ms) and slow release (500 ms). It scales weak signals up to
+a target RMS of 0.3. Gain is software-capped at ×200 (46 dB), which is
+enough to pull stations off the noise floor without runaway gain on
+silence.
 
-## 9. Hardware ADC FIFO vs Software Timing (Build 190)
-**Проблема:** Программный тайминг через `time_us_32()` создавал микроджиттер (±1-5 мкс), что давало фазовый шум в DPLL.
-**Решение:** Переход на аппаратный ADC FIFO:
+## 6. Logarithmic squelch (dB)
+
+**The problem.** The old linear-amplitude squelch closed on weak signal
+and ghosted-open on broadband noise (random peaks).
+
+**The fix.** All squelch math moved to dB (`20 × log10`). I introduce
+a tracked noise floor (average noise). Squelch opens only when peak
+station amplitude is 10–12 dB above the running noise floor.
+Hysteresis: open threshold higher than close threshold, prevents
+squelch chatter on fading.
+
+## 7. Display physics and DMA (MADCTL 0x28)
+
+**The problem.** The ILI9488 is rotated 180° in the case. Direct DMA
+needed axis flipping and BGR swap. Patching coordinates in software
+broke `LovyanGFX`'s calibration matrix.
+
+**The fix.**
+
+1. Stop hacking axes in software.
+2. Hand orientation to the library: `tft.setRotation(1)` (the hardware
+   equivalent of MADCTL 0x28).
+3. Touch-matrix inversion goes in the `XPT2046` driver itself
+   (`x_min` and `x_max` swapped at ADC read time).
+
+The library's affine transforms now compute correct 4-point
+calibration.
+
+## 8. The LSB convention
+
+**The problem.** RTTY is historically transmitted on F1B (LSB). In
+that modulation the *lower* audio frequency is Mark (1) and the
+*upper* is Space (0).
+
+**The fix.** The demodulator is locked to the ham convention:
+`Mark = CenterFreq − Shift/2`, `Space = CenterFreq + Shift/2`. An
+`INV` switch flips the discriminator sign to handle USB tuning on
+WebSDR.
+
+## 9. Hardware ADC FIFO instead of software timing (Build 190)
+
+**The problem.** Software timing via `time_us_32()` introduced
+microjitter (±1–5 µs), which fed phase noise into the DPLL.
+
+**The fix.** Switch to hardware ADC FIFO:
+
 ```cpp
 adc_fifo_setup(true, false, 1, false, false);
-adc_set_clkdiv(4704.0f); // 48MHz / (96+4704) = 10,000 Hz
+adc_set_clkdiv(4704.0f);              // 48 MHz / (96+4704) = 10 000 Hz
 adc_run(true);
-// Ожидание: tight_loop_contents(), НЕ __wfe()
+// Wait via tight_loop_contents(), NOT __wfe()
 while (adc_fifo_is_empty()) tight_loop_contents();
 ```
-**Критический урок:** `__wfe()` (Wait For Event) **НЕЛЬЗЯ** использовать с ADC FIFO без настройки ADC IRQ. Ядро пробуждается только от несвязанных событий (USB SOF ~1мс), за это время FIFO переполняется → потеря ~20% сэмплов → DPLL теряет фазу.
 
-## 10. FFT на Core 0 блокирует ADC (Build 190-191)
-**Проблема:** FFT 1024-точки на Core 0 занимает ~1мс. В это время ADC FIFO не читается, переполняется (глубина 8), сэмплы теряются. Приём полностью ломается: `[ERR][ERR][ERR]...`
-**Решение:** FFT остаётся на Core 1. Core 0 — только DSP pipeline (FIR→AGC→Demod→DPLL→Baudot). Разделение обязанностей: Core 0 не должен выполнять никаких операций длительнее 100мкс.
+**Critical lesson:** `__wfe()` (Wait For Event) **cannot** be used
+with ADC FIFO unless you also wire up the ADC IRQ. Otherwise the core
+wakes only on unrelated events (USB SOF, ~1 ms), the FIFO overflows,
+~20 % of samples are lost, and the DPLL loses phase.
 
-## 11. Phosphor Persistence для Eye Diagram (Build 194)
-**Проблема:** Прямая отрисовка 16 трасс каждый кадр на реальном шумном сигнале даёт хаотично прыгающую картинку — невозможно оценить качество.
-**Решение:** 2D буфер накопления `uint8_t[240][64]`:
-1. Каждый кадр: fade `pixel = pixel * 245 / 256` (~96% удержание)
-2. Новые трассы: `pixel += 80` (с ограничением 255)
-3. Рендер: яркость зелёного = значение пикселя
-Результат: часто посещаемые точки ярко светятся (как на осциллографе с послесвечением), шумовые выбросы быстро затухают.
+## 10. FFT on Core 0 blocks the ADC (Build 190–191)
+
+**The problem.** A 1024-point FFT on Core 0 takes ~1 ms. During that
+time the ADC FIFO isn't read, overflows (depth 8), and samples are
+lost. Reception breaks completely: `[ERR][ERR][ERR]...`
+
+**The fix.** FFT lives on Core 1. Core 0 owns only the DSP pipeline
+(FIR → AGC → demod → DPLL → Baudot). The rule that emerged:
+**Core 0 must never run anything longer than 100 µs.**
+
+## 11. Phosphor persistence for the eye diagram (Build 194)
+
+**The problem.** Drawing 16 traces per frame on a real noisy signal
+makes a chaotic jumpy image — you can't actually read decoder quality
+from it.
+
+**The fix.** A 2D accumulator buffer `uint8_t[240][64]`:
+
+1. Each frame: fade `pixel = pixel * 245 / 256` (~96 % retention).
+2. New traces: `pixel += 80` (clipped at 255).
+3. Render: green brightness = pixel value.
+
+Frequently-visited spots glow bright (like a real scope with
+persistence), and noise spikes fade out before the next frame.
 
 ---
-*Все эти техники доказали свою эффективность при приеме DWD (Немецкая служба погоды) на 50 Бод / 450 Гц Шифт и любительских станций на 45.45 Бод / 170 Гц Шифт с аудио-выхода ПК через WebSDR.*
+
+*Every one of these survived real-air testing — DWD weather at 50 baud
+/ 450 Hz shift and amateur stations at 45.45 baud / 170 Hz shift, fed
+from a PC line-out through a WebSDR.*
