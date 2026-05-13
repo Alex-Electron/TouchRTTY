@@ -124,41 +124,9 @@ Gardner clock recovery, n-gram language model, IQ-direct вход и пр.)
 Скармливаешь ground-referenced аудио (1.65 В bias, line level) в GP26.
 Дальше так:
 
-```
-ADC0 @ 10 кГц, 1.65 В bias
-        │
-        ▼
-63-tap FIR bandpass, центр = FREQ
-        │
-        ▼
-Quadrature (I/Q) demod → biquad LPF
-        │
-   ┌────┴────┐
-   ▼         ▼
-Path A     Path B            ← узкий / широкий; по отдельности или…
-   │         │
-   └────┬────┘
-        ▼
-   LLR fusion (HYB)          ← это по умолчанию
-        │
-        ▼
-   DPLL с PI-петлёй           ← рулится через ALPHA
-        │
-        ▼
-   Bit slicing → 7 soft bits
-        │
-   ┌────┴───────────┐
-   ▼                ▼
- Hard decision   B264 gate
- (sign)          если data_min/sig < 0.20 → NN голосует
-        │                │
-        └────┬───────────┘
-             ▼
-       32 Baudot-кода
-             │
-             ▼
-       ITA-2 → ASCII
-```
+<p align="center">
+  <img src="docs/images/signal_flow.png" alt="TouchRTTY signal flow" width="520">
+</p>
 
 Core 0 владеет 10 кГц hard-real-time петлёй (около 7 % CPU). Core 1
 держит UI, 1024-point FFT для водопада, тач и USB-консоль (около

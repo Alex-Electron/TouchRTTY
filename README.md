@@ -124,41 +124,9 @@ collected in [`docs/NEIGHBOR_IDEAS.md`](docs/NEIGHBOR_IDEAS.md).
 You feed ground-referenced audio (1.65 V biased, line level) into GP26.
 From there:
 
-```
-ADC0 @ 10 kHz, 1.65 V biased
-        │
-        ▼
-63-tap FIR bandpass, centred on FREQ
-        │
-        ▼
-Quadrature (I/Q) demod → biquad LPF
-        │
-   ┌────┴────┐
-   ▼         ▼
-Path A     Path B            ← narrow / wide; either alone or…
-   │         │
-   └────┬────┘
-        ▼
-   LLR fusion (HYB)          ← I run this by default
-        │
-        ▼
-   DPLL with PI loop          ← controlled by ALPHA
-        │
-        ▼
-   Bit slicing → 7 soft bits
-        │
-   ┌────┴───────────┐
-   ▼                ▼
- Hard decision    B264 gate
- (sign)           if data_min/sig < 0.20 → NN gets a vote
-        │                │
-        └────┬───────────┘
-             ▼
-       32 Baudot codes
-             │
-             ▼
-       ITA-2 → ASCII
-```
+<p align="center">
+  <img src="docs/images/signal_flow.png" alt="TouchRTTY signal flow" width="520">
+</p>
 
 Core 0 owns the 10 kHz hard-real-time loop (about 7 % CPU). Core 1
 handles the UI, the 1024-point FFT for the waterfall, touch input, and

@@ -87,38 +87,9 @@ Inter-core data goes through `volatile` shared variables in
 
 ### 2.3 Signal flow
 
-```
-ADC0 @ 10 kHz, 1.65 V bias
-   │
-   ▼
-63-tap FIR BPF, centred on FREQ
-   │
-   ▼
-Quadrature (I/Q) demod → biquad LPF
-   │
-   ├── Path A (narrow, BW≈baud) ──┐
-   └── Path B (wide, BW≈1.5×baud) ─┤
-                                    ▼
-                              LLR fusion (HYB)
-                                    │
-                                    ▼
-                              DPLL (PI loop, ALPHA)
-                                    │
-                                    ▼
-                              Bit slicing → 7 soft bits
-                                    │
-                              ┌─────┴─────┐
-                              ▼           ▼
-                       Hard decision   B264 gate:
-                       (sign)          if data_min/sig < 0.20
-                                       → NN gets a vote
-                              │           │
-                              └─────┬─────┘
-                                    ▼
-                            32 Baudot codes
-                                    ▼
-                            ITA-2 → ASCII → screen + serial
-```
+<p align="center">
+  <img src="images/signal_flow.png" alt="TouchRTTY signal flow" width="520">
+</p>
 
 See also `README.md` (simplified block diagram) and
 `docs/PHASE9_HYBRID_DECODER_PLAN.md` (detailed design).

@@ -87,38 +87,9 @@ design docs, по которым велась реализация v1.x. Они 
 
 ### 2.3 Signal flow
 
-```
-ADC0 @ 10 kHz, 1.65 V bias
-   │
-   ▼
-63-tap FIR BPF, центр = FREQ
-   │
-   ▼
-Quadrature (I/Q) demod → biquad LPF
-   │
-   ├── Path A (narrow, BW≈baud) ──┐
-   └── Path B (wide, BW≈1.5×baud) ─┤
-                                    ▼
-                              LLR fusion (HYB)
-                                    │
-                                    ▼
-                              DPLL (PI loop, ALPHA)
-                                    │
-                                    ▼
-                              Bit slicing → 7 soft bits
-                                    │
-                              ┌─────┴─────┐
-                              ▼           ▼
-                       Hard decision   B264 gate:
-                       (sign)          if data_min/sig < 0.20
-                                       → NN goes
-                              │           │
-                              └─────┬─────┘
-                                    ▼
-                            32 Baudot codes
-                                    ▼
-                            ITA-2 → ASCII → screen + serial
-```
+<p align="center">
+  <img src="images/signal_flow.png" alt="TouchRTTY signal flow" width="520">
+</p>
 
 См. также `README.md` (упрощённая блок-схема) и
 `docs/PHASE9_HYBRID_DECODER_PLAN.md` (детальный дизайн).
