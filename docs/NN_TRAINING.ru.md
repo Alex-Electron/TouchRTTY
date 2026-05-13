@@ -27,21 +27,13 @@ B264 confidence gate это починил — на инференсе сеть 
 
 ## Архитектура, end-to-end
 
-```
-input[7] — 7 bipolar soft bits, нормированы по sig_level
-    │
-   w1 @ + b1
-    │
-ReLU 128
-    │
-   w2 @ + b2
-    │
-ReLU 64
-    │
-   w3 @ + b3
-    │
-argmax по 32 классам → Baudot-код (0–31)
-```
+<p align="center">
+  <img src="images/nn_architecture.png" alt="Архитектура NN — 7→128→64→32 MLP" width="700">
+</p>
+
+Вход — 7 bipolar soft-bit'ов, нормированных по `sig_level`. Два
+полносвязных ReLU-слоя (128 и 64 нейрона), потом финальный dense в
+32 логита — по одному на каждый Baudot-код. Argmax выбирает символ.
 
 Инференс — в [`src/dsp_pipeline.cpp`](../src/dsp_pipeline.cpp) около
 строки 530. Правило решения:

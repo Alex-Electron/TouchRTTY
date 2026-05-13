@@ -29,21 +29,14 @@ trust the simple decoder, full stop.
 
 ## The architecture, end-to-end
 
-```
-input[7] — 7 bipolar soft bits, normalized by sig_level
-    │
-   w1 @ + b1
-    │
-ReLU 128
-    │
-   w2 @ + b2
-    │
-ReLU 64
-    │
-   w3 @ + b3
-    │
-argmax over 32 classes → Baudot code (0–31)
-```
+<p align="center">
+  <img src="images/nn_architecture.png" alt="TouchRTTY NN classifier — 7→128→64→32 MLP" width="700">
+</p>
+
+Inputs are 7 bipolar soft bits normalized by `sig_level`. Two
+fully-connected ReLU layers (128 and 64 units), then a final dense
+layer into 32 logits — one per Baudot code. Argmax picks the
+predicted character.
 
 Inference happens in [`src/dsp_pipeline.cpp`](../src/dsp_pipeline.cpp)
 around line 530. The decision rule:
