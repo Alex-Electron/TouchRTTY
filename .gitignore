@@ -88,3 +88,6 @@ datasets/nn_archive/nn_weights_v17*.h
 datasets/nn_archive/nn_weights_v18*.h
 datasets/nn_archive/nn_weights_noise040.h
 datasets/nn_archive/nn_weights_ultra_regressed.h
+
+# ── Internal working drafts (not for the public branch) ─────────────
+docs/nano_banana_prompts.md
