@@ -240,3 +240,18 @@ myself.
 
 If you build this and put it on the air, send me a screenshot of the
 decoded text. I'd love to see what stations you pick up.
+
+---
+
+## Commercial licensing
+
+The default license for TouchRTTY is GPL v3 — you can use, modify
+and redistribute it freely, provided your derivative work is also
+released under GPL v3 with attribution to this project.
+
+If you want to use TouchRTTY (or substantial parts of it) in a
+commercial product — i.e. selling assembled devices, or
+shipping it as part of a closed-source firmware — please contact
+me at lavrinovich.alex@gmail.com to discuss a separate commercial license. Such
+licenses are negotiated case-by-case and typically involve a
+royalty or one-time fee.
